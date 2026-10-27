@@ -3,10 +3,14 @@ package com.example.minieditor
 import android.app.Activity
 import android.content.Intent
 import android.graphics.Color
+import android.graphics.Typeface
 import android.net.Uri
 import android.os.Bundle
 import android.provider.OpenableColumns
+import android.text.Editable
 import android.text.InputType
+import android.text.TextWatcher
+import android.view.Choreographer
 import android.view.Gravity
 import android.view.View
 import android.view.WindowManager
@@ -16,31 +20,39 @@ import android.widget.Button
 import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.LinearLayout
+import android.widget.PopupMenu
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import java.io.File
+import java.util.Locale
 import java.util.zip.ZipEntry
 import java.util.zip.ZipInputStream
 import java.util.zip.ZipOutputStream
-import java.util.Locale
 
 class MainActivity : Activity() {
-    private enum class Panel { NONE, HIER, INSPECT }
+    private enum class Panel { NONE, HIER, INSPECT, SCRIPT }
+    private class Snap(val o: SceneObject, val v: FloatArray)
 
     private val scene = Scene()
     private lateinit var editor: EditorView
     private lateinit var root: FrameLayout
     private lateinit var info: TextView
+    private lateinit var consoleView: TextView
     private val modeButtons = HashMap<Mode, Button>()
     private lateinit var yButton: Button
+    private lateinit var playButton: Button
+    private lateinit var fileButton: Button
 
     private lateinit var topPanel: LinearLayout
     private lateinit var hierarchyView: LinearLayout
     private lateinit var hierList: LinearLayout
     private lateinit var inspectorView: LinearLayout
+    private lateinit var scriptView: LinearLayout
+    private lateinit var scriptField: EditText
     private lateinit var nameField: EditText
     private val fields = ArrayList<EditText>()
+    private var settingScript = false
 
     private var panel = Panel.NONE
     private var lastCount = -1
@@ -51,17 +63,39 @@ class MainActivity : Activity() {
     private val reqOpen = 44
     private val reqObj = 45
 
+    // play mode
+    private var playing = false
+    private var engine: ScriptEngine? = null
+    private var snaps: List<Snap> = emptyList()
+    private var lastFrame = 0L
+    private val logLines = ArrayList<String>()
+
     private val swatchColors = intArrayOf(
         0xFFE65A4D.toInt(), 0xFF4DB373.toInt(), 0xFF4D8CE6.toInt(),
         0xFFF2BF40.toInt(), 0xFFB373D9.toInt(), 0xFFBFBFBF.toInt()
     )
+
+    private val scriptTemplate = """-- Runs once when Play starts
+function start()
+  speed = 90
+end
+
+-- Runs every frame. dt = seconds since last frame
+function update(dt)
+  self.ry = self.ry + speed * dt
+  self.y = 0.5 + math.sin(time * 2) * 0.3
+  if input.touching then
+    self.r = input.x
+  end
+end
+"""
 
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
     private fun toast(s: String) = Toast.makeText(this, s, Toast.LENGTH_SHORT).show()
 
     // ---------- UI helpers ----------
 
-    private fun btn(text: String, onClick: () -> Unit) = Button(this).apply {
+    private fun btn(text: String, structural: Boolean = false, onClick: () -> Unit) = Button(this).apply {
         this.text = text
         textSize = 12f
         setTextColor(Color.WHITE)
@@ -69,7 +103,7 @@ class MainActivity : Activity() {
         minWidth = 0; minHeight = 0
         setPadding(dp(4), dp(8), dp(4), dp(8))
         layoutParams = LinearLayout.LayoutParams(0, -2, 1f).also { it.setMargins(dp(2), dp(2), dp(2), dp(2)) }
-        setOnClickListener { onClick() }
+        setOnClickListener { if (structural && playing) toast("Stop play mode first") else onClick() }
     }
 
     private fun row(vararg views: View) = LinearLayout(this).apply {
@@ -87,43 +121,54 @@ class MainActivity : Activity() {
             setTextColor(Color.WHITE); textSize = 12f
             setPadding(dp(8), dp(4), dp(8), dp(4))
         }
+        consoleView = TextView(this).apply {
+            setTextColor(0xFF9BE59B.toInt()); textSize = 11f
+            typeface = Typeface.MONOSPACE
+            setPadding(dp(8), dp(2), dp(8), dp(2))
+            visibility = View.GONE
+        }
         modeButtons[Mode.MOVE] = btn("Move") { setMode(Mode.MOVE) }
         modeButtons[Mode.ROTATE] = btn("Rotate") { setMode(Mode.ROTATE) }
         modeButtons[Mode.SCALE] = btn("Scale") { setMode(Mode.SCALE) }
         yButton = btn("Y: off") { editor.yLock = !editor.yLock; refreshButtons() }
+        fileButton = btn("File") { showFileMenu() }
+        playButton = btn("Play") { togglePlay() }
+        playButton.setBackgroundColor(0xFF2E8B57.toInt())
 
         val bottom = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(0xAA000000.toInt())
+            addView(consoleView)
             addView(info)
             addView(row(
-                btn("+Cube") { scene.add(Shape.CUBE); editor.refresh() },
-                btn("+Pyramid") { scene.add(Shape.PYRAMID); editor.refresh() },
-                btn("+Sphere") { scene.add(Shape.SPHERE); editor.refresh() },
-                btn("Import") { pickModel() }
+                btn("+Cube", true) { scene.add(Shape.CUBE); editor.refresh() },
+                btn("+Pyramid", true) { scene.add(Shape.PYRAMID); editor.refresh() },
+                btn("+Sphere", true) { scene.add(Shape.SPHERE); editor.refresh() },
+                btn("Import", true) { pickModel() }
             ))
             addView(row(modeButtons[Mode.MOVE]!!, modeButtons[Mode.ROTATE]!!, modeButtons[Mode.SCALE]!!, yButton))
             addView(row(
                 btn("Hierarchy") { setPanel(Panel.HIER) },
                 btn("Inspector") { setPanel(Panel.INSPECT) },
-                btn("Save") { save() },
-                btn("Load") { load() }
+                btn("Script") { setPanel(Panel.SCRIPT) },
+                fileButton
             ))
             addView(row(
-                btn("Export zip") { exportProject() },
-                btn("Open zip") { openProject() },
-                btn("Export OBJ") { exportObj() }
+                playButton,
+                btn("Clear log") { logLines.clear(); showLog() }
             ))
         }
 
         buildHierarchy()
         buildInspector()
+        buildScript()
         topPanel = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(0xCC000000.toInt())
             visibility = View.GONE
             addView(hierarchyView)
             addView(inspectorView)
+            addView(scriptView)
         }
 
         root = FrameLayout(this).apply { isFocusable = true; isFocusableInTouchMode = true }
@@ -135,6 +180,168 @@ class MainActivity : Activity() {
         editor.onChange = { updateInfo() }
         scene.add(Shape.CUBE)
         setMode(Mode.MOVE)
+    }
+
+    // ---------- File menu ----------
+
+    private fun showFileMenu() {
+        val pm = PopupMenu(this, fileButton)
+        pm.menu.add(0, 1, 0, "Save (app storage)")
+        pm.menu.add(0, 2, 1, "Load (app storage)")
+        pm.menu.add(0, 3, 2, "Export scene zip...")
+        pm.menu.add(0, 4, 3, "Open scene zip...")
+        pm.menu.add(0, 5, 4, "Export OBJ...")
+        pm.setOnMenuItemClickListener { item ->
+            if (playing) {
+                toast("Stop play mode first")
+            } else {
+                when (item.itemId) {
+                    1 -> save()
+                    2 -> load()
+                    3 -> exportProject()
+                    4 -> openProject()
+                    5 -> exportObj()
+                }
+            }
+            true
+        }
+        pm.show()
+    }
+
+    // ---------- Play mode ----------
+
+    private val frameCb = object : Choreographer.FrameCallback {
+        override fun doFrame(frameTimeNanos: Long) {
+            if (!playing) return
+            val dt = if (lastFrame == 0L) 0.016f
+            else ((frameTimeNanos - lastFrame) / 1_000_000_000f).coerceAtMost(0.1f)
+            lastFrame = frameTimeNanos
+            engine?.let {
+                it.touching = editor.touching
+                it.touchX = editor.touchX / maxOf(editor.width, 1)
+                it.touchY = editor.touchY / maxOf(editor.height, 1)
+                it.update(dt)
+            }
+            editor.refresh()
+            Choreographer.getInstance().postFrameCallback(this)
+        }
+    }
+
+    private fun appendLog(msg: String) {
+        logLines.add(msg)
+        while (logLines.size > 5) logLines.removeAt(0)
+        showLog()
+    }
+
+    private fun showLog() {
+        consoleView.text = logLines.joinToString("\n")
+        consoleView.visibility = if (logLines.isEmpty()) View.GONE else View.VISIBLE
+    }
+
+    private fun togglePlay() { if (playing) stopPlay() else startPlay() }
+
+    private fun startPlay() {
+        clearFieldFocus()
+        snaps = scene.objects.map {
+            Snap(it, floatArrayOf(it.x, it.y, it.z, it.rx, it.ry, it.rz, it.sx, it.sy, it.sz,
+                it.color[0], it.color[1], it.color[2]))
+        }
+        logLines.clear(); showLog()
+        playing = true
+        editor.playing = true
+        playButton.text = "Stop"
+        playButton.setBackgroundColor(0xFFC0392B.toInt())
+        try {
+            val eng = ScriptEngine(scene) { appendLog(it) }
+            engine = eng
+            eng.start()
+        } catch (e: Throwable) {
+            appendLog("Script error: " + e.message)
+        }
+        lastFrame = 0L
+        Choreographer.getInstance().postFrameCallback(frameCb)
+        updateInfo()
+    }
+
+    private fun stopPlay() {
+        if (!playing) return
+        playing = false
+        editor.playing = false
+        Choreographer.getInstance().removeFrameCallback(frameCb)
+        engine = null
+        for (s in snaps) {
+            val o = s.o; val v = s.v
+            o.x = v[0]; o.y = v[1]; o.z = v[2]
+            o.rx = v[3]; o.ry = v[4]; o.rz = v[5]
+            o.sx = v[6]; o.sy = v[7]; o.sz = v[8]
+            o.color = floatArrayOf(v[9], v[10], v[11])
+        }
+        playButton.text = "Play"
+        playButton.setBackgroundColor(0xFF2E8B57.toInt())
+        editor.refresh()
+    }
+
+    // ---------- Script panel ----------
+
+    private fun buildScript() {
+        scriptField = EditText(this).apply {
+            setTextColor(Color.WHITE)
+            setBackgroundColor(0xFF1E1E1E.toInt())
+            textSize = 12f
+            typeface = Typeface.MONOSPACE
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE or
+                InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
+            gravity = Gravity.TOP or Gravity.START
+            setPadding(dp(8), dp(6), dp(8), dp(6))
+            layoutParams = LinearLayout.LayoutParams(-1, dp(170))
+            addTextChangedListener(object : TextWatcher {
+                override fun beforeTextChanged(s: CharSequence?, st: Int, c: Int, a: Int) {}
+                override fun onTextChanged(s: CharSequence?, st: Int, b: Int, c: Int) {}
+                override fun afterTextChanged(s: Editable?) {
+                    if (!settingScript) scene.selected?.script = s?.toString() ?: ""
+                }
+            })
+        }
+        val help = TextView(this).apply {
+            text = "Lua. Define start() and update(dt).\n" +
+                "self.x .y .z .rx .ry .rz .sx .sy .sz .r .g .b  |  find(\"Name\")  |  time, dt  |  " +
+                "input.touching .x .y (0-1)  |  log(...)"
+            textSize = 11f
+            setTextColor(0xFFAAAAAA.toInt())
+            setPadding(dp(8), dp(4), dp(8), dp(4))
+        }
+        scriptView = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            visibility = View.GONE
+            addView(help)
+            addView(scriptField)
+            addView(row(
+                btn("Insert template") {
+                    val o = scene.selected
+                    if (o == null) toast("Select an object first") else {
+                        o.script = scriptTemplate
+                        scriptField.requestFocus()
+                        refreshScript()
+                    }
+                },
+                btn("Clear script") {
+                    scene.selected?.script = ""
+                    refreshScript()
+                }
+            ))
+        }
+    }
+
+    private fun refreshScript() {
+        val o = scene.selected
+        scriptField.isEnabled = o != null
+        scriptField.hint = if (o == null) "Select an object to edit its script" else "-- Lua script for " + o.name
+        val want = o?.script ?: ""
+        if (scriptField.text.toString() != want && (!scriptField.hasFocus() || want.isEmpty() || want == scriptTemplate)) {
+            settingScript = true
+            scriptField.setText(want)
+            settingScript = false
+        }
     }
 
     // ---------- Hierarchy ----------
@@ -149,9 +356,9 @@ class MainActivity : Activity() {
             orientation = LinearLayout.VERTICAL
             visibility = View.GONE
             addView(row(
-                btn("Duplicate") { scene.duplicate(); editor.refresh() },
-                btn("Delete") { scene.removeSelected(); editor.refresh() },
-                btn("Clear all") { scene.objects.clear(); scene.selected = null; editor.refresh() }
+                btn("Duplicate", true) { scene.duplicate(); editor.refresh() },
+                btn("Delete", true) { scene.removeSelected(); editor.refresh() },
+                btn("Clear all", true) { scene.objects.clear(); scene.selected = null; editor.refresh() }
             ))
             addView(scroll)
         }
@@ -162,7 +369,7 @@ class MainActivity : Activity() {
         for (o in scene.objects) {
             val sel = o === scene.selected
             hierList.addView(TextView(this).apply {
-                text = (if (sel) "▶ " else "    ") + o.name
+                text = (if (sel) "▶ " else "    ") + o.name + (if (o.script.isNotBlank()) "  {lua}" else "")
                 textSize = 14f
                 setTextColor(if (sel) 0xFF7FB0FF.toInt() else Color.WHITE)
                 setPadding(dp(10), dp(8), dp(10), dp(8))
@@ -287,6 +494,7 @@ class MainActivity : Activity() {
         topPanel.visibility = if (panel == Panel.NONE) View.GONE else View.VISIBLE
         hierarchyView.visibility = if (panel == Panel.HIER) View.VISIBLE else View.GONE
         inspectorView.visibility = if (panel == Panel.INSPECT) View.VISIBLE else View.GONE
+        scriptView.visibility = if (panel == Panel.SCRIPT) View.VISIBLE else View.GONE
         lastCount = -1
         updateInfo()
     }
@@ -304,10 +512,11 @@ class MainActivity : Activity() {
 
     private fun updateInfo() {
         val o = scene.selected
-        info.text = (o?.name ?: "Nothing selected") + "  |  " + scene.objects.size + " objects  |  drag: " +
-            editor.mode.name.lowercase()
+        info.text = (if (playing) "PLAYING  |  " else "") + (o?.name ?: "Nothing selected") +
+            "  |  " + scene.objects.size + " objects" + (if (playing) "" else "  |  drag: " + editor.mode.name.lowercase())
         if (panel == Panel.HIER && (scene.objects.size != lastCount || scene.selected !== lastSel)) rebuildHierarchy()
         if (panel == Panel.INSPECT) refreshInspector()
+        if (panel == Panel.SCRIPT) refreshScript()
     }
 
     // ---------- Save / load ----------
@@ -386,7 +595,7 @@ class MainActivity : Activity() {
         }.start()
     }
 
-    // ---------- Export / open (scene + models as a .zip in any folder you choose) ----------
+    // ---------- Export / open (scene + models + scripts as a .zip) ----------
 
     private fun exportProject() {
         val i = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
@@ -463,7 +672,7 @@ class MainActivity : Activity() {
         }.start()
     }
 
-    // ---------- Export as .obj (selected object, or everything if nothing is selected) ----------
+    // ---------- Export as .obj ----------
 
     private fun exportObj() {
         if (scene.objects.isEmpty()) { toast("Nothing to export"); return }
@@ -489,6 +698,6 @@ class MainActivity : Activity() {
         }.start()
     }
 
-    override fun onPause() { super.onPause(); editor.onPause() }
+    override fun onPause() { stopPlay(); super.onPause(); editor.onPause() }
     override fun onResume() { super.onResume(); editor.onResume() }
 }

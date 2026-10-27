@@ -19,3 +19,7 @@ android {
     }
     kotlinOptions { jvmTarget = "17" }
 }
+
+dependencies {
+    implementation("org.luaj:luaj-jse:3.0.1")
+}

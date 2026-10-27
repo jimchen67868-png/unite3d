@@ -21,6 +21,7 @@ class SceneObject(
     val model: ModelData? = null
 ) {
     val maxScale: Float get() = maxOf(sx, sy, sz)
+    var script: String = ""
 }
 
 class Scene {
@@ -52,6 +53,7 @@ class Scene {
         val s = selected ?: return null
         val o = SceneObject(s.shape, s.name + " copy", s.x + 1f, s.y, s.z, s.rx, s.ry, s.rz,
             s.sx, s.sy, s.sz, s.color.copyOf(), s.model)
+        o.script = s.script
         objects.add(o)
         selected = o
         return o
@@ -67,6 +69,7 @@ class Scene {
         for (o in objects) arr.put(JSONObject().apply {
             put("shape", o.shape.name)
             put("name", o.name)
+            put("script", o.script)
             o.model?.let { put("model", it.key) }
             put("x", o.x.toDouble()); put("y", o.y.toDouble()); put("z", o.z.toDouble())
             put("rx", o.rx.toDouble()); put("ry", o.ry.toDouble()); put("rz", o.rz.toDouble())
@@ -95,7 +98,7 @@ class Scene {
                 j.optDouble("sx", old).toFloat(), j.optDouble("sy", old).toFloat(), j.optDouble("sz", old).toFloat(),
                 floatArrayOf(j.getDouble("r").toFloat(), j.getDouble("g").toFloat(), j.getDouble("b").toFloat()),
                 model
-            ))
+            ).also { it.script = j.optString("script", "") })
         }
         selected = null
         objects.clear()

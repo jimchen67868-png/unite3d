@@ -17,6 +17,10 @@ class EditorView(ctx: Context, val scene: Scene) : GLSurfaceView(ctx) {
     var yLock = false
     var onChange: (() -> Unit)? = null
     var onTouchStart: (() -> Unit)? = null
+    var playing = false
+    var touching = false
+    var touchX = 0f
+    var touchY = 0f
 
     private var lastX = 0f; private var lastY = 0f
     private var downX = 0f; private var downY = 0f
@@ -74,14 +78,17 @@ class EditorView(ctx: Context, val scene: Scene) : GLSurfaceView(ctx) {
         if (e.pointerCount > 1 || scaleDetector.isInProgress) {
             multi = true
             dragging = false
+            touching = false
             return true
         }
+        touchX = e.x; touchY = e.y
+        touching = e.actionMasked != MotionEvent.ACTION_UP && e.actionMasked != MotionEvent.ACTION_CANCEL
         when (e.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 multi = false; moved = false
                 onTouchStart?.invoke()
                 lastX = e.x; lastY = e.y; downX = e.x; downY = e.y
-                val hit = pick(e.x, e.y)
+                val hit = if (playing) null else pick(e.x, e.y)
                 if (hit != null) {
                     scene.selected = hit
                     dragging = true
@@ -105,7 +112,7 @@ class EditorView(ctx: Context, val scene: Scene) : GLSurfaceView(ctx) {
                 }
             }
             MotionEvent.ACTION_UP -> {
-                if (!moved && !dragging && !multi) { scene.selected = null; refresh() }
+                if (!moved && !dragging && !multi && !playing) { scene.selected = null; refresh() }
                 dragging = false
             }
         }
