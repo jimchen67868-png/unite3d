@@ -4,6 +4,10 @@ import android.app.Activity
 import android.content.Intent
 import android.graphics.Color
 import android.graphics.Typeface
+import android.hardware.Sensor
+import android.hardware.SensorEvent
+import android.hardware.SensorEventListener
+import android.hardware.SensorManager
 import android.net.Uri
 import android.os.Bundle
 import android.provider.OpenableColumns
@@ -30,7 +34,7 @@ import java.util.zip.ZipEntry
 import java.util.zip.ZipInputStream
 import java.util.zip.ZipOutputStream
 
-class MainActivity : Activity() {
+class MainActivity : Activity(), SensorEventListener {
     private enum class Panel { NONE, HIER, INSPECT, SCRIPT }
     private class Snap(val o: SceneObject, val v: FloatArray)
 
@@ -69,6 +73,9 @@ class MainActivity : Activity() {
     private var snaps: List<Snap> = emptyList()
     private var lastFrame = 0L
     private val logLines = ArrayList<String>()
+    private var ax = 0f
+    private var ay = 0f
+    private var az = 0f
 
     private val swatchColors = intArrayOf(
         0xFFE65A4D.toInt(), 0xFF4DB373.toInt(), 0xFF4D8CE6.toInt(),
@@ -86,6 +93,42 @@ function update(dt)
   self.y = 0.5 + math.sin(time * 2) * 0.3
   if input.touching then
     self.r = input.x
+  end
+end
+"""
+
+    private val tiltTemplate = """-- Hold the phone flat and tilt it to roll this object
+function update(dt)
+  self.x = self.x + input.moveX * 4 * dt
+  self.z = self.z + input.moveZ * 4 * dt
+end
+"""
+
+    private val spawnTemplate = """-- Drops a sphere every second and removes it after 3 seconds
+function start()
+  timer = 0
+  balls = {}
+end
+
+function update(dt)
+  timer = timer + dt
+  if timer > 1 then
+    timer = 0
+    local b = spawn("sphere", math.random(-3, 3), 4, 0)
+    b.sx = 0.5; b.sy = 0.5; b.sz = 0.5
+    b.age = 0
+    b.vy = 0
+    table.insert(balls, b)
+  end
+  for i = #balls, 1, -1 do
+    local b = balls[i]
+    b.age = b.age + dt
+    b.vy = b.vy - 9.8 * dt
+    b.y = math.max(0.25, b.y + b.vy * dt)
+    if b.age > 3 then
+      destroy(b)
+      table.remove(balls, i)
+    end
   end
 end
 """
@@ -217,6 +260,8 @@ end
             else ((frameTimeNanos - lastFrame) / 1_000_000_000f).coerceAtMost(0.1f)
             lastFrame = frameTimeNanos
             engine?.let {
+                it.ax = ax; it.ay = ay; it.az = az
+                it.camYaw = editor.renderer.yaw
                 it.touching = editor.touching
                 it.touchX = editor.touchX / maxOf(editor.width, 1)
                 it.touchY = editor.touchY / maxOf(editor.height, 1)
@@ -258,6 +303,10 @@ end
         } catch (e: Throwable) {
             appendLog("Script error: " + e.message)
         }
+        val sm = getSystemService(SENSOR_SERVICE) as SensorManager
+        sm.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)?.let {
+            sm.registerListener(this, it, SensorManager.SENSOR_DELAY_GAME)
+        }
         lastFrame = 0L
         Choreographer.getInstance().postFrameCallback(frameCb)
         updateInfo()
@@ -276,6 +325,14 @@ end
             o.sx = v[6]; o.sy = v[7]; o.sz = v[8]
             o.color = floatArrayOf(v[9], v[10], v[11])
         }
+        val orig = snaps.map { it.o }
+        if (scene.objects.toList() != orig) {
+            scene.objects.clear()
+            scene.objects.addAll(orig)
+        }
+        val sel = scene.selected
+        if (sel != null && sel !in orig) scene.selected = null
+        (getSystemService(SENSOR_SERVICE) as SensorManager).unregisterListener(this)
         playButton.text = "Play"
         playButton.setBackgroundColor(0xFF2E8B57.toInt())
         editor.refresh()
@@ -304,8 +361,8 @@ end
         }
         val help = TextView(this).apply {
             text = "Lua. Define start() and update(dt).\n" +
-                "self.x .y .z .rx .ry .rz .sx .sy .sz .r .g .b  |  find(\"Name\")  |  time, dt  |  " +
-                "input.touching .x .y (0-1)  |  log(...)"
+                "self.x .y .z .rx .ry .rz .sx .sy .sz .r .g .b | find(\"Name\") | spawn(\"cube\", x, y, z) | destroy(obj) | time, dt\n" +
+                "input.touching .x .y (0-1) | input.tiltX .tiltY .moveX .moveZ (hold phone flat) | log(...)"
             textSize = 11f
             setTextColor(0xFFAAAAAA.toInt())
             setPadding(dp(8), dp(4), dp(8), dp(4))
@@ -316,20 +373,22 @@ end
             addView(help)
             addView(scriptField)
             addView(row(
-                btn("Insert template") {
-                    val o = scene.selected
-                    if (o == null) toast("Select an object first") else {
-                        o.script = scriptTemplate
-                        scriptField.requestFocus()
-                        refreshScript()
-                    }
-                },
-                btn("Clear script") {
-                    scene.selected?.script = ""
-                    refreshScript()
-                }
+                btn("Spin") { setScript(scriptTemplate) },
+                btn("Tilt") { setScript(tiltTemplate) },
+                btn("Spawn") { setScript(spawnTemplate) },
+                btn("Clear") { setScript("") }
             ))
         }
+    }
+
+    private fun setScript(src: String) {
+        val o = scene.selected
+        if (o == null) { toast("Select an object first"); return }
+        o.script = src
+        settingScript = true
+        scriptField.setText(src)
+        settingScript = false
+        updateInfo()
     }
 
     private fun refreshScript() {
@@ -337,7 +396,7 @@ end
         scriptField.isEnabled = o != null
         scriptField.hint = if (o == null) "Select an object to edit its script" else "-- Lua script for " + o.name
         val want = o?.script ?: ""
-        if (scriptField.text.toString() != want && (!scriptField.hasFocus() || want.isEmpty() || want == scriptTemplate)) {
+        if (!scriptField.hasFocus() && scriptField.text.toString() != want) {
             settingScript = true
             scriptField.setText(want)
             settingScript = false
@@ -697,6 +756,14 @@ end
             }
         }.start()
     }
+
+    override fun onSensorChanged(e: SensorEvent) {
+        if (e.sensor.type == Sensor.TYPE_ACCELEROMETER) {
+            ax = e.values[0]; ay = e.values[1]; az = e.values[2]
+        }
+    }
+
+    override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
 
     override fun onPause() { stopPlay(); super.onPause(); editor.onPause() }
     override fun onResume() { super.onResume(); editor.onResume() }

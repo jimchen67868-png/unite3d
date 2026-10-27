@@ -15,6 +15,8 @@ import org.luaj.vm2.lib.TableLib
 import org.luaj.vm2.lib.VarArgFunction
 import org.luaj.vm2.lib.ZeroArgFunction
 import org.luaj.vm2.lib.jse.JseMathLib
+import kotlin.math.cos
+import kotlin.math.sin
 
 /**
  * Runs each object's Lua script. Scripts may define start() and update(dt).
@@ -29,14 +31,78 @@ class ScriptEngine(private val scene: Scene, private val log: (String) -> Unit) 
     private val instances = ArrayList<Inst>()
     private val input = LuaTable()
     private var time = 0f
+    private var spawnCount = 0
+    private val maxObjects = 500
 
     var touching = false
     var touchX = 0f
     var touchY = 0f
+    var ax = 0f
+    var ay = 0f
+    var az = 0f
+    var camYaw = 45f
 
     private val hookFn: LuaValue = object : ZeroArgFunction() {
         override fun call(): LuaValue {
             throw LuaError("script ran too long (infinite loop?)")
+        }
+    }
+
+    private val findFn = object : OneArgFunction() {
+        override fun call(arg: LuaValue): LuaValue {
+            val n = arg.tojstring()
+            for ((o, t) in tables) if (o.name == n) return t
+            return LuaValue.NIL
+        }
+    }
+
+    private val logFn = object : VarArgFunction() {
+        override fun invoke(args: Varargs): Varargs {
+            val sb = StringBuilder()
+            for (i in 1..args.narg()) {
+                if (i > 1) sb.append('\t')
+                sb.append(args.arg(i).tojstring())
+            }
+            log(sb.toString())
+            return LuaValue.NONE
+        }
+    }
+
+    private val spawnFn = object : VarArgFunction() {
+        override fun invoke(args: Varargs): Varargs {
+            val shape = when (args.arg(1).tojstring().lowercase()) {
+                "cube" -> Shape.CUBE
+                "pyramid" -> Shape.PYRAMID
+                "sphere" -> Shape.SPHERE
+                else -> throw LuaError("spawn: shape must be \"cube\", \"pyramid\" or \"sphere\"")
+            }
+            if (scene.objects.size >= maxObjects) throw LuaError("spawn: object limit reached")
+            spawnCount++
+            val o = SceneObject(
+                shape, shape.label + " (spawned " + spawnCount + ")",
+                args.optdouble(2, 0.0).toFloat(), args.optdouble(3, 0.0).toFloat(), args.optdouble(4, 0.0).toFloat(),
+                color = floatArrayOf(0.8f, 0.8f, 0.8f)
+            )
+            val t = LuaTable()
+            push(o, t)
+            scene.objects.add(o)
+            tables[o] = t
+            return t
+        }
+    }
+
+    private val destroyFn = object : OneArgFunction() {
+        override fun call(arg: LuaValue): LuaValue {
+            for ((o, t) in tables.entries.toList()) {
+                if (t === arg) {
+                    tables.remove(o)
+                    scene.objects.remove(o)
+                    if (scene.selected === o) scene.selected = null
+                    for (inst in instances) if (inst.obj === o) inst.failed = true
+                    break
+                }
+            }
+            return LuaValue.NIL
         }
     }
 
@@ -94,7 +160,23 @@ class ScriptEngine(private val scene: Scene, private val log: (String) -> Unit) 
         )
     }
 
-    private fun pullAll() { for ((o, t) in tables) pull(o, t) }
+    private fun pullAll() { for ((o, t) in tables.entries.toList()) pull(o, t) }
+
+    private fun updateInput() {
+        input.set("touching", LuaValue.valueOf(touching))
+        input.set("x", touchX.toDouble())
+        input.set("y", touchY.toDouble())
+        val g = 9.81f
+        val tx = (-ax / g).coerceIn(-1f, 1f)
+        val ty = (-ay / g).coerceIn(-1f, 1f)
+        val yaw = Math.toRadians(camYaw.toDouble())
+        val c = cos(yaw).toFloat()
+        val s = sin(yaw).toFloat()
+        input.set("ax", ax.toDouble()); input.set("ay", ay.toDouble()); input.set("az", az.toDouble())
+        input.set("tiltX", tx.toDouble()); input.set("tiltY", ty.toDouble())
+        input.set("moveX", (tx * c - ty * s).toDouble())
+        input.set("moveZ", (-tx * s - ty * c).toDouble())
+    }
 
     private fun callFn(inst: Inst, name: String, dt: Double?) {
         if (inst.failed) return
@@ -115,25 +197,8 @@ class ScriptEngine(private val scene: Scene, private val log: (String) -> Unit) 
             push(o, t)
             tables[o] = t
         }
-        val find = object : OneArgFunction() {
-            override fun call(arg: LuaValue): LuaValue {
-                val n = arg.tojstring()
-                for ((o, t) in tables) if (o.name == n) return t
-                return LuaValue.NIL
-            }
-        }
-        val logFn = object : VarArgFunction() {
-            override fun invoke(args: Varargs): Varargs {
-                val sb = StringBuilder()
-                for (i in 1..args.narg()) {
-                    if (i > 1) sb.append('\t')
-                    sb.append(args.arg(i).tojstring())
-                }
-                log(sb.toString())
-                return LuaValue.NONE
-            }
-        }
-        for ((o, t) in tables) {
+        updateInput()
+        for ((o, t) in tables.entries.toList()) {
             if (o.script.isBlank()) continue
             try {
                 val g = newGlobals()
@@ -141,7 +206,9 @@ class ScriptEngine(private val scene: Scene, private val log: (String) -> Unit) 
                 g.set("debug", LuaValue.NIL)
                 g.set("self", t)
                 g.set("input", input)
-                g.set("find", find)
+                g.set("find", findFn)
+                g.set("spawn", spawnFn)
+                g.set("destroy", destroyFn)
                 g.set("log", logFn)
                 g.set("print", logFn)
                 g.set("time", 0.0)
@@ -154,17 +221,15 @@ class ScriptEngine(private val scene: Scene, private val log: (String) -> Unit) 
                 log(o.name + ": " + e.message)
             }
         }
-        for (inst in instances) callFn(inst, "start", null)
+        for (inst in instances.toList()) callFn(inst, "start", null)
         pullAll()
     }
 
     fun update(dt: Float) {
         time += dt
-        for ((o, t) in tables) push(o, t)
-        input.set("touching", LuaValue.valueOf(touching))
-        input.set("x", touchX.toDouble())
-        input.set("y", touchY.toDouble())
-        for (inst in instances) {
+        for ((o, t) in tables.entries.toList()) push(o, t)
+        updateInput()
+        for (inst in instances.toList()) {
             inst.globals.set("time", time.toDouble())
             inst.globals.set("dt", dt.toDouble())
             callFn(inst, "update", dt.toDouble())
