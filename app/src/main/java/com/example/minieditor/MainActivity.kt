@@ -47,6 +47,7 @@ class MainActivity : Activity(), SensorEventListener {
     private val modeButtons = HashMap<Mode, Button>()
     private lateinit var yButton: Button
     private lateinit var playButton: Button
+    private lateinit var joystick: JoystickView
     private lateinit var fileButton: Button
 
     private lateinit var topPanel: LinearLayout
@@ -219,6 +220,17 @@ end
         root.addView(editor, FrameLayout.LayoutParams(-1, -1))
         root.addView(topPanel, FrameLayout.LayoutParams(-1, -2, Gravity.TOP))
         root.addView(bottom, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM))
+        joystick = JoystickView(this).apply { visibility = View.GONE }
+        val jlp = FrameLayout.LayoutParams(dp(150), dp(150), Gravity.BOTTOM or Gravity.START)
+        jlp.leftMargin = dp(16)
+        root.addView(joystick, jlp)
+        bottom.addOnLayoutChangeListener { v, _, _, _, _, _, _, _, _ ->
+            val want = v.height + dp(12)
+            if (jlp.bottomMargin != want) {
+                jlp.bottomMargin = want
+                joystick.layoutParams = jlp
+            }
+        }
         setContentView(root)
 
         editor.onChange = { updateInfo() }
@@ -287,6 +299,7 @@ end
             engine?.let {
                 it.ax = ax; it.ay = ay; it.az = az
                 it.camYaw = editor.renderer.yaw
+                it.joyX = joystick.jx; it.joyY = joystick.jy; it.joyActive = joystick.active
                 it.touching = editor.touching
                 it.touchX = editor.touchX / maxOf(editor.width, 1)
                 it.touchY = editor.touchY / maxOf(editor.height, 1)
@@ -319,6 +332,8 @@ end
         logLines.clear(); showLog()
         playing = true
         editor.playing = true
+        joystick.reset()
+        joystick.visibility = View.VISIBLE
         playButton.text = "Stop"
         playButton.setBackgroundColor(0xFFC0392B.toInt())
         try {
@@ -341,6 +356,8 @@ end
         if (!playing) return
         playing = false
         editor.playing = false
+        joystick.reset()
+        joystick.visibility = View.GONE
         Choreographer.getInstance().removeFrameCallback(frameCb)
         engine = null
         for (s in snaps) {
@@ -387,7 +404,7 @@ end
         val help = TextView(this).apply {
             text = "Lua. Define start() and update(dt).\n" +
                 "self.x .y .z .rx .ry .rz .sx .sy .sz .r .g .b | find(\"Name\") | spawn(\"cube\", x, y, z) | destroy(obj) | time, dt\n" +
-                "input.touching .x .y (0-1) | input.tiltX .tiltY .moveX .moveZ (hold phone flat) | log(...)"
+                "input.touching .x .y (0-1) | input.tiltX .tiltY .moveX .moveZ (tilt) | input.joyX .joyY .joyMoveX .joyMoveZ .joyActive | log(...)"
             textSize = 11f
             setTextColor(0xFFAAAAAA.toInt())
             setPadding(dp(8), dp(4), dp(8), dp(4))

@@ -6,7 +6,7 @@ object Samples {
 function start()
   last = -1
   over = false
-  log("Coin Rush! Collect yellow pyramids, avoid red cubes.")
+  log("Coin Rush! Joystick or tilt to move. Grab yellow pyramids, dodge red cubes.")
 end
 
 function update(dt)
@@ -28,7 +28,7 @@ function update(dt)
 end
 """
 
-    private val PLAYER = """-- Tilt the phone (hold it flat) or touch the screen to move
+    private val PLAYER = """-- Move with the on-screen joystick (bottom left) or tilt the phone flat
 function start()
   self.score = 0
   self.frozen = false
@@ -37,11 +37,8 @@ end
 function update(dt)
   if self.frozen then return end
   local mx, mz = input.moveX * 2.5, input.moveZ * 2.5
-  if input.touching then
-    local yaw = math.rad(input.yaw)
-    local dx, dy = (input.x - 0.5) * 2, (input.y - 0.5) * 2
-    mx = dx * math.cos(yaw) + dy * math.sin(yaw)
-    mz = -dx * math.sin(yaw) + dy * math.cos(yaw)
+  if input.joyActive then
+    mx, mz = input.joyMoveX, input.joyMoveZ
   end
   local len = math.sqrt(mx * mx + mz * mz)
   if len > 1 then

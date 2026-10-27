@@ -10,6 +10,7 @@ import org.luaj.vm2.compiler.LuaC
 import org.luaj.vm2.lib.BaseLib
 import org.luaj.vm2.lib.DebugLib
 import org.luaj.vm2.lib.OneArgFunction
+import org.luaj.vm2.lib.PackageLib
 import org.luaj.vm2.lib.StringLib
 import org.luaj.vm2.lib.TableLib
 import org.luaj.vm2.lib.VarArgFunction
@@ -41,6 +42,9 @@ class ScriptEngine(private val scene: Scene, private val log: (String) -> Unit) 
     var ay = 0f
     var az = 0f
     var camYaw = 45f
+    var joyX = 0f
+    var joyY = 0f
+    var joyActive = false
 
     private val hookFn: LuaValue = object : ZeroArgFunction() {
         override fun call(): LuaValue {
@@ -109,6 +113,7 @@ class ScriptEngine(private val scene: Scene, private val log: (String) -> Unit) 
     private fun newGlobals(): Globals {
         val g = Globals()
         g.load(BaseLib())
+        g.load(PackageLib())
         g.load(TableLib())
         g.load(StringLib())
         g.load(JseMathLib())
@@ -116,6 +121,8 @@ class ScriptEngine(private val scene: Scene, private val log: (String) -> Unit) 
         LoadState.install(g)
         LuaC.install(g)
         g.set("dofile", LuaValue.NIL)
+        g.set("require", LuaValue.NIL)
+        g.set("package", LuaValue.NIL)
         g.set("loadfile", LuaValue.NIL)
         return g
     }
@@ -177,6 +184,10 @@ class ScriptEngine(private val scene: Scene, private val log: (String) -> Unit) 
         input.set("tiltX", tx.toDouble()); input.set("tiltY", ty.toDouble())
         input.set("moveX", (tx * c - ty * s).toDouble())
         input.set("moveZ", (-tx * s - ty * c).toDouble())
+        input.set("joyX", joyX.toDouble()); input.set("joyY", joyY.toDouble())
+        input.set("joyActive", LuaValue.valueOf(joyActive))
+        input.set("joyMoveX", (joyX * c - joyY * s).toDouble())
+        input.set("joyMoveZ", (-joyX * s - joyY * c).toDouble())
     }
 
     private fun callFn(inst: Inst, name: String, dt: Double?) {
