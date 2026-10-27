@@ -1,6 +1,7 @@
 package com.example.minieditor
 
 import android.app.Activity
+import android.app.AlertDialog
 import android.content.Intent
 import android.graphics.Color
 import android.graphics.Typeface
@@ -221,7 +222,7 @@ end
         setContentView(root)
 
         editor.onChange = { updateInfo() }
-        scene.add(Shape.CUBE)
+        if (!autoLoad()) scene.add(Shape.CUBE)
         setMode(Mode.MOVE)
     }
 
@@ -229,11 +230,13 @@ end
 
     private fun showFileMenu() {
         val pm = PopupMenu(this, fileButton)
-        pm.menu.add(0, 1, 0, "Save (app storage)")
-        pm.menu.add(0, 2, 1, "Load (app storage)")
+        pm.menu.add(0, 1, 0, "Save slot (internal storage)")
+        pm.menu.add(0, 2, 1, "Load slot (internal storage)")
         pm.menu.add(0, 3, 2, "Export scene zip...")
         pm.menu.add(0, 4, 3, "Open scene zip...")
         pm.menu.add(0, 5, 4, "Export OBJ...")
+        pm.menu.add(0, 6, 5, "New scene")
+        pm.menu.add(0, 7, 6, "Load sample game (Coin Rush)")
         pm.setOnMenuItemClickListener { item ->
             if (playing) {
                 toast("Stop play mode first")
@@ -244,11 +247,33 @@ end
                     3 -> exportProject()
                     4 -> openProject()
                     5 -> exportObj()
+                    6 -> { scene.objects.clear(); scene.selected = null; editor.refresh() }
+                    7 -> loadSample()
                 }
             }
             true
         }
         pm.show()
+    }
+
+    private fun loadSample() {
+        val go = {
+            Samples.coinRush(scene)
+            editor.renderer.dist = 14f
+            editor.renderer.pitch = 55f
+            editor.refresh()
+            toast("Coin Rush loaded - tap Play")
+        }
+        if (scene.objects.isEmpty()) {
+            go()
+        } else {
+            AlertDialog.Builder(this)
+                .setTitle("Load sample game?")
+                .setMessage("This replaces the current scene. Use File > Export scene zip first if you want to keep it.")
+                .setPositiveButton("Load") { _, _ -> go() }
+                .setNegativeButton("Cancel", null)
+                .show()
+        }
     }
 
     // ---------- Play mode ----------
@@ -588,14 +613,14 @@ end
 
     private fun save() {
         File(filesDir, "scene.json").writeText(scene.toJson())
-        toast("Saved")
+        toast("Saved to internal storage")
     }
 
     private fun load() {
         try {
             scene.load(File(filesDir, "scene.json").readText()) { loadModel(it) }
             editor.refresh()
-            toast("Loaded")
+            toast("Loaded from internal storage")
         } catch (e: Exception) {
             toast("No saved scene")
         }
@@ -757,6 +782,29 @@ end
         }.start()
     }
 
+    // Auto-save: the scene is written to internal storage whenever the app is paused
+    // and reloaded on launch, so nothing is lost when you close it.
+    private fun autoSave() {
+        try {
+            val tmp = File(filesDir, "autosave.tmp")
+            tmp.writeText(scene.toJson())
+            val dst = File(filesDir, "autosave.json")
+            if (!tmp.renameTo(dst)) { dst.writeText(tmp.readText()); tmp.delete() }
+        } catch (e: Exception) {
+        }
+    }
+
+    private fun autoLoad(): Boolean {
+        val f = File(filesDir, "autosave.json")
+        if (!f.exists()) return false
+        return try {
+            scene.load(f.readText()) { loadModel(it) }
+            true
+        } catch (e: Exception) {
+            false
+        }
+    }
+
     override fun onSensorChanged(e: SensorEvent) {
         if (e.sensor.type == Sensor.TYPE_ACCELEROMETER) {
             ax = e.values[0]; ay = e.values[1]; az = e.values[2]
@@ -765,6 +813,6 @@ end
 
     override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
 
-    override fun onPause() { stopPlay(); super.onPause(); editor.onPause() }
+    override fun onPause() { stopPlay(); autoSave(); super.onPause(); editor.onPause() }
     override fun onResume() { super.onResume(); editor.onResume() }
 }
