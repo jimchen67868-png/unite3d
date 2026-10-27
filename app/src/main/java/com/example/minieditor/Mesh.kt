@@ -47,7 +47,7 @@ object Meshes {
         o.addAll(listOf(x1, y1, z1, 0f, 0f, 0f, x2, y2, z2, 0f, 0f, 0f))
     }
 
-    fun cube(): Mesh {
+    fun cubeData(): FloatArray {
         val o = ArrayList<Float>()
         val c = Array(8) { i ->
             floatArrayOf(
@@ -65,10 +65,10 @@ object Meshes {
             tri(o, c[f[0]], c[f[1]], c[f[2]], origin)
             tri(o, c[f[0]], c[f[2]], c[f[3]], origin)
         }
-        return Mesh(o.toFloatArray(), GLES20.GL_TRIANGLES)
+        return o.toFloatArray()
     }
 
-    fun pyramid(): Mesh {
+    fun pyramidData(): FloatArray {
         val o = ArrayList<Float>()
         val p0 = floatArrayOf(-0.5f, -0.5f, -0.5f)
         val p1 = floatArrayOf(0.5f, -0.5f, -0.5f)
@@ -79,10 +79,10 @@ object Meshes {
         tri(o, p0, p1, p2, inside); tri(o, p0, p2, p3, inside)
         tri(o, p0, p1, apex, inside); tri(o, p1, p2, apex, inside)
         tri(o, p2, p3, apex, inside); tri(o, p3, p0, apex, inside)
-        return Mesh(o.toFloatArray(), GLES20.GL_TRIANGLES)
+        return o.toFloatArray()
     }
 
-    fun sphere(): Mesh {
+    fun sphereData(): FloatArray {
         val stacks = 16
         val slices = 24
         val o = ArrayList<Float>()
@@ -99,7 +99,19 @@ object Meshes {
             val a = v(i, j); val b = v(i + 1, j); val c = v(i + 1, j + 1); val d = v(i, j + 1)
             push(a); push(b); push(c); push(a); push(c); push(d)
         }
-        return Mesh(o.toFloatArray(), GLES20.GL_TRIANGLES)
+        return o.toFloatArray()
+    }
+
+
+    fun cube() = Mesh(cubeData(), GLES20.GL_TRIANGLES)
+    fun pyramid() = Mesh(pyramidData(), GLES20.GL_TRIANGLES)
+    fun sphere() = Mesh(sphereData(), GLES20.GL_TRIANGLES)
+
+    fun dataFor(shape: Shape): FloatArray? = when (shape) {
+        Shape.CUBE -> cubeData()
+        Shape.PYRAMID -> pyramidData()
+        Shape.SPHERE -> sphereData()
+        Shape.MODEL -> null
     }
 
     /** Grid lines first; the last 4 vertices are the X axis and Z axis. */
