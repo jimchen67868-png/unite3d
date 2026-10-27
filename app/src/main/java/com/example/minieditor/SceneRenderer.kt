@@ -31,6 +31,7 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
     private lateinit var meshes: Map<Shape, Mesh>
     private lateinit var grid: Mesh
     private lateinit var gizmo: Mesh
+    private val modelMeshes = HashMap<String, Mesh>()
 
     private val vertexSrc = """
         uniform mat4 uMVP;
@@ -132,6 +133,12 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         m.draw(aPos, aNorm, first, n)
     }
 
+    private fun meshFor(o: SceneObject): Mesh {
+        val md = o.model
+        return if (md != null) modelMeshes.getOrPut(md.key) { Mesh(md.data, GLES20.GL_TRIANGLES) }
+        else meshes.getValue(o.shape)
+    }
+
     override fun onDrawFrame(gl: GL10?) {
         val vpc = synchronized(lock) { updateMatrices(); vp.copyOf() }
         GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT or GLES20.GL_DEPTH_BUFFER_BIT)
@@ -152,11 +159,12 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
             Matrix.translateM(model, 0, o.x, o.y, o.z)
             Matrix.rotateM(model, 0, o.ry, 0f, 1f, 0f)
             Matrix.rotateM(model, 0, o.rx, 1f, 0f, 0f)
-            Matrix.scaleM(model, 0, o.scale, o.scale, o.scale)
+            Matrix.rotateM(model, 0, o.rz, 0f, 0f, 1f)
+            Matrix.scaleM(model, 0, o.sx, o.sy, o.sz)
             val c = if (o === sel)
                 floatArrayOf(o.color[0] * 0.6f + 0.4f, o.color[1] * 0.6f + 0.4f, o.color[2] * 0.6f + 0.4f)
             else o.color
-            drawMesh(meshes.getValue(o.shape), vpc, model, c, true)
+            drawMesh(meshFor(o), vpc, model, c, true)
         }
 
         // Gizmo on selection
@@ -165,7 +173,7 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
             GLES20.glLineWidth(4f)
             Matrix.setIdentityM(model, 0)
             Matrix.translateM(model, 0, sel.x, sel.y, sel.z)
-            val s = max(1f, sel.scale) * 0.9f
+            val s = max(1f, sel.maxScale) * 0.9f
             Matrix.scaleM(model, 0, s, s, s)
             drawMesh(gizmo, vpc, model, floatArrayOf(1f, 0.25f, 0.25f), false, 0, 2)
             drawMesh(gizmo, vpc, model, floatArrayOf(0.3f, 1f, 0.3f), false, 2, 2)

@@ -16,6 +16,7 @@ class EditorView(ctx: Context, val scene: Scene) : GLSurfaceView(ctx) {
     var mode = Mode.MOVE
     var yLock = false
     var onChange: (() -> Unit)? = null
+    var onTouchStart: (() -> Unit)? = null
 
     private var lastX = 0f; private var lastY = 0f
     private var downX = 0f; private var downY = 0f
@@ -45,7 +46,7 @@ class EditorView(ctx: Context, val scene: Scene) : GLSurfaceView(ctx) {
         var best: SceneObject? = null
         var bestT = Float.MAX_VALUE
         for (o in scene.objects) {
-            val rad = o.shape.radius * o.scale
+            val rad = o.shape.radius * o.maxScale
             val ocx = r[0] - o.x; val ocy = r[1] - o.y; val ocz = r[2] - o.z
             val b = ocx * r[3] + ocy * r[4] + ocz * r[5]
             val c = ocx * ocx + ocy * ocy + ocz * ocz - rad * rad
@@ -78,6 +79,7 @@ class EditorView(ctx: Context, val scene: Scene) : GLSurfaceView(ctx) {
         when (e.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 multi = false; moved = false
+                onTouchStart?.invoke()
                 lastX = e.x; lastY = e.y; downX = e.x; downY = e.y
                 val hit = pick(e.x, e.y)
                 if (hit != null) {
@@ -118,7 +120,12 @@ class EditorView(ctx: Context, val scene: Scene) : GLSurfaceView(ctx) {
                 groundPoint(x, y, o.y)?.let { o.x = it[0] - offX; o.z = it[1] - offZ }
             }
             Mode.ROTATE -> { o.ry += dx * 0.5f; o.rx += dy * 0.5f }
-            Mode.SCALE -> o.scale = (o.scale * (1f - dy * 0.005f)).coerceIn(0.1f, 10f)
+            Mode.SCALE -> {
+                val f = 1f - dy * 0.005f
+                o.sx = (o.sx * f).coerceIn(0.05f, 20f)
+                o.sy = (o.sy * f).coerceIn(0.05f, 20f)
+                o.sz = (o.sz * f).coerceIn(0.05f, 20f)
+            }
         }
         refresh()
     }
