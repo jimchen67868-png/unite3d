@@ -13,6 +13,7 @@ class JoystickView(ctx: Context) : View(ctx) {
     var jx = 0f
     var jy = 0f
     var active = false
+    var interactive = false
 
     private var kx = 0f
     private var ky = 0f
@@ -38,6 +39,7 @@ class JoystickView(ctx: Context) : View(ctx) {
     }
 
     override fun onTouchEvent(e: MotionEvent): Boolean {
+        if (!interactive) return false
         when (e.actionMasked) {
             MotionEvent.ACTION_DOWN, MotionEvent.ACTION_MOVE -> {
                 var dx = e.x - width / 2f

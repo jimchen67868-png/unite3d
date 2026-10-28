@@ -16,6 +16,7 @@ import org.luaj.vm2.lib.TableLib
 import org.luaj.vm2.lib.VarArgFunction
 import org.luaj.vm2.lib.ZeroArgFunction
 import org.luaj.vm2.lib.jse.JseMathLib
+import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.sin
 
@@ -26,11 +27,17 @@ import kotlin.math.sin
 class ScriptEngine(private val scene: Scene, private val log: (String) -> Unit) {
     private class Inst(val obj: SceneObject, val globals: Globals, val sethook: LuaValue?) {
         var failed = false
+        var onCollide: LuaValue? = null
     }
 
     private val tables = LinkedHashMap<SceneObject, LuaTable>()
     private val instances = ArrayList<Inst>()
     private val input = LuaTable()
+    private val instByObj = HashMap<SceneObject, Inst>()
+    private val prev = HashMap<SceneObject, FloatArray>()
+    private val grounded = HashSet<SceneObject>()
+    private val world = LuaTable()
+    private val worldPushed = FloatArray(4)
     private var time = 0f
     private var spawnCount = 0
     private val maxObjects = 500
@@ -45,6 +52,8 @@ class ScriptEngine(private val scene: Scene, private val log: (String) -> Unit) 
     var joyX = 0f
     var joyY = 0f
     var joyActive = false
+    var jump = false
+    var jumpPressed = false
 
     private val hookFn: LuaValue = object : ZeroArgFunction() {
         override fun call(): LuaValue {
@@ -141,6 +150,7 @@ class ScriptEngine(private val scene: Scene, private val log: (String) -> Unit) 
         t.set("rx", o.rx.toDouble()); t.set("ry", o.ry.toDouble()); t.set("rz", o.rz.toDouble())
         t.set("sx", o.sx.toDouble()); t.set("sy", o.sy.toDouble()); t.set("sz", o.sz.toDouble())
         t.set("r", o.color[0].toDouble()); t.set("g", o.color[1].toDouble()); t.set("b", o.color[2].toDouble())
+        t.set("collider", o.collider.toDouble())
     }
 
     private fun num(t: LuaTable, k: String): Float? {
@@ -160,6 +170,7 @@ class ScriptEngine(private val scene: Scene, private val log: (String) -> Unit) 
         num(t, "sx")?.let { o.sx = it.coerceIn(0.01f, 100f) }
         num(t, "sy")?.let { o.sy = it.coerceIn(0.01f, 100f) }
         num(t, "sz")?.let { o.sz = it.coerceIn(0.01f, 100f) }
+        num(t, "collider")?.let { o.collider = it.toInt().coerceIn(0, 2) }
         o.color = floatArrayOf(
             (num(t, "r") ?: o.color[0]).coerceIn(0f, 1f),
             (num(t, "g") ?: o.color[1]).coerceIn(0f, 1f),
@@ -186,6 +197,8 @@ class ScriptEngine(private val scene: Scene, private val log: (String) -> Unit) 
         input.set("moveZ", (-tx * s - ty * c).toDouble())
         input.set("joyX", joyX.toDouble()); input.set("joyY", joyY.toDouble())
         input.set("joyActive", LuaValue.valueOf(joyActive))
+        input.set("jump", LuaValue.valueOf(jump))
+        input.set("jumpPressed", LuaValue.valueOf(jumpPressed))
         input.set("joyMoveX", (joyX * c - joyY * s).toDouble())
         input.set("joyMoveZ", (-joyX * s - joyY * c).toDouble())
     }
@@ -203,6 +216,109 @@ class ScriptEngine(private val scene: Scene, private val log: (String) -> Unit) 
         }
     }
 
+    private fun settingsObj() = scene.objects.firstOrNull { it.shape == Shape.SETTINGS }
+
+    /** world.gravity, world.fog, world.ambient, world.timeScale mirror the Settings object (defaults if none). */
+    private fun pushWorld() {
+        val s = settingsObj()
+        worldPushed[0] = s?.x ?: 9.8f
+        worldPushed[1] = s?.y ?: 0f
+        worldPushed[2] = s?.z ?: 0.3f
+        worldPushed[3] = s?.sx ?: 1f
+        world.set("gravity", worldPushed[0].toDouble())
+        world.set("fog", worldPushed[1].toDouble())
+        world.set("ambient", worldPushed[2].toDouble())
+        world.set("timeScale", worldPushed[3].toDouble())
+    }
+
+    private fun pullWorld() {
+        val s = settingsObj() ?: return
+        num(world, "gravity")?.let { if (it != worldPushed[0]) s.x = it.coerceIn(0f, 100f) }
+        num(world, "fog")?.let { if (it != worldPushed[1]) s.y = it.coerceIn(0f, 500f) }
+        num(world, "ambient")?.let { if (it != worldPushed[2]) s.z = it.coerceIn(0f, 1f) }
+        num(world, "timeScale")?.let { if (it != worldPushed[3]) s.sx = it.coerceIn(0f, 5f) }
+    }
+
+    /** Box overlap per axis (positive = penetration). null if any axis is separated by more than -eps. */
+    private fun overlap(a: SceneObject, b: SceneObject, eps: Float): FloatArray? {
+        val ox = 0.5f * (a.sx + b.sx) - abs(a.x - b.x)
+        val oy = 0.5f * (a.sy + b.sy) - abs(a.y - b.y)
+        val oz = 0.5f * (a.sz + b.sz) - abs(a.z - b.z)
+        return if (ox > eps && oy > eps && oz > eps) floatArrayOf(ox, oy, oz) else null
+    }
+
+    private fun fire(a: SceneObject, b: SceneObject) {
+        val inst = instByObj[a] ?: return
+        val h = inst.onCollide ?: return
+        val tb = tables[b] ?: return
+        if (inst.failed) return
+        try {
+            guard(inst)
+            h.call(tb)
+        } catch (e: Throwable) {
+            inst.failed = true
+            log(a.name + " (oncollide): " + e.message)
+        }
+    }
+
+    /**
+     * Solid objects that moved this frame are pushed out of other solid objects (axis-aligned boxes sized by scale;
+     * rotation is ignored). Triggers and solids call oncollide(other). Sets self.grounded for objects standing on something.
+     */
+    private fun collide() {
+        val st = settingsObj()
+        if (st != null && st.sz < 0.5f) return
+        val cols = ArrayList<SceneObject>()
+        for (o in tables.keys) {
+            if (o.collider != 0 && !o.shape.isScreen && !o.shape.isLight && o.shape != Shape.SETTINGS) cols.add(o)
+        }
+        val n = cols.size
+        if (n < 2) return
+        val moved = BooleanArray(n) { i ->
+            val o = cols[i]
+            val p = prev[o]
+            p == null || abs(o.x - p[0]) > 1e-5f || abs(o.y - p[1]) > 1e-5f || abs(o.z - p[2]) > 1e-5f
+        }
+        grounded.clear()
+        repeat(2) {
+            for (i in 0 until n) {
+                val a = cols[i]
+                if (a.collider != 1 || !moved[i]) continue
+                for (j in 0 until n) {
+                    if (i == j) continue
+                    val b = cols[j]
+                    if (b.collider != 1) continue
+                    val ov = overlap(a, b, 0f) ?: continue
+                    val k = if (moved[j]) 0.5f else 1f
+                    val dx = a.x - b.x
+                    val dy = a.y - b.y
+                    val dz = a.z - b.z
+                    if (ov[0] <= ov[1] && ov[0] <= ov[2]) {
+                        a.x += (if (dx >= 0f) 1f else -1f) * ov[0] * k
+                    } else if (ov[1] <= ov[2]) {
+                        a.y += (if (dy >= 0f) 1f else -1f) * ov[1] * k
+                        if (dy >= 0f) grounded.add(a)
+                    } else {
+                        a.z += (if (dz >= 0f) 1f else -1f) * ov[2] * k
+                    }
+                }
+            }
+        }
+        for ((o, t) in tables.entries.toList()) {
+            push(o, t)
+            if (o.collider != 0) t.set("grounded", LuaValue.valueOf(grounded.contains(o)))
+        }
+        for (i in 0 until n) {
+            for (j in i + 1 until n) {
+                if (!moved[i] && !moved[j]) continue
+                if (overlap(cols[i], cols[j], -0.002f) == null) continue
+                fire(cols[i], cols[j])
+                fire(cols[j], cols[i])
+            }
+        }
+        pullAll()
+    }
+
     fun start() {
         for (o in scene.objects) {
             val t = LuaTable()
@@ -210,6 +326,8 @@ class ScriptEngine(private val scene: Scene, private val log: (String) -> Unit) 
             tables[o] = t
         }
         updateInput()
+        pushWorld()
+        for (t in tables.values) t.set("grounded", LuaValue.FALSE)
         for ((o, t) in tables.entries.toList()) {
             if (o.script.isBlank()) continue
             try {
@@ -218,6 +336,7 @@ class ScriptEngine(private val scene: Scene, private val log: (String) -> Unit) 
                 g.set("debug", LuaValue.NIL)
                 g.set("self", t)
                 g.set("input", input)
+                g.set("world", world)
                 g.set("find", findFn)
                 g.set("spawn", spawnFn)
                 g.set("destroy", destroyFn)
@@ -228,6 +347,8 @@ class ScriptEngine(private val scene: Scene, private val log: (String) -> Unit) 
                 val inst = Inst(o, g, sethook)
                 guard(inst)
                 g.load(o.script, o.name).call()
+                inst.onCollide = g.get("oncollide").let { if (it.isfunction()) it else null }
+                instByObj[o] = inst
                 instances.add(inst)
             } catch (e: Throwable) {
                 log(o.name + ": " + e.message)
@@ -235,17 +356,26 @@ class ScriptEngine(private val scene: Scene, private val log: (String) -> Unit) 
         }
         for (inst in instances.toList()) callFn(inst, "start", null)
         pullAll()
+        pullWorld()
     }
 
-    fun update(dt: Float) {
+    fun update(rawDt: Float) {
+        val dt = rawDt * (settingsObj()?.sx ?: 1f).coerceIn(0f, 5f)
         time += dt
+        for ((o, _) in tables) {
+            val p = prev.getOrPut(o) { FloatArray(3) }
+            p[0] = o.x; p[1] = o.y; p[2] = o.z
+        }
         for ((o, t) in tables.entries.toList()) push(o, t)
         updateInput()
+        pushWorld()
         for (inst in instances.toList()) {
             inst.globals.set("time", time.toDouble())
             inst.globals.set("dt", dt.toDouble())
             callFn(inst, "update", dt.toDouble())
         }
         pullAll()
+        pullWorld()
+        collide()
     }
 }

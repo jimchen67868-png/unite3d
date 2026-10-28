@@ -6,7 +6,7 @@ object Samples {
 function start()
   last = -1
   over = false
-  log("Coin Rush! Joystick or tilt to move. Grab yellow pyramids, dodge red cubes.")
+  log("Coin Rush! Move, JUMP over red cubes, grab yellow pyramids.")
 end
 
 function update(dt)
@@ -28,10 +28,12 @@ function update(dt)
 end
 """
 
-    private val PLAYER = """-- Move with the on-screen joystick (bottom left) or tilt the phone flat
+    private val PLAYER = """-- Joystick or tilt to move, JUMP button to hop.
+-- The floor and walls are solid, so this script only needs gravity.
 function start()
   self.score = 0
   self.frozen = false
+  self.vy = 0
 end
 
 function update(dt)
@@ -45,12 +47,38 @@ function update(dt)
     mx = mx / len
     mz = mz / len
   end
-  self.x = math.max(-5.7, math.min(5.7, self.x + mx * 6 * dt))
-  self.z = math.max(-5.7, math.min(5.7, self.z + mz * 6 * dt))
+  self.x = self.x + mx * 6 * dt
+  self.z = self.z + mz * 6 * dt
+
+  -- gravity and jumping (self.grounded is set by the collision system)
+  if self.grounded then
+    if self.vy < 0 then self.vy = 0 end
+    if input.jumpPressed then self.vy = 8 end
+  end
+  self.vy = self.vy - world.gravity * dt
+  self.y = self.y + self.vy * dt
+
+  if self.y < -10 then
+    self.x = 0
+    self.y = 1
+    self.z = 0
+    self.vy = 0
+  end
 end
 """
 
-    private val COIN = """-- Spins, bobs, and jumps to a new spot when the player touches it
+    private val LAMP = """-- A lantern that follows the player
+function update(dt)
+  local p = find("Player")
+  if p then
+    self.x = p.x
+    self.z = p.z
+    self.y = p.y + 2
+  end
+end
+"""
+
+    private val COIN = """-- Trigger: spins and bobs; oncollide runs when something overlaps it
 function start()
   phase = math.random() * 6
 end
@@ -58,19 +86,18 @@ end
 function update(dt)
   self.ry = self.ry + 200 * dt
   self.y = 0.6 + math.sin(time * 4 + phase) * 0.12
-  local p = find("Player")
-  if p and not p.frozen then
-    local dx, dz = p.x - self.x, p.z - self.z
-    if dx * dx + dz * dz < 0.55 then
-      p.score = (p.score or 0) + 1
-      self.x = math.random(-50, 50) / 10
-      self.z = math.random(-50, 50) / 10
-    end
+end
+
+function oncollide(other)
+  if other.name == "Player" and not other.frozen then
+    other.score = (other.score or 0) + 1
+    self.x = math.random(-50, 50) / 10
+    self.z = math.random(-50, 50) / 10
   end
 end
 """
 
-    private val HAZARD = """-- Slides side to side; touching it costs a point and resets the player
+    private val HAZARD = """-- Trigger: slides side to side; jump over it or lose a point
 function start()
   phase = math.random() * 6
 end
@@ -78,15 +105,15 @@ end
 function update(dt)
   self.x = math.sin(time * 1.2 + phase) * 4.5
   self.ry = self.ry + 60 * dt
-  local p = find("Player")
-  if p and not p.frozen then
-    local dx, dz = p.x - self.x, p.z - self.z
-    if dx * dx + dz * dz < 0.8 then
-      p.score = math.max(0, (p.score or 0) - 1)
-      p.x = 0
-      p.z = 0
-      log("Ouch!  Score " .. p.score)
-    end
+end
+
+function oncollide(other)
+  if other.name == "Player" and not other.frozen then
+    other.score = math.max(0, (other.score or 0) - 1)
+    other.x = 0
+    other.y = 1
+    other.z = 0
+    log("Ouch!  Score " .. other.score)
   end
 end
 """
@@ -94,31 +121,45 @@ end
     private fun put(
         scene: Scene, shape: Shape, name: String,
         x: Float, y: Float, z: Float, sx: Float, sy: Float, sz: Float,
-        color: FloatArray, script: String
+        color: FloatArray, script: String, collider: Int = 0
     ) {
         val o = scene.add(shape, null, name)
         o.x = x; o.y = y; o.z = z
         o.sx = sx; o.sy = sy; o.sz = sz
         o.color = color
         o.script = script
+        o.collider = collider
     }
 
     /** Collect coins for 30 seconds while dodging hazards. Tilt the phone or touch to move. */
     fun coinRush(scene: Scene) {
         scene.objects.clear()
         scene.selected = null
-        put(scene, Shape.CUBE, "Floor", 0f, -0.1f, 0f, 12f, 0.2f, 12f, floatArrayOf(0.25f, 0.45f, 0.30f), FLOOR)
-        put(scene, Shape.SPHERE, "Player", 0f, 0.5f, 0f, 1f, 1f, 1f, floatArrayOf(0.30f, 0.55f, 0.90f), PLAYER)
+        put(scene, Shape.CUBE, "Floor", 0f, -0.1f, 0f, 12f, 0.2f, 12f, floatArrayOf(0.25f, 0.45f, 0.30f), FLOOR, 1)
+        put(scene, Shape.SPHERE, "Player", 0f, 0.5f, 0f, 1f, 1f, 1f, floatArrayOf(0.30f, 0.55f, 0.90f), PLAYER, 1)
         val spots = arrayOf(
             floatArrayOf(-4f, -4f), floatArrayOf(4f, -4f), floatArrayOf(-4f, 4f), floatArrayOf(4f, 4f),
             floatArrayOf(0f, -4.5f), floatArrayOf(0f, 4.5f), floatArrayOf(-4.5f, 0f), floatArrayOf(4.5f, 0f)
         )
         for (i in spots.indices) {
             put(scene, Shape.PYRAMID, "Coin " + (i + 1), spots[i][0], 0.6f, spots[i][1],
-                0.5f, 0.5f, 0.5f, floatArrayOf(0.95f, 0.78f, 0.15f), COIN)
+                0.5f, 0.5f, 0.5f, floatArrayOf(0.95f, 0.78f, 0.15f), COIN, 2)
         }
-        put(scene, Shape.CUBE, "Hazard 1", 0f, 0.4f, -2.5f, 0.8f, 0.8f, 0.8f, floatArrayOf(0.85f, 0.2f, 0.2f), HAZARD)
-        put(scene, Shape.CUBE, "Hazard 2", 0f, 0.4f, 2.5f, 0.8f, 0.8f, 0.8f, floatArrayOf(0.85f, 0.2f, 0.2f), HAZARD)
+        put(scene, Shape.CUBE, "Hazard 1", 0f, 0.4f, -2.5f, 0.8f, 0.8f, 0.8f, floatArrayOf(0.85f, 0.2f, 0.2f), HAZARD, 2)
+        put(scene, Shape.CUBE, "Hazard 2", 0f, 0.4f, 2.5f, 0.8f, 0.8f, 0.8f, floatArrayOf(0.85f, 0.2f, 0.2f), HAZARD, 2)
+        val wall = floatArrayOf(0.45f, 0.35f, 0.30f)
+        put(scene, Shape.CUBE, "Wall N", 0f, 0.5f, -6.2f, 12.8f, 1f, 0.4f, wall, "", 1)
+        put(scene, Shape.CUBE, "Wall S", 0f, 0.5f, 6.2f, 12.8f, 1f, 0.4f, wall, "", 1)
+        put(scene, Shape.CUBE, "Wall W", -6.2f, 0.5f, 0f, 0.4f, 1f, 12f, wall, "", 1)
+        put(scene, Shape.CUBE, "Wall E", 6.2f, 0.5f, 0f, 0.4f, 1f, 12f, wall, "", 1)
+        scene.addSettings()?.let {
+            it.x = 18f; it.y = 45f; it.z = 0.2f
+            it.color = floatArrayOf(0.09f, 0.11f, 0.20f)
+        }
+        scene.addLight(Shape.SUN)?.let { it.sx = 0.45f; it.sy = 0.2f }
+        scene.addLight(Shape.LIGHT)?.let { it.y = 2.5f; it.sx = 2.2f; it.sy = 9f; it.script = LAMP }
+        scene.addJoystick()
+        scene.addButton()
         scene.selected = null
     }
 }

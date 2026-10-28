@@ -48,6 +48,15 @@ class MainActivity : Activity(), SensorEventListener {
     private lateinit var yButton: Button
     private lateinit var playButton: Button
     private lateinit var joystick: JoystickView
+    private lateinit var colliderBtn: Button
+    private lateinit var skyRow: LinearLayout
+    private lateinit var objSwatches: LinearLayout
+    private lateinit var settingsHint: TextView
+    private lateinit var jumpButton: JumpButtonView
+    private lateinit var viewButton: Button
+    private var fpTarget: SceneObject? = null
+    private var savedPitch = 30f
+    private var savedDist = 9f
     private lateinit var fileButton: Button
 
     private lateinit var topPanel: LinearLayout
@@ -58,6 +67,7 @@ class MainActivity : Activity(), SensorEventListener {
     private lateinit var scriptField: EditText
     private lateinit var nameField: EditText
     private val fields = ArrayList<EditText>()
+    private val rowLabels = ArrayList<TextView>()
     private var settingScript = false
 
     private var panel = Panel.NONE
@@ -79,9 +89,15 @@ class MainActivity : Activity(), SensorEventListener {
     private var ay = 0f
     private var az = 0f
 
+    private val skyColors = intArrayOf(
+        0xFF0D0F1F.toInt(), 0xFF59406B.toInt(), 0xFF87CEEB.toInt(),
+        0xFF9AA5B3.toInt(), 0xFF000000.toInt(), 0xFFFFFFFF.toInt()
+    )
+
     private val swatchColors = intArrayOf(
         0xFFE65A4D.toInt(), 0xFF4DB373.toInt(), 0xFF4D8CE6.toInt(),
-        0xFFF2BF40.toInt(), 0xFFB373D9.toInt(), 0xFFBFBFBF.toInt()
+        0xFFF2BF40.toInt(), 0xFFB373D9.toInt(), 0xFFBFBFBF.toInt(),
+        0xFFFFFFFF.toInt(), 0xFFFFE6B3.toInt()
     )
 
     private val scriptTemplate = """-- Runs once when Play starts
@@ -179,6 +195,7 @@ end
         fileButton = btn("File") { showFileMenu() }
         playButton = btn("Play") { togglePlay() }
         playButton.setBackgroundColor(0xFF2E8B57.toInt())
+        viewButton = btn("1st person") { toggleFirstPerson() }
 
         val bottom = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -200,6 +217,7 @@ end
             ))
             addView(row(
                 playButton,
+                viewButton,
                 btn("Clear log") { logLines.clear(); showLog() }
             ))
         }
@@ -221,16 +239,10 @@ end
         root.addView(topPanel, FrameLayout.LayoutParams(-1, -2, Gravity.TOP))
         root.addView(bottom, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM))
         joystick = JoystickView(this).apply { visibility = View.GONE }
-        val jlp = FrameLayout.LayoutParams(dp(150), dp(150), Gravity.BOTTOM or Gravity.START)
-        jlp.leftMargin = dp(16)
-        root.addView(joystick, jlp)
-        bottom.addOnLayoutChangeListener { v, _, _, _, _, _, _, _, _ ->
-            val want = v.height + dp(12)
-            if (jlp.bottomMargin != want) {
-                jlp.bottomMargin = want
-                joystick.layoutParams = jlp
-            }
-        }
+        root.addView(joystick, FrameLayout.LayoutParams(dp(150), dp(150), Gravity.TOP or Gravity.START))
+        jumpButton = JumpButtonView(this).apply { visibility = View.GONE }
+        root.addView(jumpButton, FrameLayout.LayoutParams(dp(90), dp(90), Gravity.TOP or Gravity.START))
+        root.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> refreshJoystick() }
         setContentView(root)
 
         editor.onChange = { updateInfo() }
@@ -300,10 +312,16 @@ end
                 it.ax = ax; it.ay = ay; it.az = az
                 it.camYaw = editor.renderer.yaw
                 it.joyX = joystick.jx; it.joyY = joystick.jy; it.joyActive = joystick.active
+                it.jump = jumpButton.pressedNow
+                it.jumpPressed = jumpButton.consumePress()
                 it.touching = editor.touching
                 it.touchX = editor.touchX / maxOf(editor.width, 1)
                 it.touchY = editor.touchY / maxOf(editor.height, 1)
                 it.update(dt)
+            }
+            if (editor.renderer.fpMode) {
+                val t = fpTarget
+                if (t == null || !scene.objects.contains(t)) setFirstPerson(false) else updateFpEye()
             }
             editor.refresh()
             Choreographer.getInstance().postFrameCallback(this)
@@ -327,13 +345,13 @@ end
         clearFieldFocus()
         snaps = scene.objects.map {
             Snap(it, floatArrayOf(it.x, it.y, it.z, it.rx, it.ry, it.rz, it.sx, it.sy, it.sz,
-                it.color[0], it.color[1], it.color[2]))
+                it.color[0], it.color[1], it.color[2], it.collider.toFloat()))
         }
         logLines.clear(); showLog()
         playing = true
         editor.playing = true
         joystick.reset()
-        joystick.visibility = View.VISIBLE
+        jumpButton.reset()
         playButton.text = "Stop"
         playButton.setBackgroundColor(0xFFC0392B.toInt())
         try {
@@ -357,7 +375,8 @@ end
         playing = false
         editor.playing = false
         joystick.reset()
-        joystick.visibility = View.GONE
+        jumpButton.reset()
+        if (editor.renderer.fpMode) setFirstPerson(false)
         Choreographer.getInstance().removeFrameCallback(frameCb)
         engine = null
         for (s in snaps) {
@@ -366,6 +385,7 @@ end
             o.rx = v[3]; o.ry = v[4]; o.rz = v[5]
             o.sx = v[6]; o.sy = v[7]; o.sz = v[8]
             o.color = floatArrayOf(v[9], v[10], v[11])
+            o.collider = v[12].toInt()
         }
         val orig = snaps.map { it.o }
         if (scene.objects.toList() != orig) {
@@ -404,7 +424,8 @@ end
         val help = TextView(this).apply {
             text = "Lua. Define start() and update(dt).\n" +
                 "self.x .y .z .rx .ry .rz .sx .sy .sz .r .g .b | find(\"Name\") | spawn(\"cube\", x, y, z) | destroy(obj) | time, dt\n" +
-                "input.touching .x .y (0-1) | input.tiltX .tiltY .moveX .moveZ (tilt) | input.joyX .joyY .joyMoveX .joyMoveZ .joyActive | log(...)"
+                "input.touching .x .y (0-1) | input.tiltX .tiltY .moveX .moveZ (tilt) | input.joyX .joyY .joyMoveX .joyMoveZ .joyActive | input.jump .jumpPressed | log(...)\n" +
+                "oncollide(other) | self.grounded | self.collider (0 off, 1 solid, 2 trigger) | world.gravity .fog .ambient .timeScale"
             textSize = 11f
             setTextColor(0xFFAAAAAA.toInt())
             setPadding(dp(8), dp(4), dp(8), dp(4))
@@ -457,9 +478,17 @@ end
             orientation = LinearLayout.VERTICAL
             visibility = View.GONE
             addView(row(
-                btn("Duplicate", true) { scene.duplicate(); editor.refresh() },
+                btn("+Stick", true) { if (scene.addJoystick() == null) toast("Joystick already added") else editor.refresh() },
+                btn("+Jump", true) { if (scene.addButton() == null) toast("Jump button already added") else editor.refresh() },
+                btn("Copy", true) { scene.duplicate(); editor.refresh() },
                 btn("Delete", true) { scene.removeSelected(); editor.refresh() },
-                btn("Clear all", true) { scene.objects.clear(); scene.selected = null; editor.refresh() }
+                btn("Clear", true) { scene.objects.clear(); scene.selected = null; editor.refresh() }
+            ))
+            addView(row(
+                btn("+Light", true) { if (scene.addLight(Shape.LIGHT) == null) toast("Max 4 point lights") else editor.refresh() },
+                btn("+Sun", true) { if (scene.addLight(Shape.SUN) == null) toast("Sun already added") else editor.refresh() },
+                btn("+Settings", true) { if (scene.addSettings() == null) toast("Settings already added") else editor.refresh() },
+                btn("+Block", true) { scene.addBlock(); editor.refresh() }
             ))
             addView(scroll)
         }
@@ -470,7 +499,7 @@ end
         for (o in scene.objects) {
             val sel = o === scene.selected
             hierList.addView(TextView(this).apply {
-                text = (if (sel) "▶ " else "    ") + o.name + (if (o.script.isNotBlank()) "  {lua}" else "")
+                text = (if (sel) "▶ " else "    ") + o.name + (if (o.script.isNotBlank()) "  {lua}" else "") + (if (o.shape.isScreen) "  [screen]" else "") + (if (o.shape.isLight) "  [light]" else "") + (if (o.shape == Shape.SETTINGS) "  [settings]" else "")
                 textSize = 14f
                 setTextColor(if (sel) 0xFF7FB0FF.toInt() else Color.WHITE)
                 setPadding(dp(10), dp(8), dp(10), dp(8))
@@ -506,14 +535,15 @@ end
         gravity = Gravity.CENTER_VERTICAL
         addView(TextView(this@MainActivity).apply {
             text = label; textSize = 12f; setTextColor(0xFFAAAAAA.toInt())
-            layoutParams = LinearLayout.LayoutParams(dp(40), -2)
+            layoutParams = LinearLayout.LayoutParams(dp(58), -2)
+            rowLabels.add(this)
         })
         for (k in 0 until 3) addView(makeField(start + k))
     }
 
-    private fun swatchRow() = LinearLayout(this).apply {
+    private fun swatchRow(colors: IntArray) = LinearLayout(this).apply {
         orientation = LinearLayout.HORIZONTAL
-        for (c in swatchColors) addView(View(this@MainActivity).apply {
+        for (c in colors) addView(View(this@MainActivity).apply {
             setBackgroundColor(c)
             layoutParams = LinearLayout.LayoutParams(0, dp(28), 1f).also { it.setMargins(dp(2), dp(6), dp(2), dp(2)) }
             setOnClickListener {
@@ -540,7 +570,36 @@ end
             addView(fieldRow("Pos", 0))
             addView(fieldRow("Rot", 3))
             addView(fieldRow("Scale", 6))
-            addView(swatchRow())
+            objSwatches = swatchRow(swatchColors)
+            addView(objSwatches)
+            skyRow = swatchRow(skyColors)
+            skyRow.visibility = View.GONE
+            addView(skyRow)
+            settingsHint = TextView(this@MainActivity).apply {
+                text = "Settings: World = gravity, fog distance (0 = off), ambient 0-1.  Snap = grid size when dragging (0 = off).  Last row = time scale, show grid (1/0), collisions on (1/0).  Swatches = sky colour."
+                textSize = 11f
+                setTextColor(0xFFAAAAAA.toInt())
+                setPadding(dp(4), dp(4), dp(4), dp(2))
+                visibility = View.GONE
+            }
+            addView(settingsHint)
+            colliderBtn = Button(this@MainActivity).apply {
+                text = "Collider: Off"
+                textSize = 12f
+                setTextColor(Color.WHITE)
+                setBackgroundColor(0xFF444444.toInt())
+                minWidth = 0; minHeight = 0
+                setPadding(dp(6), dp(8), dp(6), dp(8))
+                layoutParams = LinearLayout.LayoutParams(-1, -2).also { it.setMargins(dp(2), dp(4), dp(2), dp(2)) }
+                setOnClickListener {
+                    val o = scene.selected
+                    if (o != null && !o.shape.isScreen && !o.shape.isLight && o.shape != Shape.SETTINGS) {
+                        o.collider = (o.collider + 1) % 3
+                        editor.refresh()
+                    }
+                }
+            }
+            addView(colliderBtn)
         }
     }
 
@@ -554,6 +613,38 @@ end
         val o = scene.selected ?: return
         val v = fields[i].text.toString().toFloatOrNull()
         if (v == null) { refreshInspector(); return }
+        if (o.shape.isScreen) {
+            when (i) {
+                0 -> o.x = v.coerceIn(0f, 100f)
+                1 -> o.y = v.coerceIn(0f, 100f)
+                6 -> o.sx = v.coerceIn(0.4f, 2.5f)
+            }
+            editor.refresh()
+            return
+        }
+        if (o.shape == Shape.SETTINGS) {
+            when (i) {
+                0 -> o.x = v.coerceIn(0f, 100f)
+                1 -> o.y = v.coerceIn(0f, 500f)
+                2 -> o.z = v.coerceIn(0f, 1f)
+                3 -> o.rx = v.coerceIn(0f, 10f)
+                6 -> o.sx = v.coerceIn(0f, 5f)
+                7 -> o.sy = if (v >= 0.5f) 1f else 0f
+                8 -> o.sz = if (v >= 0.5f) 1f else 0f
+            }
+            editor.refresh()
+            return
+        }
+        if (o.shape.isLight) {
+            when (i) {
+                0 -> o.x = v; 1 -> o.y = v; 2 -> o.z = v
+                3 -> o.rx = v; 4 -> o.ry = v; 5 -> o.rz = v
+                6 -> o.sx = v.coerceIn(0f, 5f)
+                7 -> o.sy = if (o.shape == Shape.SUN) v.coerceIn(0f, 1f) else v.coerceIn(1f, 100f)
+            }
+            editor.refresh()
+            return
+        }
         val s = v.coerceAtLeast(0.01f)
         when (i) {
             0 -> o.x = v; 1 -> o.y = v; 2 -> o.z = v
@@ -565,14 +656,33 @@ end
 
     private fun refreshInspector() {
         val o = scene.selected
+        val joy = o?.shape?.isScreen == true
+        val light = o?.shape?.isLight == true
+        val sun = o?.shape == Shape.SUN
+        val st = o?.shape == Shape.SETTINGS
+        skyRow.visibility = if (st) View.VISIBLE else View.GONE
+        objSwatches.visibility = if (st) View.GONE else View.VISIBLE
+        settingsHint.visibility = if (st) View.VISIBLE else View.GONE
+        colliderBtn.visibility = if (o != null && !joy && !light && !st) View.VISIBLE else View.GONE
         nameField.isEnabled = o != null
-        for (f in fields) f.isEnabled = o != null
+        for ((i, f) in fields.withIndex()) {
+            f.isEnabled = o != null && when {
+                st -> i in 0..3 || i == 6 || i == 7 || i == 8
+                joy -> i == 0 || i == 1 || i == 6
+                light -> i in 0..2 || i == 6 || i == 7 || (sun && (i == 3 || i == 4))
+                else -> true
+            }
+        }
+        rowLabels[0].text = if (joy) "Screen %" else if (st) "World" else "Pos"
+        rowLabels[1].text = if (st) "Snap" else "Rot"
+        rowLabels[2].text = if (joy) "Size" else if (st) "Time/Grid/Col" else if (sun) "Power/Amb" else if (light) "Power/Rng" else "Scale"
         if (o == null) {
             if (!nameField.hasFocus()) nameField.setText("")
             for (f in fields) if (!f.hasFocus()) f.setText("")
             return
         }
         if (!nameField.hasFocus()) nameField.setText(o.name)
+        colliderBtn.text = "Collider: " + arrayOf("Off", "Solid (blocks)", "Trigger (events only)")[o.collider.coerceIn(0, 2)]
         val v = floatArrayOf(o.x, o.y, o.z, o.rx, o.ry, o.rz, o.sx, o.sy, o.sz)
         for (i in 0 until 9) {
             if (!fields[i].hasFocus()) {
@@ -618,6 +728,83 @@ end
         if (panel == Panel.HIER && (scene.objects.size != lastCount || scene.selected !== lastSel)) rebuildHierarchy()
         if (panel == Panel.INSPECT) refreshInspector()
         if (panel == Panel.SCRIPT) refreshScript()
+        refreshJoystick()
+    }
+
+    /** Shows screen controls (Joystick, Jump button): a faint preview while editing, live while playing. */
+    private fun refreshJoystick() {
+        val j = scene.objects.firstOrNull { it.shape == Shape.JOYSTICK }
+        if (j == null) {
+            if (joystick.visibility != View.GONE) { joystick.reset(); joystick.visibility = View.GONE }
+        } else {
+            joystick.visibility = View.VISIBLE
+            joystick.interactive = playing
+            joystick.alpha = if (playing) 1f else 0.45f
+            placeControl(joystick, j, 150)
+        }
+        val b = scene.objects.firstOrNull { it.shape == Shape.BUTTON }
+        if (b == null) {
+            if (jumpButton.visibility != View.GONE) { jumpButton.reset(); jumpButton.visibility = View.GONE }
+        } else {
+            jumpButton.visibility = View.VISIBLE
+            jumpButton.interactive = playing
+            jumpButton.alpha = if (playing) 1f else 0.45f
+            placeControl(jumpButton, b, 90)
+        }
+    }
+
+    private fun placeControl(v: View, o: SceneObject, baseDp: Int) {
+        val w = root.width
+        val h = root.height
+        if (w == 0 || h == 0) return
+        val size = (dp(baseDp) * o.sx.coerceIn(0.4f, 2.5f)).toInt()
+        val left = (o.x.coerceIn(0f, 100f) / 100f * w - size / 2f).toInt()
+        val top = (o.y.coerceIn(0f, 100f) / 100f * h - size / 2f).toInt()
+        val lp = v.layoutParams as FrameLayout.LayoutParams
+        if (lp.width != size || lp.height != size || lp.leftMargin != left || lp.topMargin != top) {
+            lp.width = size; lp.height = size; lp.leftMargin = left; lp.topMargin = top
+            v.layoutParams = lp
+        }
+    }
+
+    // ---------- First-person view (play mode) ----------
+
+    private fun toggleFirstPerson() {
+        if (!playing) { toast("Tap Play first"); return }
+        setFirstPerson(!editor.renderer.fpMode)
+    }
+
+    private fun updateFpEye() {
+        val t = fpTarget ?: return
+        val r = editor.renderer
+        r.fpX = t.x
+        r.fpY = t.y + 0.6f * t.sy
+        r.fpZ = t.z
+    }
+
+    private fun setFirstPerson(on: Boolean) {
+        val r = editor.renderer
+        if (on) {
+            val t = scene.objects.firstOrNull { !it.shape.isScreen && it.name.equals("Player", true) }
+                ?: scene.selected?.takeIf { !it.shape.isScreen && !it.shape.isLight && it.shape != Shape.SETTINGS }
+            if (t == null) { toast("Add an object named Player, or select one"); return }
+            savedPitch = r.pitch
+            savedDist = r.dist
+            fpTarget = t
+            r.fpHide = t
+            r.pitch = 5f
+            updateFpEye()
+            r.fpMode = true
+            viewButton.text = "3rd person"
+        } else {
+            r.fpMode = false
+            r.fpHide = null
+            fpTarget = null
+            r.pitch = savedPitch.coerceIn(5f, 85f)
+            r.dist = savedDist
+            viewButton.text = "1st person"
+        }
+        editor.refresh()
     }
 
     // ---------- Save / load ----------

@@ -5,7 +5,13 @@ import org.json.JSONObject
 import java.util.concurrent.CopyOnWriteArrayList
 
 enum class Shape(val label: String, val radius: Float) {
-    CUBE("Cube", 0.87f), PYRAMID("Pyramid", 0.75f), SPHERE("Sphere", 0.5f), MODEL("Model", 0.87f)
+    CUBE("Cube", 0.87f), PYRAMID("Pyramid", 0.75f), SPHERE("Sphere", 0.5f), MODEL("Model", 0.87f),
+    JOYSTICK("Joystick", 0f), BUTTON("Button", 0f),
+    LIGHT("Light", 0.4f), SUN("Sun", 0.4f),
+    SETTINGS("Settings", 0f);
+
+    val isScreen: Boolean get() = this == JOYSTICK || this == BUTTON
+    val isLight: Boolean get() = this == LIGHT || this == SUN
 }
 
 /** Imported mesh (x y z nx ny nz per vertex), fitted to a unit box. [key] = file name in app storage. */
@@ -22,6 +28,7 @@ class SceneObject(
 ) {
     val maxScale: Float get() = maxOf(sx, sy, sz)
     var script: String = ""
+    var collider: Int = 0   // 0 = none, 1 = solid (blocks), 2 = trigger (events only)
 }
 
 class Scene {
@@ -49,11 +56,79 @@ class Scene {
         return o
     }
 
+    /** Adds the on-screen joystick (x, y = screen position in %, sx = size). Only one is allowed. */
+    fun addJoystick(): SceneObject? {
+        if (objects.any { it.shape == Shape.JOYSTICK }) return null
+        val o = SceneObject(Shape.JOYSTICK, "Joystick", x = 18f, y = 62f, z = 0f, color = floatArrayOf(1f, 1f, 1f))
+        objects.add(o)
+        selected = o
+        return o
+    }
+
+    /** Adds the on-screen Jump button (x, y = screen position in %, sx = size). Only one is allowed. */
+    fun addButton(): SceneObject? {
+        if (objects.any { it.shape == Shape.BUTTON }) return null
+        val o = SceneObject(Shape.BUTTON, "Jump Button", x = 85f, y = 66f, z = 0f, color = floatArrayOf(1f, 1f, 1f))
+        objects.add(o)
+        selected = o
+        return o
+    }
+
+    /**
+     * Scene settings (one per scene). x = gravity, y = fog distance (0 = off), z = ambient light 0-1,
+     * sx = time scale, sy = show grid (1/0), colour = sky + fog colour.
+     */
+    fun addSettings(): SceneObject? {
+        if (objects.any { it.shape == Shape.SETTINGS }) return null
+        val o = SceneObject(Shape.SETTINGS, "Settings", x = 9.8f, y = 0f, z = 0.3f, sx = 1f, sy = 1f,
+            color = floatArrayOf(0.15f, 0.16f, 0.19f))
+        objects.add(o)
+        selected = o
+        return o
+    }
+
+    fun canAddLight(shape: Shape): Boolean {
+        val n = objects.count { it.shape == shape }
+        return if (shape == Shape.SUN) n == 0 else n < 4
+    }
+
+    /**
+     * LIGHT = point light: sx = intensity, sy = range, color = light colour.
+     * SUN = directional light: rx/ry = direction, sx = intensity, sy = ambient level. Only one Sun; max 4 point lights.
+     */
+    fun addLight(shape: Shape): SceneObject? {
+        if (!shape.isLight || !canAddLight(shape)) return null
+        counter++
+        val o = if (shape == Shape.SUN)
+            SceneObject(shape, "Sun", x = 0f, y = 6f, z = 0f, rx = 34f, ry = 34f, sx = 1f, sy = 0.3f,
+                color = floatArrayOf(1f, 1f, 1f))
+        else
+            SceneObject(shape, "Light " + counter, x = 0f, y = 3f, z = 0f, sx = 1.5f, sy = 12f,
+                color = floatArrayOf(1f, 0.95f, 0.8f))
+        objects.add(o)
+        selected = o
+        return o
+    }
+
+    /** A solid 1x1x1 cube sitting on the grid, ready for building. */
+    fun addBlock(): SceneObject {
+        val o = add(Shape.CUBE)
+        o.name = "Block " + counter
+        o.x = ((objects.size - 1) % 5 - 2) + 0.5f
+        o.y = 0.5f
+        o.z = 0.5f
+        o.collider = 1
+        return o
+    }
+
     fun duplicate(): SceneObject? {
         val s = selected ?: return null
+        if (s.shape.isScreen || s.shape == Shape.SETTINGS) return null
+        if (s.shape.isLight && !canAddLight(s.shape)) return null
         val o = SceneObject(s.shape, s.name + " copy", s.x + 1f, s.y, s.z, s.rx, s.ry, s.rz,
             s.sx, s.sy, s.sz, s.color.copyOf(), s.model)
         o.script = s.script
+        o.collider = s.collider
         objects.add(o)
         selected = o
         return o
@@ -70,6 +145,7 @@ class Scene {
             put("shape", o.shape.name)
             put("name", o.name)
             put("script", o.script)
+            put("collider", o.collider)
             o.model?.let { put("model", it.key) }
             put("x", o.x.toDouble()); put("y", o.y.toDouble()); put("z", o.z.toDouble())
             put("rx", o.rx.toDouble()); put("ry", o.ry.toDouble()); put("rz", o.rz.toDouble())
@@ -98,7 +174,7 @@ class Scene {
                 j.optDouble("sx", old).toFloat(), j.optDouble("sy", old).toFloat(), j.optDouble("sz", old).toFloat(),
                 floatArrayOf(j.getDouble("r").toFloat(), j.getDouble("g").toFloat(), j.getDouble("b").toFloat()),
                 model
-            ).also { it.script = j.optString("script", "") })
+            ).also { it.script = j.optString("script", ""); it.collider = j.optInt("collider", 0) })
         }
         selected = null
         objects.clear()

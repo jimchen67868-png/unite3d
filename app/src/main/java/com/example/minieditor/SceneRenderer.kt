@@ -14,6 +14,12 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
     @Volatile var yaw = 45f
     @Volatile var pitch = 30f
     @Volatile var dist = 9f
+    @Volatile var playing = false
+    @Volatile var fpMode = false
+    @Volatile var fpX = 0f
+    @Volatile var fpY = 0f
+    @Volatile var fpZ = 0f
+    @Volatile var fpHide: SceneObject? = null
     private val target = floatArrayOf(0f, 0.5f, 0f)
 
     private val lock = Any()
@@ -22,12 +28,16 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
     private val vp = FloatArray(16)
     private val model = FloatArray(16)
     private val mvp = FloatArray(16)
+    private val eye = FloatArray(3)
     private var w = 1
     private var h = 1
 
     private var prog = 0
     private var aPos = 0; private var aNorm = 0
     private var uMVP = 0; private var uModel = 0; private var uColor = 0; private var uLit = 0
+    private var uSunDir = 0; private var uSunCol = 0; private var uAmbient = 0
+    private var uLPos = 0; private var uLCol = 0; private var uLCount = 0
+    private var uEye = 0; private var uFogColor = 0; private var uFogEnd = 0
     private lateinit var meshes: Map<Shape, Mesh>
     private lateinit var grid: Mesh
     private lateinit var gizmo: Mesh
@@ -39,22 +49,52 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         attribute vec3 aPos;
         attribute vec3 aNorm;
         varying vec3 vN;
+        varying vec3 vW;
         void main() {
             vN = (uModel * vec4(aNorm, 0.0)).xyz;
+            vW = (uModel * vec4(aPos, 1.0)).xyz;
             gl_Position = uMVP * vec4(aPos, 1.0);
         }
     """.trimIndent()
 
     private val fragmentSrc = """
+        #ifdef GL_FRAGMENT_PRECISION_HIGH
+        precision highp float;
+        #else
         precision mediump float;
+        #endif
         uniform vec4 uColor;
         uniform float uLit;
+        uniform vec3 uSunDir;
+        uniform vec3 uSunCol;
+        uniform vec3 uAmbient;
+        uniform vec3 uLPos[4];
+        uniform vec4 uLCol[4];
+        uniform int uLCount;
+        uniform vec3 uEye;
+        uniform vec3 uFogColor;
+        uniform float uFogEnd;
         varying vec3 vN;
+        varying vec3 vW;
         void main() {
             if (uLit < 0.5) { gl_FragColor = uColor; return; }
             vec3 n = normalize(vN);
-            float d = max(dot(n, normalize(vec3(0.4, 1.0, 0.6))), 0.0);
-            gl_FragColor = vec4(uColor.rgb * (0.3 + 0.7 * d), uColor.a);
+            vec3 light = uAmbient + uSunCol * max(dot(n, uSunDir), 0.0);
+            for (int i = 0; i < 4; i++) {
+                if (i >= uLCount) break;
+                vec3 d = uLPos[i] - vW;
+                float dist = max(length(d), 0.001);
+                float att = clamp(1.0 - dist / uLCol[i].w, 0.0, 1.0);
+                att = att * att;
+                light += uLCol[i].rgb * max(dot(n, d / dist), 0.0) * att;
+            }
+            vec3 c = uColor.rgb * light;
+            if (uFogEnd > 0.0) {
+                float fd = length(vW - uEye);
+                float ff = clamp((fd - uFogEnd * 0.3) / (uFogEnd * 0.7), 0.0, 1.0);
+                c = mix(c, uFogColor, ff);
+            }
+            gl_FragColor = vec4(c, uColor.a);
         }
     """.trimIndent()
 
@@ -78,6 +118,15 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         uModel = GLES20.glGetUniformLocation(prog, "uModel")
         uColor = GLES20.glGetUniformLocation(prog, "uColor")
         uLit = GLES20.glGetUniformLocation(prog, "uLit")
+        uSunDir = GLES20.glGetUniformLocation(prog, "uSunDir")
+        uSunCol = GLES20.glGetUniformLocation(prog, "uSunCol")
+        uAmbient = GLES20.glGetUniformLocation(prog, "uAmbient")
+        uLPos = GLES20.glGetUniformLocation(prog, "uLPos[0]")
+        uLCol = GLES20.glGetUniformLocation(prog, "uLCol[0]")
+        uLCount = GLES20.glGetUniformLocation(prog, "uLCount")
+        uEye = GLES20.glGetUniformLocation(prog, "uEye")
+        uFogColor = GLES20.glGetUniformLocation(prog, "uFogColor")
+        uFogEnd = GLES20.glGetUniformLocation(prog, "uFogEnd")
         meshes = mapOf(Shape.CUBE to Meshes.cube(), Shape.PYRAMID to Meshes.pyramid(), Shape.SPHERE to Meshes.sphere())
         grid = Meshes.grid()
         gizmo = Meshes.gizmo()
@@ -93,10 +142,19 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
             Matrix.perspectiveM(proj, 0, 50f, w.toFloat() / h, 0.1f, 100f)
             val p = Math.toRadians(pitch.toDouble())
             val y = Math.toRadians(yaw.toDouble())
-            val ex = target[0] + dist * (cos(p) * sin(y)).toFloat()
-            val ey = target[1] + dist * sin(p).toFloat()
-            val ez = target[2] + dist * (cos(p) * cos(y)).toFloat()
-            Matrix.setLookAtM(view, 0, ex, ey, ez, target[0], target[1], target[2], 0f, 1f, 0f)
+            if (fpMode) {
+                val dx = (-cos(p) * sin(y)).toFloat()
+                val dy = (-sin(p)).toFloat()
+                val dz = (-cos(p) * cos(y)).toFloat()
+                Matrix.setLookAtM(view, 0, fpX, fpY, fpZ, fpX + dx, fpY + dy, fpZ + dz, 0f, 1f, 0f)
+                eye[0] = fpX; eye[1] = fpY; eye[2] = fpZ
+            } else {
+                val ex = target[0] + dist * (cos(p) * sin(y)).toFloat()
+                val ey = target[1] + dist * sin(p).toFloat()
+                val ez = target[2] + dist * (cos(p) * cos(y)).toFloat()
+                Matrix.setLookAtM(view, 0, ex, ey, ez, target[0], target[1], target[2], 0f, 1f, 0f)
+                eye[0] = ex; eye[1] = ey; eye[2] = ez
+            }
             Matrix.multiplyMM(vp, 0, proj, 0, view, 0)
         }
     }
@@ -133,6 +191,65 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         m.draw(aPos, aNorm, first, n)
     }
 
+    /** Sun if present (rx/ry = direction, sx = intensity, sy = ambient), else the built-in sun. Up to 4 point lights. */
+    private fun setLights(eyeP: FloatArray) {
+        var sd = floatArrayOf(0.4f, 1f, 0.6f)
+        var sc = floatArrayOf(0.7f, 0.7f, 0.7f)
+        var amb = 0.3f
+        val sun = scene.objects.firstOrNull { it.shape == Shape.SUN }
+        if (sun != null) {
+            val t = Math.toRadians(sun.rx.toDouble())
+            val p = Math.toRadians(sun.ry.toDouble())
+            sd = floatArrayOf((sin(t) * sin(p)).toFloat(), cos(t).toFloat(), (sin(t) * cos(p)).toFloat())
+            val k = 0.7f * sun.sx
+            sc = floatArrayOf(sun.color[0] * k, sun.color[1] * k, sun.color[2] * k)
+            amb = sun.sy
+        }
+        val st = scene.objects.firstOrNull { it.shape == Shape.SETTINGS }
+        if (st != null) amb = st.z.coerceIn(0f, 1f)
+        var l = sqrt(sd[0] * sd[0] + sd[1] * sd[1] + sd[2] * sd[2])
+        if (l <= 0f) l = 1f
+        GLES20.glUniform3f(uSunDir, sd[0] / l, sd[1] / l, sd[2] / l)
+        GLES20.glUniform3f(uSunCol, sc[0], sc[1], sc[2])
+        GLES20.glUniform3f(uAmbient, amb, amb, amb)
+        val pts = scene.objects.filter { it.shape == Shape.LIGHT }.take(4)
+        val pos = FloatArray(12)
+        val col = FloatArray(16)
+        for ((i, o) in pts.withIndex()) {
+            pos[i * 3] = o.x; pos[i * 3 + 1] = o.y; pos[i * 3 + 2] = o.z
+            col[i * 4] = o.color[0] * o.sx
+            col[i * 4 + 1] = o.color[1] * o.sx
+            col[i * 4 + 2] = o.color[2] * o.sx
+            col[i * 4 + 3] = o.sy
+        }
+        GLES20.glUniform3fv(uLPos, 4, pos, 0)
+        GLES20.glUniform4fv(uLCol, 4, col, 0)
+        GLES20.glUniform1i(uLCount, pts.size)
+        val sky = st?.color ?: floatArrayOf(0.15f, 0.16f, 0.19f)
+        GLES20.glUniform3f(uFogColor, sky[0], sky[1], sky[2])
+        GLES20.glUniform1f(uFogEnd, if (st != null) st.y.coerceAtLeast(0f) else 0f)
+        GLES20.glUniform3f(uEye, eyeP[0], eyeP[1], eyeP[2])
+    }
+
+    /** Editor-only marker: a small glowing sphere (the Sun also gets a line pointing toward the sun). */
+    private fun drawLightMarker(o: SceneObject, vpc: FloatArray) {
+        Matrix.setIdentityM(model, 0)
+        Matrix.translateM(model, 0, o.x, o.y, o.z)
+        Matrix.scaleM(model, 0, 0.3f, 0.3f, 0.3f)
+        val c = floatArrayOf(
+            minOf(1f, o.color[0] + 0.2f), minOf(1f, o.color[1] + 0.2f), minOf(1f, o.color[2] + 0.2f)
+        )
+        drawMesh(meshes.getValue(Shape.SPHERE), vpc, model, c, false)
+        if (o.shape == Shape.SUN) {
+            Matrix.setIdentityM(model, 0)
+            Matrix.translateM(model, 0, o.x, o.y, o.z)
+            Matrix.rotateM(model, 0, o.ry, 0f, 1f, 0f)
+            Matrix.rotateM(model, 0, o.rx, 1f, 0f, 0f)
+            GLES20.glLineWidth(3f)
+            drawMesh(gizmo, vpc, model, c, false, 2, 2)
+        }
+    }
+
     private fun meshFor(o: SceneObject): Mesh {
         val md = o.model
         return if (md != null) modelMeshes.getOrPut(md.key) { Mesh(md.data, GLES20.GL_TRIANGLES) }
@@ -140,21 +257,29 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
     }
 
     override fun onDrawFrame(gl: GL10?) {
-        val vpc = synchronized(lock) { updateMatrices(); vp.copyOf() }
+        val eyeC = FloatArray(3)
+        val vpc = synchronized(lock) { updateMatrices(); System.arraycopy(eye, 0, eyeC, 0, 3); vp.copyOf() }
+        val settings = scene.objects.firstOrNull { it.shape == Shape.SETTINGS }
+        if (settings != null) GLES20.glClearColor(settings.color[0], settings.color[1], settings.color[2], 1f)
+        else GLES20.glClearColor(0.15f, 0.16f, 0.19f, 1f)
         GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT or GLES20.GL_DEPTH_BUFFER_BIT)
         GLES20.glUseProgram(prog)
+        setLights(eyeC)
 
         // Grid + axes
         Matrix.setIdentityM(model, 0)
+        val showGrid = settings == null || settings.sy >= 0.5f
         GLES20.glLineWidth(1f)
-        drawMesh(grid, vpc, model, floatArrayOf(0.35f, 0.37f, 0.42f), false, 0, grid.count - 4)
+        if (showGrid) drawMesh(grid, vpc, model, floatArrayOf(0.35f, 0.37f, 0.42f), false, 0, grid.count - 4)
         GLES20.glLineWidth(2f)
-        drawMesh(grid, vpc, model, floatArrayOf(0.85f, 0.3f, 0.3f), false, grid.count - 4, 2)
-        drawMesh(grid, vpc, model, floatArrayOf(0.3f, 0.45f, 0.9f), false, grid.count - 2, 2)
+        if (showGrid) drawMesh(grid, vpc, model, floatArrayOf(0.85f, 0.3f, 0.3f), false, grid.count - 4, 2)
+        if (showGrid) drawMesh(grid, vpc, model, floatArrayOf(0.3f, 0.45f, 0.9f), false, grid.count - 2, 2)
 
         // Objects
         val sel = scene.selected
         for (o in scene.objects) {
+            if (o.shape.isLight) { if (!playing) drawLightMarker(o, vpc); continue }
+            if (o.shape.isScreen || o.shape == Shape.SETTINGS || o === fpHide) continue
             Matrix.setIdentityM(model, 0)
             Matrix.translateM(model, 0, o.x, o.y, o.z)
             Matrix.rotateM(model, 0, o.ry, 0f, 1f, 0f)
@@ -168,7 +293,7 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         }
 
         // Gizmo on selection
-        if (sel != null) {
+        if (sel != null && !sel.shape.isScreen && sel.shape != Shape.SETTINGS) {
             GLES20.glDisable(GLES20.GL_DEPTH_TEST)
             GLES20.glLineWidth(4f)
             Matrix.setIdentityM(model, 0)
