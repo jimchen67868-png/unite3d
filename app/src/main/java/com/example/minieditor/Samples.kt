@@ -6,7 +6,7 @@ object Samples {
 function start()
   last = -1
   over = false
-  log("Coin Rush! Move, JUMP over red cubes, grab yellow pyramids.")
+  log("Coin Rush! Move, JUMP over red cubes, grab pyramids. VIEW button = 1st person.")
 end
 
 function update(dt)
@@ -37,6 +37,11 @@ function start()
 end
 
 function update(dt)
+  -- the VIEW button (or a quick tap on the joystick) switches first / third person
+  if input.joyTap or input.buttonsPressed["View"] then
+    camera.firstPerson = not camera.firstPerson
+  end
+
   if self.frozen then return end
   local mx, mz = input.moveX * 2.5, input.moveZ * 2.5
   if input.joyActive then
@@ -160,6 +165,7 @@ end
         scene.addLight(Shape.LIGHT)?.let { it.y = 2.5f; it.sx = 2.2f; it.sy = 9f; it.script = LAMP }
         scene.addJoystick()
         scene.addButton()
+        scene.addButton()?.let { it.name = "View"; it.x = 70f; it.y = 56f; it.sx = 0.8f }
         scene.selected = null
     }
 }

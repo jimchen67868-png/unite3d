@@ -29,6 +29,7 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
     private val model = FloatArray(16)
     private val mvp = FloatArray(16)
     private val eye = FloatArray(3)
+    private val curEye = FloatArray(3)
     private var w = 1
     private var h = 1
 
@@ -231,21 +232,28 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         GLES20.glUniform3f(uEye, eyeP[0], eyeP[1], eyeP[2])
     }
 
-    /** Editor-only marker: a small glowing sphere (the Sun also gets a line pointing toward the sun). */
+    /** Editor-only marker: a glowing ball whose on-screen size stays about the same at any zoom. */
     private fun drawLightMarker(o: SceneObject, vpc: FloatArray) {
+        val dx = o.x - curEye[0]
+        val dy = o.y - curEye[1]
+        val dz = o.z - curEye[2]
+        val d = sqrt(dx * dx + dy * dy + dz * dz)
+        val k = max(0.3f, d * 0.035f)
         Matrix.setIdentityM(model, 0)
         Matrix.translateM(model, 0, o.x, o.y, o.z)
-        Matrix.scaleM(model, 0, 0.3f, 0.3f, 0.3f)
+        Matrix.scaleM(model, 0, k, k, k)
         val c = floatArrayOf(
             minOf(1f, o.color[0] + 0.2f), minOf(1f, o.color[1] + 0.2f), minOf(1f, o.color[2] + 0.2f)
         )
         drawMesh(meshes.getValue(Shape.SPHERE), vpc, model, c, false)
         if (o.shape == Shape.SUN) {
+            val g = max(1f, d * 0.12f)
             Matrix.setIdentityM(model, 0)
             Matrix.translateM(model, 0, o.x, o.y, o.z)
             Matrix.rotateM(model, 0, o.ry, 0f, 1f, 0f)
             Matrix.rotateM(model, 0, o.rx, 1f, 0f, 0f)
-            GLES20.glLineWidth(3f)
+            Matrix.scaleM(model, 0, g, g, g)
+            GLES20.glLineWidth(4f)
             drawMesh(gizmo, vpc, model, c, false, 2, 2)
         }
     }
@@ -264,6 +272,7 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         else GLES20.glClearColor(0.15f, 0.16f, 0.19f, 1f)
         GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT or GLES20.GL_DEPTH_BUFFER_BIT)
         GLES20.glUseProgram(prog)
+        System.arraycopy(eyeC, 0, curEye, 0, 3)
         setLights(eyeC)
 
         // Grid + axes
@@ -278,7 +287,7 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         // Objects
         val sel = scene.selected
         for (o in scene.objects) {
-            if (o.shape.isLight) { if (!playing) drawLightMarker(o, vpc); continue }
+            if (o.shape.isLight) continue
             if (o.shape.isScreen || o.shape == Shape.SETTINGS || o === fpHide) continue
             Matrix.setIdentityM(model, 0)
             Matrix.translateM(model, 0, o.x, o.y, o.z)
@@ -290,6 +299,13 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
                 floatArrayOf(o.color[0] * 0.6f + 0.4f, o.color[1] * 0.6f + 0.4f, o.color[2] * 0.6f + 0.4f)
             else o.color
             drawMesh(meshFor(o), vpc, model, c, true)
+        }
+
+        // Light markers: drawn on top of everything, kept a constant size on screen so they stay visible when zoomed out
+        if (!playing) {
+            GLES20.glDisable(GLES20.GL_DEPTH_TEST)
+            for (o in scene.objects) if (o.shape.isLight) drawLightMarker(o, vpc)
+            GLES20.glEnable(GLES20.GL_DEPTH_TEST)
         }
 
         // Gizmo on selection

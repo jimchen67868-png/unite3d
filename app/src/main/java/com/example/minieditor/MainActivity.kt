@@ -52,9 +52,14 @@ class MainActivity : Activity(), SensorEventListener {
     private lateinit var skyRow: LinearLayout
     private lateinit var objSwatches: LinearLayout
     private lateinit var settingsHint: TextView
-    private lateinit var jumpButton: JumpButtonView
+    private val buttonViews = ArrayList<JumpButtonView>()
+    private var btnJump = false
+    private var btnJumpPressed = false
+    private var btnHeld: Map<String, Boolean> = emptyMap()
+    private var btnPressed: Map<String, Boolean> = emptyMap()
     private lateinit var viewButton: Button
     private var fpTarget: SceneObject? = null
+    private var camTargetName = "Player"
     private var savedPitch = 30f
     private var savedDist = 9f
     private lateinit var fileButton: Button
@@ -240,8 +245,11 @@ end
         root.addView(bottom, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM))
         joystick = JoystickView(this).apply { visibility = View.GONE }
         root.addView(joystick, FrameLayout.LayoutParams(dp(150), dp(150), Gravity.TOP or Gravity.START))
-        jumpButton = JumpButtonView(this).apply { visibility = View.GONE }
-        root.addView(jumpButton, FrameLayout.LayoutParams(dp(90), dp(90), Gravity.TOP or Gravity.START))
+        for (i in 0 until 4) {
+            val v = JumpButtonView(this).apply { visibility = View.GONE }
+            buttonViews.add(v)
+            root.addView(v, FrameLayout.LayoutParams(dp(90), dp(90), Gravity.TOP or Gravity.START))
+        }
         root.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> refreshJoystick() }
         setContentView(root)
 
@@ -308,24 +316,75 @@ end
             val dt = if (lastFrame == 0L) 0.016f
             else ((frameTimeNanos - lastFrame) / 1_000_000_000f).coerceAtMost(0.1f)
             lastFrame = frameTimeNanos
+            readButtons()
             engine?.let {
                 it.ax = ax; it.ay = ay; it.az = az
                 it.camYaw = editor.renderer.yaw
                 it.joyX = joystick.jx; it.joyY = joystick.jy; it.joyActive = joystick.active
-                it.jump = jumpButton.pressedNow
-                it.jumpPressed = jumpButton.consumePress()
+                it.jump = btnJump
+                it.jumpPressed = btnJumpPressed
+                it.buttonsHeld = btnHeld
+                it.buttonsPressed = btnPressed
                 it.touching = editor.touching
                 it.touchX = editor.touchX / maxOf(editor.width, 1)
                 it.touchY = editor.touchY / maxOf(editor.height, 1)
+                it.camPitch = editor.renderer.pitch
+                it.fpOn = editor.renderer.fpMode
+                it.camTargetName = camTargetName
+                it.joyTap = joystick.consumeTap()
                 it.update(dt)
+                camTargetName = it.camTargetName
+                it.fpRequest?.let { want ->
+                    it.fpRequest = null
+                    if (want != editor.renderer.fpMode) setFirstPerson(want)
+                }
+                it.yawOut?.let { yv ->
+                    editor.renderer.yaw = yv
+                    it.yawOut = null
+                }
+                it.pitchOut?.let { pv ->
+                    val fp = editor.renderer.fpMode
+                    editor.renderer.pitch = pv.coerceIn(if (fp) -80f else 5f, if (fp) 80f else 85f)
+                    it.pitchOut = null
+                }
             }
             if (editor.renderer.fpMode) {
                 val t = fpTarget
-                if (t == null || !scene.objects.contains(t)) setFirstPerson(false) else updateFpEye()
+                if (t == null || !scene.objects.contains(t)) {
+                    setFirstPerson(false)
+                } else {
+                    val want = findCamTarget()
+                    if (want != null && want !== t) {
+                        editor.renderer.fpHide = want
+                        fpTarget = want
+                    }
+                    updateFpEye()
+                }
             }
             editor.refresh()
             Choreographer.getInstance().postFrameCallback(this)
         }
+    }
+
+    /** Reads the on-screen buttons. A button named "Jump" also feeds input.jump / input.jumpPressed. */
+    private fun readButtons() {
+        val bs = scene.objects.filter { o -> o.shape == Shape.BUTTON }.take(4)
+        val held = HashMap<String, Boolean>()
+        val pressed = HashMap<String, Boolean>()
+        var j = false
+        var jp = false
+        for ((i, b) in bs.withIndex()) {
+            val v = buttonViews[i]
+            val down = v.pressedNow
+            val press = v.consumePress()
+            held[b.name] = down
+            pressed[b.name] = press
+            if (b.name.startsWith("jump", true)) { j = down; jp = press }
+        }
+        btnJump = j
+        btnJumpPressed = jp
+        btnHeld = held
+        btnPressed = pressed
     }
 
     private fun appendLog(msg: String) {
@@ -351,7 +410,7 @@ end
         playing = true
         editor.playing = true
         joystick.reset()
-        jumpButton.reset()
+        buttonViews.forEach { it.reset() }
         playButton.text = "Stop"
         playButton.setBackgroundColor(0xFFC0392B.toInt())
         try {
@@ -375,8 +434,9 @@ end
         playing = false
         editor.playing = false
         joystick.reset()
-        jumpButton.reset()
+        buttonViews.forEach { it.reset() }
         if (editor.renderer.fpMode) setFirstPerson(false)
+        camTargetName = "Player"
         Choreographer.getInstance().removeFrameCallback(frameCb)
         engine = null
         for (s in snaps) {
@@ -425,7 +485,8 @@ end
             text = "Lua. Define start() and update(dt).\n" +
                 "self.x .y .z .rx .ry .rz .sx .sy .sz .r .g .b | find(\"Name\") | spawn(\"cube\", x, y, z) | destroy(obj) | time, dt\n" +
                 "input.touching .x .y (0-1) | input.tiltX .tiltY .moveX .moveZ (tilt) | input.joyX .joyY .joyMoveX .joyMoveZ .joyActive | input.jump .jumpPressed | log(...)\n" +
-                "oncollide(other) | self.grounded | self.collider (0 off, 1 solid, 2 trigger) | world.gravity .fog .ambient .timeScale"
+                "oncollide(other) | self.grounded | self.collider (0 off, 1 solid, 2 trigger) | world.gravity .fog .ambient .timeScale\n" +
+                "camera.firstPerson .target .yaw .pitch | input.joyTap (quick tap on the joystick) | input.buttons[\"Name\"] .buttonsPressed[\"Name\"]"
             textSize = 11f
             setTextColor(0xFFAAAAAA.toInt())
             setPadding(dp(8), dp(4), dp(8), dp(4))
@@ -479,7 +540,7 @@ end
             visibility = View.GONE
             addView(row(
                 btn("+Stick", true) { if (scene.addJoystick() == null) toast("Joystick already added") else editor.refresh() },
-                btn("+Jump", true) { if (scene.addButton() == null) toast("Jump button already added") else editor.refresh() },
+                btn("+Button", true) { if (scene.addButton() == null) toast("Max 4 buttons") else editor.refresh() },
                 btn("Copy", true) { scene.duplicate(); editor.refresh() },
                 btn("Delete", true) { scene.removeSelected(); editor.refresh() },
                 btn("Clear", true) { scene.objects.clear(); scene.selected = null; editor.refresh() }
@@ -742,14 +803,18 @@ end
             joystick.alpha = if (playing) 1f else 0.45f
             placeControl(joystick, j, 150)
         }
-        val b = scene.objects.firstOrNull { it.shape == Shape.BUTTON }
-        if (b == null) {
-            if (jumpButton.visibility != View.GONE) { jumpButton.reset(); jumpButton.visibility = View.GONE }
-        } else {
-            jumpButton.visibility = View.VISIBLE
-            jumpButton.interactive = playing
-            jumpButton.alpha = if (playing) 1f else 0.45f
-            placeControl(jumpButton, b, 90)
+        val bs = scene.objects.filter { o -> o.shape == Shape.BUTTON }.take(4)
+        for (i in 0 until 4) {
+            val v = buttonViews[i]
+            if (i >= bs.size) {
+                if (v.visibility != View.GONE) { v.reset(); v.visibility = View.GONE }
+            } else {
+                v.visibility = View.VISIBLE
+                v.interactive = playing
+                v.alpha = if (playing) 1f else 0.45f
+                v.label = bs[i].name.uppercase().take(10)
+                placeControl(v, bs[i], 90)
+            }
         }
     }
 
@@ -774,6 +839,10 @@ end
         setFirstPerson(!editor.renderer.fpMode)
     }
 
+    private fun findCamTarget(): SceneObject? = scene.objects.firstOrNull {
+        !it.shape.isScreen && !it.shape.isLight && it.shape != Shape.SETTINGS && it.name.equals(camTargetName, true)
+    }
+
     private fun updateFpEye() {
         val t = fpTarget ?: return
         val r = editor.renderer
@@ -785,7 +854,7 @@ end
     private fun setFirstPerson(on: Boolean) {
         val r = editor.renderer
         if (on) {
-            val t = scene.objects.firstOrNull { !it.shape.isScreen && it.name.equals("Player", true) }
+            val t = findCamTarget()
                 ?: scene.selected?.takeIf { !it.shape.isScreen && !it.shape.isLight && it.shape != Shape.SETTINGS }
             if (t == null) { toast("Add an object named Player, or select one"); return }
             savedPitch = r.pitch

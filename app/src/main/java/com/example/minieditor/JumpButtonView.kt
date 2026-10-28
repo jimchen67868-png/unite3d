@@ -10,6 +10,8 @@ import android.view.View
 /** On-screen jump button. Scripts read input.jump (held) and input.jumpPressed (one frame per tap). */
 class JumpButtonView(ctx: Context) : View(ctx) {
     var interactive = false
+    var label = "JUMP"
+        set(v) { if (field != v) { field = v; invalidate() } }
     var pressedNow = false
         private set
     private var latched = false
@@ -42,8 +44,8 @@ class JumpButtonView(ctx: Context) : View(ctx) {
         fill.color = if (pressedNow) Color.argb(190, 255, 255, 255) else Color.argb(80, 255, 255, 255)
         c.drawCircle(cx, cy, r, fill)
         c.drawCircle(cx, cy, r, ring)
-        text.textSize = r * 0.42f
-        c.drawText("JUMP", cx, cy - (text.ascent() + text.descent()) / 2f, text)
+        text.textSize = r * (if (label.length > 6) 0.3f else 0.42f)
+        c.drawText(label, cx, cy - (text.ascent() + text.descent()) / 2f, text)
     }
 
     override fun onTouchEvent(e: MotionEvent): Boolean {

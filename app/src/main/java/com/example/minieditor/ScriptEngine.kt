@@ -37,6 +37,11 @@ class ScriptEngine(private val scene: Scene, private val log: (String) -> Unit) 
     private val prev = HashMap<SceneObject, FloatArray>()
     private val grounded = HashSet<SceneObject>()
     private val world = LuaTable()
+    private val camera = LuaTable()
+    private val buttonsT = LuaTable()
+    private val pressedT = LuaTable()
+    private val camPushed = FloatArray(2)
+    private var fpPushed = false
     private val worldPushed = FloatArray(4)
     private var time = 0f
     private var spawnCount = 0
@@ -54,6 +59,15 @@ class ScriptEngine(private val scene: Scene, private val log: (String) -> Unit) 
     var joyActive = false
     var jump = false
     var jumpPressed = false
+    var joyTap = false
+    var buttonsHeld: Map<String, Boolean> = emptyMap()
+    var buttonsPressed: Map<String, Boolean> = emptyMap()
+    var camPitch = 30f
+    var fpOn = false
+    var camTargetName = "Player"
+    var fpRequest: Boolean? = null
+    var yawOut: Float? = null
+    var pitchOut: Float? = null
 
     private val hookFn: LuaValue = object : ZeroArgFunction() {
         override fun call(): LuaValue {
@@ -201,6 +215,12 @@ class ScriptEngine(private val scene: Scene, private val log: (String) -> Unit) 
         input.set("jumpPressed", LuaValue.valueOf(jumpPressed))
         input.set("joyMoveX", (joyX * c - joyY * s).toDouble())
         input.set("joyMoveZ", (-joyX * s - joyY * c).toDouble())
+        input.set("joyTap", LuaValue.valueOf(joyTap))
+        for ((k, v) in buttonsHeld) buttonsT.set(k, LuaValue.valueOf(v))
+        for ((k, v) in buttonsPressed) pressedT.set(k, LuaValue.valueOf(v))
+        input.set("buttons", buttonsT)
+        input.set("buttonsPressed", pressedT)
+        pushCamera()
     }
 
     private fun callFn(inst: Inst, name: String, dt: Double?) {
@@ -214,6 +234,26 @@ class ScriptEngine(private val scene: Scene, private val log: (String) -> Unit) 
             inst.failed = true
             log(inst.obj.name + " (" + name + "): " + e.message)
         }
+    }
+
+    /** camera.firstPerson, camera.target (object name), camera.yaw, camera.pitch. Changes are applied after each frame. */
+    private fun pushCamera() {
+        camPushed[0] = camYaw
+        camPushed[1] = camPitch
+        fpPushed = fpOn
+        camera.set("firstPerson", LuaValue.valueOf(fpOn))
+        camera.set("target", camTargetName)
+        camera.set("yaw", camYaw.toDouble())
+        camera.set("pitch", camPitch.toDouble())
+    }
+
+    private fun pullCamera() {
+        val f = camera.get("firstPerson")
+        if (f.isboolean() && f.toboolean() != fpPushed) fpRequest = f.toboolean()
+        val t = camera.get("target")
+        if (t.isstring()) camTargetName = t.tojstring()
+        num(camera, "yaw")?.let { if (it != camPushed[0]) yawOut = it }
+        num(camera, "pitch")?.let { if (it != camPushed[1]) pitchOut = it }
     }
 
     private fun settingsObj() = scene.objects.firstOrNull { it.shape == Shape.SETTINGS }
@@ -337,6 +377,7 @@ class ScriptEngine(private val scene: Scene, private val log: (String) -> Unit) 
                 g.set("self", t)
                 g.set("input", input)
                 g.set("world", world)
+                g.set("camera", camera)
                 g.set("find", findFn)
                 g.set("spawn", spawnFn)
                 g.set("destroy", destroyFn)
@@ -357,6 +398,7 @@ class ScriptEngine(private val scene: Scene, private val log: (String) -> Unit) 
         for (inst in instances.toList()) callFn(inst, "start", null)
         pullAll()
         pullWorld()
+        pullCamera()
     }
 
     fun update(rawDt: Float) {
@@ -376,6 +418,7 @@ class ScriptEngine(private val scene: Scene, private val log: (String) -> Unit) 
         }
         pullAll()
         pullWorld()
+        pullCamera()
         collide()
     }
 }

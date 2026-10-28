@@ -65,10 +65,13 @@ class Scene {
         return o
     }
 
-    /** Adds the on-screen Jump button (x, y = screen position in %, sx = size). Only one is allowed. */
+    /** On-screen buttons (max 4). The first is named "Jump". Rename a button in the Inspector to change its label. */
     fun addButton(): SceneObject? {
-        if (objects.any { it.shape == Shape.BUTTON }) return null
-        val o = SceneObject(Shape.BUTTON, "Jump Button", x = 85f, y = 66f, z = 0f, color = floatArrayOf(1f, 1f, 1f))
+        val n = objects.count { it.shape == Shape.BUTTON }
+        if (n >= 4) return null
+        val pos = arrayOf(floatArrayOf(85f, 66f), floatArrayOf(70f, 56f), floatArrayOf(88f, 48f), floatArrayOf(58f, 66f))
+        val name = if (n == 0) "Jump" else "Button " + (n + 1)
+        val o = SceneObject(Shape.BUTTON, name, x = pos[n][0], y = pos[n][1], z = 0f, color = floatArrayOf(1f, 1f, 1f))
         objects.add(o)
         selected = o
         return o

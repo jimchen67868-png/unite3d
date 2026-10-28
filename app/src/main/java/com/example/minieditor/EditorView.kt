@@ -57,7 +57,7 @@ class EditorView(ctx: Context, val scene: Scene) : GLSurfaceView(ctx) {
         var bestT = Float.MAX_VALUE
         for (o in scene.objects) {
             if (o.shape.isScreen || o.shape == Shape.SETTINGS) continue
-            val rad = if (o.shape.isLight) 0.4f else o.shape.radius * o.maxScale
+            val rad = if (o.shape.isLight) maxOf(0.4f, renderer.dist * 0.04f) else o.shape.radius * o.maxScale
             val ocx = r[0] - o.x; val ocy = r[1] - o.y; val ocz = r[2] - o.z
             val b = ocx * r[3] + ocy * r[4] + ocz * r[5]
             val c = ocx * ocx + ocy * ocy + ocz * ocz - rad * rad
