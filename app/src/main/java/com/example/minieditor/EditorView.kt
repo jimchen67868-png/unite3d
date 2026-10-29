@@ -3,6 +3,7 @@ package com.example.minieditor
 import android.annotation.SuppressLint
 import android.content.Context
 import android.opengl.GLSurfaceView
+import android.opengl.Matrix
 import android.view.MotionEvent
 import android.view.ScaleGestureDetector
 import kotlin.math.abs
@@ -14,7 +15,8 @@ enum class Mode { MOVE, ROTATE, SCALE }
 class EditorView(ctx: Context, val scene: Scene) : GLSurfaceView(ctx) {
     val renderer = SceneRenderer(scene)
     var mode = Mode.MOVE
-    var yLock = false
+    var axis = 0   // 0 = free, 1 = X, 2 = Y, 3 = Z
+        set(v) { field = v; renderer.axisMode = v }
     var onChange: (() -> Unit)? = null
     var onTouchStart: (() -> Unit)? = null
     var playing: Boolean = false
@@ -29,8 +31,13 @@ class EditorView(ctx: Context, val scene: Scene) : GLSurfaceView(ctx) {
     private var dragging = false
     private var multi = false
     private var offX = 0f; private var offZ = 0f
-    private var yAcc = 0f
+    private var axT0 = 0f
+    private val axStart = FloatArray(3)
     private var pending: SceneObject? = null      // object under the finger, not selected until we know it is not a pinch
+    private var pendingList: List<SceneObject> = emptyList()
+    private var lastTapX = -999f
+    private var lastTapY = -999f
+    private var lastTapTime = 0L
     private var dragTarget: SceneObject? = null
     private var dragStartTime = 0L
     private val startVals = FloatArray(9)
@@ -51,24 +58,85 @@ class EditorView(ctx: Context, val scene: Scene) : GLSurfaceView(ctx) {
 
     fun refresh() { requestRender(); onChange?.invoke() }
 
-    private fun pick(x: Float, y: Float): SceneObject? {
+    private fun raySphere(r: FloatArray, cx: Float, cy: Float, cz: Float, rad: Float): Float? {
+        val ox = r[0] - cx
+        val oy = r[1] - cy
+        val oz = r[2] - cz
+        val b = ox * r[3] + oy * r[4] + oz * r[5]
+        val c = ox * ox + oy * oy + oz * oz - rad * rad
+        val disc = b * b - c
+        if (disc < 0f) return null
+        val sq = sqrt(disc)
+        var t = -b - sq
+        if (t < 0f) t = -b + sq
+        return if (t > 0f) t else null
+    }
+
+    /** Ray vs the object's real (rotated, scaled) box or ellipsoid, with a little extra reach so small objects are easy to hit. */
+    private fun hitT(o: SceneObject, r: FloatArray): Float? {
+        val tol = renderer.dist * 0.02f
+        if (o.shape.isLight) return raySphere(r, o.x, o.y, o.z, maxOf(0.4f, renderer.dist * 0.04f))
+        val m = FloatArray(16)
+        Matrix.setIdentityM(m, 0)
+        Matrix.translateM(m, 0, o.x, o.y, o.z)
+        Matrix.rotateM(m, 0, o.ry, 0f, 1f, 0f)
+        Matrix.rotateM(m, 0, o.rx, 1f, 0f, 0f)
+        Matrix.rotateM(m, 0, o.rz, 0f, 0f, 1f)
+        Matrix.scaleM(m, 0, o.sx, o.sy, o.sz)
+        val inv = FloatArray(16)
+        if (!Matrix.invertM(inv, 0, m, 0)) return null
+        val lo = FloatArray(4)
+        val ld = FloatArray(4)
+        Matrix.multiplyMV(lo, 0, inv, 0, floatArrayOf(r[0], r[1], r[2], 1f), 0)
+        Matrix.multiplyMV(ld, 0, inv, 0, floatArrayOf(r[3], r[4], r[5], 0f), 0)
+        if (o.shape == Shape.SPHERE) {
+            val rad = 0.5f + tol / maxOf((o.sx + o.sy + o.sz) / 3f, 0.01f)
+            val a = ld[0] * ld[0] + ld[1] * ld[1] + ld[2] * ld[2]
+            val b = lo[0] * ld[0] + lo[1] * ld[1] + lo[2] * ld[2]
+            val c = lo[0] * lo[0] + lo[1] * lo[1] + lo[2] * lo[2] - rad * rad
+            val disc = b * b - a * c
+            if (disc < 0f || a < 1e-12f) return null
+            val sq = sqrt(disc)
+            var t = (-b - sq) / a
+            if (t < 0f) t = (-b + sq) / a
+            return if (t > 0f) t else null
+        }
+        val half = floatArrayOf(
+            0.5f + tol / maxOf(o.sx, 0.01f),
+            0.5f + tol / maxOf(o.sy, 0.01f),
+            0.5f + tol / maxOf(o.sz, 0.01f)
+        )
+        var tmin = -Float.MAX_VALUE
+        var tmax = Float.MAX_VALUE
+        for (i in 0..2) {
+            val d = ld[i]
+            val p = lo[i]
+            if (abs(d) < 1e-9f) {
+                if (p < -half[i] || p > half[i]) return null
+            } else {
+                var t1 = (-half[i] - p) / d
+                var t2 = (half[i] - p) / d
+                if (t1 > t2) { val tmp = t1; t1 = t2; t2 = tmp }
+                tmin = maxOf(tmin, t1)
+                tmax = minOf(tmax, t2)
+                if (tmin > tmax) return null
+            }
+        }
+        if (tmax < 0f) return null
+        return if (tmin > 0f) tmin else 0f
+    }
+
+    /** Everything under the finger, nearest first. */
+    private fun pickAll(x: Float, y: Float): List<SceneObject> {
         val r = renderer.ray(x, y)
-        var best: SceneObject? = null
-        var bestT = Float.MAX_VALUE
+        val hits = ArrayList<Pair<Float, SceneObject>>()
         for (o in scene.objects) {
             if (o.shape.isScreen || o.shape == Shape.SETTINGS) continue
-            val rad = if (o.shape.isLight) maxOf(0.4f, renderer.dist * 0.04f) else o.shape.radius * o.maxScale
-            val ocx = r[0] - o.x; val ocy = r[1] - o.y; val ocz = r[2] - o.z
-            val b = ocx * r[3] + ocy * r[4] + ocz * r[5]
-            val c = ocx * ocx + ocy * ocy + ocz * ocz - rad * rad
-            val disc = b * b - c
-            if (disc < 0f) continue
-            val sq = sqrt(disc)
-            var t = -b - sq
-            if (t < 0f) t = -b + sq
-            if (t > 0f && t < bestT) { bestT = t; best = o }
+            val t = hitT(o, r) ?: continue
+            hits.add(Pair(t, o))
         }
-        return best
+        hits.sortBy { it.first }
+        return hits.map { it.second }
     }
 
     /** Intersect the touch ray with the horizontal plane y = planeY; returns (x, z). */
@@ -121,7 +189,8 @@ class EditorView(ctx: Context, val scene: Scene) : GLSurfaceView(ctx) {
                 lastX = e.x; lastY = e.y; downX = e.x; downY = e.y
                 // Only remember what is under the finger. Selecting or moving waits until
                 // the finger moves or lifts, so a pinch that starts on an object does nothing to it.
-                val hit = if (playing) null else pick(e.x, e.y)
+                pendingList = if (playing) emptyList() else pickAll(e.x, e.y)
+                val hit = pendingList.firstOrNull()
                 pending = hit
                 if (hit != null) {
                     groundPoint(e.x, e.y, hit.y)?.let { offX = it[0] - hit.x; offZ = it[1] - hit.z }
@@ -141,7 +210,8 @@ class EditorView(ctx: Context, val scene: Scene) : GLSurfaceView(ctx) {
                         dragging = true
                         dragStartTime = e.eventTime
                         saveVals(p)
-                        yAcc = p.y
+                        axStart[0] = p.x; axStart[1] = p.y; axStart[2] = p.z
+                        axT0 = axisParam(downX, downY, axis) ?: 0f
                         refresh()
                     }
                 }
@@ -157,7 +227,21 @@ class EditorView(ctx: Context, val scene: Scene) : GLSurfaceView(ctx) {
             }
             MotionEvent.ACTION_UP -> {
                 if (!moved && !multi && !playing) {
-                    scene.selected = pending   // tap: select the object, or deselect on empty space
+                    // tap: select the front-most object under the finger, or deselect on empty space.
+                    // Tapping the same spot again steps to the next object underneath (floor, walls, hidden blocks...).
+                    val list = pendingList
+                    var choice: SceneObject? = list.firstOrNull()
+                    val sel = scene.selected
+                    if (list.size > 1 && sel != null &&
+                        abs(e.x - lastTapX) < 48f && abs(e.y - lastTapY) < 48f && e.eventTime - lastTapTime < 1500
+                    ) {
+                        val idx = list.indexOf(sel)
+                        if (idx >= 0) choice = list[(idx + 1) % list.size]
+                    }
+                    lastTapX = e.x
+                    lastTapY = e.y
+                    lastTapTime = e.eventTime
+                    scene.selected = choice
                     refresh()
                 }
                 dragging = false; dragTarget = null; pending = null
@@ -173,14 +257,38 @@ class EditorView(ctx: Context, val scene: Scene) : GLSurfaceView(ctx) {
     private fun snapV(v: Float, half: Float, snap: Float): Float =
         if (snap <= 0f) v else Math.round((v - half) / snap) * snap + half
 
+    /** Distance along the chosen world axis (through axStart) of the point closest to the touch ray. */
+    private fun axisParam(sx: Float, sy: Float, ax: Int): Float? {
+        if (ax < 1 || ax > 3) return null
+        val r = renderer.ray(sx, sy)
+        val ux = if (ax == 1) 1f else 0f
+        val uy = if (ax == 2) 1f else 0f
+        val uz = if (ax == 3) 1f else 0f
+        val wx = axStart[0] - r[0]
+        val wy = axStart[1] - r[1]
+        val wz = axStart[2] - r[2]
+        val b = ux * r[3] + uy * r[4] + uz * r[5]
+        val dd = ux * wx + uy * wy + uz * wz
+        val e = r[3] * wx + r[4] * wy + r[5] * wz
+        val den = 1f - b * b
+        if (abs(den) < 1e-3f) return null
+        return (b * e - dd) / den
+    }
+
     private fun transform(o: SceneObject, x: Float, y: Float, dx: Float, dy: Float) {
         when (mode) {
             Mode.MOVE -> {
                 val snap = scene.objects.firstOrNull { it.shape == Shape.SETTINGS }?.rx ?: 0f
                 val lit = o.shape.isLight
-                if (yLock) {
-                    yAcc -= dy * renderer.dist * 0.0025f
-                    o.y = snapV(yAcc, if (lit) 0f else 0.5f * o.sy, snap)
+                if (axis in 1..3) {
+                    // move along exactly one world axis, following the finger
+                    val t = axisParam(x, y, axis) ?: return
+                    val delta = t - axT0
+                    when (axis) {
+                        1 -> o.x = snapV(axStart[0] + delta, if (lit) 0f else 0.5f * o.sx, snap)
+                        2 -> o.y = snapV(axStart[1] + delta, if (lit) 0f else 0.5f * o.sy, snap)
+                        else -> o.z = snapV(axStart[2] + delta, if (lit) 0f else 0.5f * o.sz, snap)
+                    }
                 } else {
                     groundPoint(x, y, o.y)?.let {
                         o.x = snapV(it[0] - offX, if (lit) 0f else 0.5f * o.sx, snap)
@@ -188,13 +296,25 @@ class EditorView(ctx: Context, val scene: Scene) : GLSurfaceView(ctx) {
                     }
                 }
             }
-            Mode.ROTATE -> { o.ry += dx * 0.5f; o.rx += dy * 0.5f }
+            Mode.ROTATE -> when (axis) {
+                1 -> o.rx += dy * 0.5f
+                2 -> o.ry += dx * 0.5f
+                3 -> o.rz += dx * 0.5f
+                else -> { o.ry += dx * 0.5f; o.rx += dy * 0.5f }
+            }
             Mode.SCALE -> {
                 val f = 1f - dy * 0.005f
                 if (o.shape.isLight) { o.sx = (o.sx * f).coerceIn(0.05f, 5f); refresh(); return }
-                o.sx = (o.sx * f).coerceIn(0.05f, 20f)
-                o.sy = (o.sy * f).coerceIn(0.05f, 20f)
-                o.sz = (o.sz * f).coerceIn(0.05f, 20f)
+                when (axis) {
+                    1 -> o.sx = (o.sx * f).coerceIn(0.05f, 20f)
+                    2 -> o.sy = (o.sy * f).coerceIn(0.05f, 20f)
+                    3 -> o.sz = (o.sz * f).coerceIn(0.05f, 20f)
+                    else -> {
+                        o.sx = (o.sx * f).coerceIn(0.05f, 20f)
+                        o.sy = (o.sy * f).coerceIn(0.05f, 20f)
+                        o.sz = (o.sz * f).coerceIn(0.05f, 20f)
+                    }
+                }
             }
         }
         refresh()

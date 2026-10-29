@@ -31,6 +31,8 @@ import android.widget.TextView
 import android.widget.Toast
 import java.io.File
 import java.util.Locale
+import kotlin.math.sin
+import kotlin.math.sqrt
 import java.util.zip.ZipEntry
 import java.util.zip.ZipInputStream
 import java.util.zip.ZipOutputStream
@@ -58,6 +60,7 @@ class MainActivity : Activity(), SensorEventListener {
     private var btnHeld: Map<String, Boolean> = emptyMap()
     private var btnPressed: Map<String, Boolean> = emptyMap()
     private lateinit var viewButton: Button
+    private lateinit var cameraButton: Button
     private var fpTarget: SceneObject? = null
     private var camTargetName = "Player"
     private var savedPitch = 30f
@@ -196,11 +199,12 @@ end
         modeButtons[Mode.MOVE] = btn("Move") { setMode(Mode.MOVE) }
         modeButtons[Mode.ROTATE] = btn("Rotate") { setMode(Mode.ROTATE) }
         modeButtons[Mode.SCALE] = btn("Scale") { setMode(Mode.SCALE) }
-        yButton = btn("Y: off") { editor.yLock = !editor.yLock; refreshButtons() }
+        yButton = btn("Axis: Free") { editor.axis = (editor.axis + 1) % 4; refreshButtons() }
         fileButton = btn("File") { showFileMenu() }
         playButton = btn("Play") { togglePlay() }
         playButton.setBackgroundColor(0xFF2E8B57.toInt())
         viewButton = btn("1st person") { toggleFirstPerson() }
+        cameraButton = btn("Camera") { showCameraMenu() }
 
         val bottom = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -223,6 +227,7 @@ end
             addView(row(
                 playButton,
                 viewButton,
+                cameraButton,
                 btn("Clear log") { logLines.clear(); showLog() }
             ))
         }
@@ -269,6 +274,7 @@ end
         pm.menu.add(0, 5, 4, "Export OBJ...")
         pm.menu.add(0, 6, 5, "New scene")
         pm.menu.add(0, 7, 6, "Load sample game (Coin Rush)")
+        pm.menu.add(0, 8, 7, "Editor lighting: " + (if (editor.renderer.editorBright) "Bright (tap for Scene)" else "Scene (tap for Bright)"))
         pm.setOnMenuItemClickListener { item ->
             if (playing) {
                 toast("Stop play mode first")
@@ -281,6 +287,7 @@ end
                     5 -> exportObj()
                     6 -> { scene.objects.clear(); scene.selected = null; editor.refresh() }
                     7 -> loadSample()
+                    8 -> { editor.renderer.editorBright = !editor.renderer.editorBright; editor.refresh() }
                 }
             }
             true
@@ -777,15 +784,15 @@ end
 
     private fun refreshButtons() {
         for ((m, b) in modeButtons) b.setBackgroundColor(if (editor.mode == m) 0xFF3D7BFF.toInt() else 0xFF444444.toInt())
-        yButton.text = if (editor.yLock) "Y: on" else "Y: off"
-        yButton.setBackgroundColor(if (editor.yLock) 0xFF3D7BFF.toInt() else 0xFF444444.toInt())
+        yButton.text = "Axis: " + arrayOf("Free", "X", "Y", "Z")[editor.axis]
+        yButton.setBackgroundColor(arrayOf(0xFF444444.toInt(), 0xFFC0392B.toInt(), 0xFF27AE60.toInt(), 0xFF3D7BFF.toInt())[editor.axis])
         updateInfo()
     }
 
     private fun updateInfo() {
         val o = scene.selected
         info.text = (if (playing) "PLAYING  |  " else "") + (o?.name ?: "Nothing selected") +
-            "  |  " + scene.objects.size + " objects" + (if (playing) "" else "  |  drag: " + editor.mode.name.lowercase())
+            "  |  " + scene.objects.size + " objects" + (if (playing) "" else "  |  drag: " + editor.mode.name.lowercase() + (if (editor.axis > 0) " " + arrayOf("", "X", "Y", "Z")[editor.axis] else ""))
         if (panel == Panel.HIER && (scene.objects.size != lastCount || scene.selected !== lastSel)) rebuildHierarchy()
         if (panel == Panel.INSPECT) refreshInspector()
         if (panel == Panel.SCRIPT) refreshScript()
@@ -830,6 +837,78 @@ end
             lp.width = size; lp.height = size; lp.leftMargin = left; lp.topMargin = top
             v.layoutParams = lp
         }
+    }
+
+    // ---------- Editor camera presets ----------
+
+    private fun showCameraMenu() {
+        if (editor.renderer.fpMode) { toast("Switch to 3rd person first"); return }
+        val pm = PopupMenu(this, cameraButton)
+        val items = listOf(
+            "Perspective", "Top", "Front", "Back", "Left", "Right",
+            "Focus selected", "Frame all",
+            "Narrow lens (30 deg)", "Normal lens (50 deg)", "Wide lens (75 deg)", "Reset view"
+        )
+        items.forEachIndexed { i, t -> pm.menu.add(0, i, i, t) }
+        pm.setOnMenuItemClickListener { item -> applyCameraPreset(item.itemId); true }
+        pm.show()
+    }
+
+    private fun applyCameraPreset(id: Int) {
+        val r = editor.renderer
+        when (id) {
+            0 -> { r.yaw = 45f; r.pitch = 30f }
+            1 -> { r.yaw = 0f; r.pitch = 85f }
+            2 -> { r.yaw = 0f; r.pitch = 5f }
+            3 -> { r.yaw = 180f; r.pitch = 5f }
+            4 -> { r.yaw = 270f; r.pitch = 5f }
+            5 -> { r.yaw = 90f; r.pitch = 5f }
+            6 -> {
+                val o = scene.selected
+                if (o == null || o.shape.isScreen || o.shape == Shape.SETTINGS) {
+                    toast("Select an object first")
+                } else {
+                    r.target[0] = o.x; r.target[1] = o.y; r.target[2] = o.z
+                }
+            }
+            7 -> frameAll()
+            8 -> r.fov = 30f
+            9 -> r.fov = 50f
+            10 -> r.fov = 75f
+            11 -> {
+                r.yaw = 45f; r.pitch = 30f; r.dist = 9f; r.fov = 50f
+                r.target[0] = 0f; r.target[1] = 0.5f; r.target[2] = 0f
+            }
+        }
+        editor.refresh()
+    }
+
+    /** Centres the camera on everything in the scene and zooms out to fit it. */
+    private fun frameAll() {
+        val r = editor.renderer
+        var minX = Float.MAX_VALUE; var minY = Float.MAX_VALUE; var minZ = Float.MAX_VALUE
+        var maxX = -Float.MAX_VALUE; var maxY = -Float.MAX_VALUE; var maxZ = -Float.MAX_VALUE
+        var any = false
+        for (o in scene.objects) {
+            if (o.shape.isScreen || o.shape == Shape.SETTINGS) continue
+            val hx = if (o.shape.isLight) 0.3f else 0.5f * o.sx
+            val hy = if (o.shape.isLight) 0.3f else 0.5f * o.sy
+            val hz = if (o.shape.isLight) 0.3f else 0.5f * o.sz
+            minX = minOf(minX, o.x - hx); maxX = maxOf(maxX, o.x + hx)
+            minY = minOf(minY, o.y - hy); maxY = maxOf(maxY, o.y + hy)
+            minZ = minOf(minZ, o.z - hz); maxZ = maxOf(maxZ, o.z + hz)
+            any = true
+        }
+        if (!any) { applyCameraPreset(11); return }
+        r.target[0] = (minX + maxX) / 2f
+        r.target[1] = (minY + maxY) / 2f
+        r.target[2] = (minZ + maxZ) / 2f
+        val dx = maxX - minX
+        val dy = maxY - minY
+        val dz = maxZ - minZ
+        val radius = 0.5f * sqrt(dx * dx + dy * dy + dz * dz)
+        val half = Math.toRadians(r.fov / 2.0)
+        r.dist = (radius / sin(half).toFloat() * 1.15f).coerceIn(2f, 40f)
     }
 
     // ---------- First-person view (play mode) ----------

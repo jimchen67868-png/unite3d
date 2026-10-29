@@ -14,13 +14,16 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
     @Volatile var yaw = 45f
     @Volatile var pitch = 30f
     @Volatile var dist = 9f
+    @Volatile var fov = 50f
     @Volatile var playing = false
+    @Volatile var axisMode = 0
+    @Volatile var editorBright = false
     @Volatile var fpMode = false
     @Volatile var fpX = 0f
     @Volatile var fpY = 0f
     @Volatile var fpZ = 0f
     @Volatile var fpHide: SceneObject? = null
-    private val target = floatArrayOf(0f, 0.5f, 0f)
+    val target = floatArrayOf(0f, 0.5f, 0f)
 
     private val lock = Any()
     private val proj = FloatArray(16)
@@ -42,6 +45,7 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
     private lateinit var meshes: Map<Shape, Mesh>
     private lateinit var grid: Mesh
     private lateinit var gizmo: Mesh
+    private lateinit var circle: Mesh
     private val modelMeshes = HashMap<String, Mesh>()
 
     private val vertexSrc = """
@@ -131,6 +135,7 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         meshes = mapOf(Shape.CUBE to Meshes.cube(), Shape.PYRAMID to Meshes.pyramid(), Shape.SPHERE to Meshes.sphere())
         grid = Meshes.grid()
         gizmo = Meshes.gizmo()
+        circle = Meshes.circle()
     }
 
     override fun onSurfaceChanged(gl: GL10?, width: Int, height: Int) {
@@ -140,7 +145,7 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
 
     private fun updateMatrices() {
         synchronized(lock) {
-            Matrix.perspectiveM(proj, 0, 50f, w.toFloat() / h, 0.1f, 100f)
+            Matrix.perspectiveM(proj, 0, fov, w.toFloat() / h, 0.1f, 100f)
             val p = Math.toRadians(pitch.toDouble())
             val y = Math.toRadians(yaw.toDouble())
             if (fpMode) {
@@ -208,6 +213,13 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         }
         val st = scene.objects.firstOrNull { it.shape == Shape.SETTINGS }
         if (st != null) amb = st.z.coerceIn(0f, 1f)
+        // Editor-only "Bright" mode: ignore the scene's dark ambient/sun/fog so you can see what you are editing.
+        val bright = editorBright && !playing
+        if (bright) {
+            amb = 0.6f
+            sd = floatArrayOf(0.4f, 1f, 0.6f)
+            sc = floatArrayOf(0.7f, 0.7f, 0.7f)
+        }
         var l = sqrt(sd[0] * sd[0] + sd[1] * sd[1] + sd[2] * sd[2])
         if (l <= 0f) l = 1f
         GLES20.glUniform3f(uSunDir, sd[0] / l, sd[1] / l, sd[2] / l)
@@ -228,7 +240,7 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         GLES20.glUniform1i(uLCount, pts.size)
         val sky = st?.color ?: floatArrayOf(0.15f, 0.16f, 0.19f)
         GLES20.glUniform3f(uFogColor, sky[0], sky[1], sky[2])
-        GLES20.glUniform1f(uFogEnd, if (st != null) st.y.coerceAtLeast(0f) else 0f)
+        GLES20.glUniform1f(uFogEnd, if (st != null && !bright) st.y.coerceAtLeast(0f) else 0f)
         GLES20.glUniform3f(uEye, eyeP[0], eyeP[1], eyeP[2])
     }
 
@@ -246,6 +258,19 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
             minOf(1f, o.color[0] + 0.2f), minOf(1f, o.color[1] + 0.2f), minOf(1f, o.color[2] + 0.2f)
         )
         drawMesh(meshes.getValue(Shape.SPHERE), vpc, model, c, false)
+        if (o.shape == Shape.LIGHT) {
+            // range rings: show how far the light reaches
+            val rr = o.sy.coerceAtLeast(0.5f)
+            GLES20.glLineWidth(2f)
+            for (axis in 0..2) {
+                Matrix.setIdentityM(model, 0)
+                Matrix.translateM(model, 0, o.x, o.y, o.z)
+                if (axis == 1) Matrix.rotateM(model, 0, 90f, 1f, 0f, 0f)
+                if (axis == 2) Matrix.rotateM(model, 0, 90f, 0f, 0f, 1f)
+                Matrix.scaleM(model, 0, rr, rr, rr)
+                drawMesh(circle, vpc, model, c, false)
+            }
+        }
         if (o.shape == Shape.SUN) {
             val g = max(1f, d * 0.12f)
             Matrix.setIdentityM(model, 0)
@@ -314,10 +339,16 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
             GLES20.glLineWidth(4f)
             Matrix.setIdentityM(model, 0)
             Matrix.translateM(model, 0, sel.x, sel.y, sel.z)
-            val s = max(1f, sel.maxScale) * 0.9f
+            val gx = sel.x - curEye[0]
+            val gy = sel.y - curEye[1]
+            val gz = sel.z - curEye[2]
+            val s = max(0.5f, sqrt(gx * gx + gy * gy + gz * gz) * 0.14f)
             Matrix.scaleM(model, 0, s, s, s)
+            GLES20.glLineWidth(if (axisMode == 1) 10f else 4f)
             drawMesh(gizmo, vpc, model, floatArrayOf(1f, 0.25f, 0.25f), false, 0, 2)
+            GLES20.glLineWidth(if (axisMode == 2) 10f else 4f)
             drawMesh(gizmo, vpc, model, floatArrayOf(0.3f, 1f, 0.3f), false, 2, 2)
+            GLES20.glLineWidth(if (axisMode == 3) 10f else 4f)
             drawMesh(gizmo, vpc, model, floatArrayOf(0.35f, 0.5f, 1f), false, 4, 2)
             GLES20.glEnable(GLES20.GL_DEPTH_TEST)
         }

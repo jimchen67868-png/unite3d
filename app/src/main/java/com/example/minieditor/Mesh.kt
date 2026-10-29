@@ -127,6 +127,16 @@ object Meshes {
         return Mesh(o.toFloatArray(), GLES20.GL_LINES)
     }
 
+    /** Unit circle in the XZ plane (line loop), used for light range rings. */
+    fun circle(): Mesh {
+        val o = ArrayList<Float>()
+        for (i in 0 until 48) {
+            val a = 2.0 * PI * i / 48
+            o.addAll(listOf(cos(a).toFloat(), 0f, sin(a).toFloat(), 0f, 0f, 0f))
+        }
+        return Mesh(o.toFloatArray(), GLES20.GL_LINE_LOOP)
+    }
+
     fun gizmo(): Mesh {
         val o = ArrayList<Float>()
         line(o, 0f, 0f, 0f, 1.2f, 0f, 0f)
