@@ -8,7 +8,8 @@ enum class Shape(val label: String, val radius: Float) {
     CUBE("Cube", 0.87f), PYRAMID("Pyramid", 0.75f), SPHERE("Sphere", 0.5f), MODEL("Model", 0.87f),
     JOYSTICK("Joystick", 0f), BUTTON("Button", 0f),
     LIGHT("Light", 0.4f), SUN("Sun", 0.4f),
-    SETTINGS("Settings", 0f);
+    SETTINGS("Settings", 0f),
+    CAMERA("Camera", 0.4f);
 
     val isScreen: Boolean get() = this == JOYSTICK || this == BUTTON
     val isLight: Boolean get() = this == LIGHT || this == SUN
@@ -28,6 +29,13 @@ class SceneObject(
 ) {
     val maxScale: Float get() = maxOf(sx, sy, sz)
     var script: String = ""
+    var shadow: Boolean = true   // casts a shadow on the ground
+    // material
+    var spec = 0.25f      // shininess 0-1
+    var gloss = 0.5f      // how tight the highlight is 0-1
+    var emit = 0f         // glow 0-1
+    var opacity = 1f      // 1 = solid, lower = see-through
+    var pattern = 0       // 0 none, 1 checker, 2 stripes
     var collider: Int = 0   // 0 = none, 1 = solid (blocks), 2 = trigger (events only)
 }
 
@@ -83,8 +91,21 @@ class Scene {
      */
     fun addSettings(): SceneObject? {
         if (objects.any { it.shape == Shape.SETTINGS }) return null
-        val o = SceneObject(Shape.SETTINGS, "Settings", x = 9.8f, y = 0f, z = 0.3f, sx = 1f, sy = 1f,
+        val o = SceneObject(Shape.SETTINGS, "Settings", x = 9.8f, y = 0f, z = 0.3f, ry = 0.5f, sx = 1f, sy = 1f,
             color = floatArrayOf(0.15f, 0.16f, 0.19f))
+        objects.add(o)
+        selected = o
+        return o
+    }
+
+    /**
+     * Camera object (one per scene). x/y/z = position, rx = pitch (positive looks down), ry = yaw, sx = field of view in degrees.
+     * While playing (or previewing), the view comes from this object instead of the orbit camera.
+     */
+    fun addCamera(): SceneObject? {
+        if (objects.any { it.shape == Shape.CAMERA }) return null
+        val o = SceneObject(Shape.CAMERA, "Camera", x = 0f, y = 5f, z = 10f, rx = 25f, ry = 0f, sx = 60f, sy = 1f,
+            color = floatArrayOf(1f, 1f, 1f))
         objects.add(o)
         selected = o
         return o
@@ -126,12 +147,14 @@ class Scene {
 
     fun duplicate(): SceneObject? {
         val s = selected ?: return null
-        if (s.shape.isScreen || s.shape == Shape.SETTINGS) return null
+        if (s.shape.isScreen || s.shape == Shape.SETTINGS || s.shape == Shape.CAMERA) return null
         if (s.shape.isLight && !canAddLight(s.shape)) return null
         val o = SceneObject(s.shape, s.name + " copy", s.x + 1f, s.y, s.z, s.rx, s.ry, s.rz,
             s.sx, s.sy, s.sz, s.color.copyOf(), s.model)
         o.script = s.script
         o.collider = s.collider
+        o.shadow = s.shadow
+        o.spec = s.spec; o.gloss = s.gloss; o.emit = s.emit; o.opacity = s.opacity; o.pattern = s.pattern
         objects.add(o)
         selected = o
         return o
@@ -149,6 +172,9 @@ class Scene {
             put("name", o.name)
             put("script", o.script)
             put("collider", o.collider)
+            put("shadow", o.shadow)
+            put("spec", o.spec.toDouble()); put("gloss", o.gloss.toDouble())
+            put("emit", o.emit.toDouble()); put("opacity", o.opacity.toDouble()); put("pattern", o.pattern)
             o.model?.let { put("model", it.key) }
             put("x", o.x.toDouble()); put("y", o.y.toDouble()); put("z", o.z.toDouble())
             put("rx", o.rx.toDouble()); put("ry", o.ry.toDouble()); put("rz", o.rz.toDouble())
@@ -177,7 +203,10 @@ class Scene {
                 j.optDouble("sx", old).toFloat(), j.optDouble("sy", old).toFloat(), j.optDouble("sz", old).toFloat(),
                 floatArrayOf(j.getDouble("r").toFloat(), j.getDouble("g").toFloat(), j.getDouble("b").toFloat()),
                 model
-            ).also { it.script = j.optString("script", ""); it.collider = j.optInt("collider", 0) })
+            ).also { it.script = j.optString("script", ""); it.collider = j.optInt("collider", 0); it.shadow = j.optBoolean("shadow", true)
+                it.spec = j.optDouble("spec", 0.25).toFloat(); it.gloss = j.optDouble("gloss", 0.5).toFloat()
+                it.emit = j.optDouble("emit", 0.0).toFloat(); it.opacity = j.optDouble("opacity", 1.0).toFloat()
+                it.pattern = j.optInt("pattern", 0) })
         }
         selected = null
         objects.clear()

@@ -75,7 +75,7 @@ class EditorView(ctx: Context, val scene: Scene) : GLSurfaceView(ctx) {
     /** Ray vs the object's real (rotated, scaled) box or ellipsoid, with a little extra reach so small objects are easy to hit. */
     private fun hitT(o: SceneObject, r: FloatArray): Float? {
         val tol = renderer.dist * 0.02f
-        if (o.shape.isLight) return raySphere(r, o.x, o.y, o.z, maxOf(0.4f, renderer.dist * 0.04f))
+        if (o.shape.isLight || o.shape == Shape.CAMERA) return raySphere(r, o.x, o.y, o.z, maxOf(0.4f, renderer.dist * 0.04f))
         val m = FloatArray(16)
         Matrix.setIdentityM(m, 0)
         Matrix.translateM(m, 0, o.x, o.y, o.z)
@@ -305,6 +305,7 @@ class EditorView(ctx: Context, val scene: Scene) : GLSurfaceView(ctx) {
             Mode.SCALE -> {
                 val f = 1f - dy * 0.005f
                 if (o.shape.isLight) { o.sx = (o.sx * f).coerceIn(0.05f, 5f); refresh(); return }
+                if (o.shape == Shape.CAMERA) { o.sx = (o.sx * f).coerceIn(20f, 120f); refresh(); return }
                 when (axis) {
                     1 -> o.sx = (o.sx * f).coerceIn(0.05f, 20f)
                     2 -> o.sy = (o.sy * f).coerceIn(0.05f, 20f)

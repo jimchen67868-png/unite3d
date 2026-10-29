@@ -27,10 +27,12 @@ import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.PopupMenu
 import android.widget.ScrollView
+import android.widget.SeekBar
 import android.widget.TextView
 import android.widget.Toast
 import java.io.File
 import java.util.Locale
+import kotlin.math.cos
 import kotlin.math.sin
 import kotlin.math.sqrt
 import java.util.zip.ZipEntry
@@ -38,7 +40,7 @@ import java.util.zip.ZipInputStream
 import java.util.zip.ZipOutputStream
 
 class MainActivity : Activity(), SensorEventListener {
-    private enum class Panel { NONE, HIER, INSPECT, SCRIPT }
+    private enum class Panel { NONE, HIER, INSPECT, SCRIPT, MATERIAL }
     private class Snap(val o: SceneObject, val v: FloatArray)
 
     private val scene = Scene()
@@ -50,7 +52,21 @@ class MainActivity : Activity(), SensorEventListener {
     private lateinit var yButton: Button
     private lateinit var playButton: Button
     private lateinit var joystick: JoystickView
+    private lateinit var coordLabel: TextView
+    private var showCoords = true
+    @Volatile private var labelPending = false
     private lateinit var colliderBtn: Button
+    private lateinit var materialView: LinearLayout
+    private lateinit var matLabels: Array<TextView>
+    private lateinit var matSliders: Array<SeekBar>
+    private lateinit var presetBtn: Button
+    private lateinit var patternBtn: Button
+    private lateinit var shadowBtn: Button
+    private lateinit var lightPanel: LinearLayout
+    private lateinit var sliderA: SeekBar
+    private lateinit var sliderB: SeekBar
+    private lateinit var labelA: TextView
+    private lateinit var labelB: TextView
     private lateinit var skyRow: LinearLayout
     private lateinit var objSwatches: LinearLayout
     private lateinit var settingsHint: TextView
@@ -221,6 +237,7 @@ end
             addView(row(
                 btn("Hierarchy") { setPanel(Panel.HIER) },
                 btn("Inspector") { setPanel(Panel.INSPECT) },
+                btn("Material") { setPanel(Panel.MATERIAL) },
                 btn("Script") { setPanel(Panel.SCRIPT) },
                 fileButton
             ))
@@ -235,6 +252,7 @@ end
         buildHierarchy()
         buildInspector()
         buildScript()
+        buildMaterial()
         topPanel = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(0xCC000000.toInt())
@@ -242,10 +260,20 @@ end
             addView(hierarchyView)
             addView(inspectorView)
             addView(scriptView)
+            addView(materialView)
         }
 
         root = FrameLayout(this).apply { isFocusable = true; isFocusableInTouchMode = true }
         root.addView(editor, FrameLayout.LayoutParams(-1, -1))
+        coordLabel = TextView(this).apply {
+            setTextColor(Color.WHITE)
+            textSize = 12f
+            typeface = Typeface.MONOSPACE
+            setBackgroundColor(0xAA000000.toInt())
+            setPadding(dp(6), dp(3), dp(6), dp(3))
+            visibility = View.GONE
+        }
+        root.addView(coordLabel, FrameLayout.LayoutParams(-2, -2, Gravity.TOP or Gravity.START))
         root.addView(topPanel, FrameLayout.LayoutParams(-1, -2, Gravity.TOP))
         root.addView(bottom, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM))
         joystick = JoystickView(this).apply { visibility = View.GONE }
@@ -259,6 +287,12 @@ end
         setContentView(root)
 
         editor.onChange = { updateInfo() }
+        editor.renderer.onFrame = {
+            if (!labelPending) {
+                labelPending = true
+                coordLabel.post { labelPending = false; updateCoordLabel() }
+            }
+        }
         if (!autoLoad()) scene.add(Shape.CUBE)
         setMode(Mode.MOVE)
     }
@@ -273,6 +307,7 @@ end
         pm.menu.add(0, 4, 3, "Open scene zip...")
         pm.menu.add(0, 5, 4, "Export OBJ...")
         pm.menu.add(0, 6, 5, "New scene")
+        pm.menu.add(0, 9, 8, "Show coordinates: " + (if (showCoords) "on" else "off"))
         pm.menu.add(0, 7, 6, "Load sample game (Coin Rush)")
         pm.menu.add(0, 8, 7, "Editor lighting: " + (if (editor.renderer.editorBright) "Bright (tap for Scene)" else "Scene (tap for Bright)"))
         pm.setOnMenuItemClickListener { item ->
@@ -288,6 +323,7 @@ end
                     6 -> { scene.objects.clear(); scene.selected = null; editor.refresh() }
                     7 -> loadSample()
                     8 -> { editor.renderer.editorBright = !editor.renderer.editorBright; editor.refresh() }
+                    9 -> { showCoords = !showCoords; editor.refresh() }
                 }
             }
             true
@@ -534,6 +570,102 @@ end
         }
     }
 
+    // ---------- Material ----------
+
+    private fun matTarget(): SceneObject? {
+        val o = scene.selected ?: return null
+        return if (o.shape.isScreen || o.shape.isLight || o.shape == Shape.SETTINGS || o.shape == Shape.CAMERA) null else o
+    }
+
+    private fun buildMaterial() {
+        matLabels = Array(4) {
+            TextView(this).apply {
+                textSize = 12f; setTextColor(0xFFDDDDDD.toInt()); setPadding(dp(4), dp(6), dp(4), 0)
+            }
+        }
+        matSliders = Array(4) { i ->
+            SeekBar(this).apply {
+                max = 100
+                setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                    override fun onProgressChanged(sb: SeekBar?, p: Int, fromUser: Boolean) {
+                        if (fromUser) applyMat(i, p)
+                    }
+                    override fun onStartTrackingTouch(sb: SeekBar?) {}
+                    override fun onStopTrackingTouch(sb: SeekBar?) {}
+                })
+            }
+        }
+        presetBtn = btn("Preset...") { showPresetMenu() }
+        patternBtn = btn("Pattern: None") {
+            val o = matTarget()
+            if (o != null) { o.pattern = (o.pattern + 1) % 3; editor.refresh() }
+        }
+        materialView = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            visibility = View.GONE
+            setPadding(dp(6), dp(4), dp(6), dp(4))
+            addView(row(presetBtn, patternBtn))
+            for (i in 0..3) {
+                addView(matLabels[i])
+                addView(matSliders[i])
+            }
+        }
+    }
+
+    private fun applyMat(i: Int, p: Int) {
+        val o = matTarget() ?: return
+        when (i) {
+            0 -> o.spec = p / 100f
+            1 -> o.gloss = p / 100f
+            2 -> o.emit = p / 100f
+            3 -> o.opacity = (p / 100f).coerceAtLeast(0.05f)
+        }
+        editor.refresh()
+    }
+
+    private fun showPresetMenu() {
+        val o = matTarget()
+        if (o == null) { toast("Select a cube, pyramid, sphere or model first"); return }
+        val pm = PopupMenu(this, presetBtn)
+        listOf("Plastic", "Rubber (matte)", "Metal", "Glass", "Glow", "Ghost", "Checker", "Stripes")
+            .forEachIndexed { i, t -> pm.menu.add(0, i, i, t) }
+        pm.setOnMenuItemClickListener { item ->
+            when (item.itemId) {
+                0 -> { o.spec = 0.5f; o.gloss = 0.5f; o.emit = 0f; o.opacity = 1f; o.pattern = 0 }
+                1 -> { o.spec = 0f; o.gloss = 0.1f; o.emit = 0f; o.opacity = 1f; o.pattern = 0 }
+                2 -> { o.spec = 1f; o.gloss = 0.85f; o.emit = 0f; o.opacity = 1f; o.pattern = 0 }
+                3 -> { o.spec = 1f; o.gloss = 0.9f; o.emit = 0f; o.opacity = 0.35f; o.pattern = 0 }
+                4 -> { o.spec = 0.2f; o.gloss = 0.3f; o.emit = 0.8f; o.opacity = 1f; o.pattern = 0 }
+                5 -> { o.spec = 0f; o.gloss = 0.3f; o.emit = 0f; o.opacity = 0.45f; o.pattern = 0 }
+                6 -> o.pattern = 1
+                7 -> o.pattern = 2
+            }
+            editor.refresh()
+            true
+        }
+        pm.show()
+    }
+
+    private fun refreshMaterial() {
+        val o = matTarget()
+        for (sb in matSliders) sb.isEnabled = o != null
+        presetBtn.isEnabled = o != null
+        patternBtn.isEnabled = o != null
+        if (o == null) {
+            for (l in matLabels) l.text = "Select a cube, pyramid, sphere or model to edit its material"
+            for (i in 1..3) matLabels[i].text = ""
+            patternBtn.text = "Pattern: -"
+            return
+        }
+        matLabels[0].text = String.format(Locale.US, "Shininess   %.2f", o.spec)
+        matLabels[1].text = String.format(Locale.US, "Gloss (tight highlight)   %.2f", o.gloss)
+        matLabels[2].text = String.format(Locale.US, "Glow (lights itself)   %.2f", o.emit)
+        matLabels[3].text = String.format(Locale.US, "Opacity (lower = see-through)   %.2f", o.opacity)
+        val vals = floatArrayOf(o.spec, o.gloss, o.emit, o.opacity)
+        for (i in 0..3) if (!matSliders[i].isPressed) matSliders[i].progress = (vals[i] * 100f).toInt().coerceIn(0, 100)
+        patternBtn.text = "Pattern: " + arrayOf("None", "Checker", "Stripes")[o.pattern.coerceIn(0, 2)]
+    }
+
     // ---------- Hierarchy ----------
 
     private fun buildHierarchy() {
@@ -558,6 +690,9 @@ end
                 btn("+Settings", true) { if (scene.addSettings() == null) toast("Settings already added") else editor.refresh() },
                 btn("+Block", true) { scene.addBlock(); editor.refresh() }
             ))
+            addView(row(
+                btn("+Camera", true) { if (scene.addCamera() == null) toast("Camera already added") else editor.refresh() }
+            ))
             addView(scroll)
         }
     }
@@ -567,7 +702,7 @@ end
         for (o in scene.objects) {
             val sel = o === scene.selected
             hierList.addView(TextView(this).apply {
-                text = (if (sel) "▶ " else "    ") + o.name + (if (o.script.isNotBlank()) "  {lua}" else "") + (if (o.shape.isScreen) "  [screen]" else "") + (if (o.shape.isLight) "  [light]" else "") + (if (o.shape == Shape.SETTINGS) "  [settings]" else "")
+                text = (if (sel) "▶ " else "    ") + o.name + (if (o.script.isNotBlank()) "  {lua}" else "") + (if (o.shape.isScreen) "  [screen]" else "") + (if (o.shape.isLight) "  [light]" else "") + (if (o.shape == Shape.SETTINGS) "  [settings]" else "") + (if (o.shape == Shape.CAMERA) "  [camera]" else "")
                 textSize = 14f
                 setTextColor(if (sel) 0xFF7FB0FF.toInt() else Color.WHITE)
                 setPadding(dp(10), dp(8), dp(10), dp(8))
@@ -644,7 +779,7 @@ end
             skyRow.visibility = View.GONE
             addView(skyRow)
             settingsHint = TextView(this@MainActivity).apply {
-                text = "Settings: World = gravity, fog distance (0 = off), ambient 0-1.  Snap = grid size when dragging (0 = off).  Last row = time scale, show grid (1/0), collisions on (1/0).  Swatches = sky colour."
+                text = "Settings: World = gravity, fog distance (0 = off), ambient 0-1.  Snap/Shd/Gnd = grid snap (0 = off), shadow strength 0-1 (0 = off), ground height for shadows.  Last row = time scale, show grid (1/0), collisions on (1/0).  Swatches = sky colour."
                 textSize = 11f
                 setTextColor(0xFFAAAAAA.toInt())
                 setPadding(dp(4), dp(4), dp(4), dp(2))
@@ -661,14 +796,69 @@ end
                 layoutParams = LinearLayout.LayoutParams(-1, -2).also { it.setMargins(dp(2), dp(4), dp(2), dp(2)) }
                 setOnClickListener {
                     val o = scene.selected
-                    if (o != null && !o.shape.isScreen && !o.shape.isLight && o.shape != Shape.SETTINGS) {
+                    if (o != null && !o.shape.isScreen && !o.shape.isLight && o.shape != Shape.SETTINGS && o.shape != Shape.CAMERA) {
                         o.collider = (o.collider + 1) % 3
                         editor.refresh()
                     }
                 }
             }
             addView(colliderBtn)
+            shadowBtn = Button(this@MainActivity).apply {
+                text = "Casts shadow: On"
+                textSize = 12f
+                setTextColor(Color.WHITE)
+                setBackgroundColor(0xFF444444.toInt())
+                minWidth = 0; minHeight = 0
+                setPadding(dp(6), dp(8), dp(6), dp(8))
+                layoutParams = LinearLayout.LayoutParams(-1, -2).also { it.setMargins(dp(2), dp(2), dp(2), dp(2)) }
+                setOnClickListener {
+                    val o = scene.selected
+                    if (o != null && !o.shape.isScreen && !o.shape.isLight && o.shape != Shape.SETTINGS && o.shape != Shape.CAMERA) {
+                        o.shadow = !o.shadow
+                        editor.refresh()
+                    }
+                }
+            }
+            addView(shadowBtn)
+            labelA = TextView(this@MainActivity).apply {
+                textSize = 12f; setTextColor(0xFFDDDDDD.toInt()); setPadding(dp(4), dp(6), dp(4), 0)
+            }
+            labelB = TextView(this@MainActivity).apply {
+                textSize = 12f; setTextColor(0xFFDDDDDD.toInt()); setPadding(dp(4), dp(6), dp(4), 0)
+            }
+            sliderA = makeSlider(0)
+            sliderB = makeSlider(1)
+            lightPanel = LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.VERTICAL
+                visibility = View.GONE
+                addView(labelA)
+                addView(sliderA)
+                addView(labelB)
+                addView(sliderB)
+            }
+            addView(lightPanel)
         }
+    }
+
+    private fun makeSlider(which: Int) = SeekBar(this).apply {
+        max = 100
+        setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(sb: SeekBar?, p: Int, fromUser: Boolean) {
+                if (fromUser) applySlider(which, p)
+            }
+            override fun onStartTrackingTouch(sb: SeekBar?) {}
+            override fun onStopTrackingTouch(sb: SeekBar?) {}
+        })
+    }
+
+    /** Light sliders: 0 = brightness (0-5). 1 = distance 1-100 for a point light, or ambient 0-1 for the sun. */
+    private fun applySlider(which: Int, p: Int) {
+        val o = scene.selected ?: return
+        if (!o.shape.isLight) return
+        if (which == 0) o.sx = p / 20f
+        else if (o.shape == Shape.SUN) o.sy = p / 100f
+        else o.sy = (1f + p).coerceAtMost(100f)
+        editor.refresh()
     }
 
     private fun applyName() {
@@ -690,12 +880,24 @@ end
             editor.refresh()
             return
         }
+        if (o.shape == Shape.CAMERA) {
+            when (i) {
+                0 -> o.x = v; 1 -> o.y = v; 2 -> o.z = v
+                3 -> o.rx = v.coerceIn(-89f, 89f)
+                4 -> o.ry = v
+                6 -> o.sx = v.coerceIn(20f, 120f)
+            }
+            editor.refresh()
+            return
+        }
         if (o.shape == Shape.SETTINGS) {
             when (i) {
                 0 -> o.x = v.coerceIn(0f, 100f)
                 1 -> o.y = v.coerceIn(0f, 500f)
                 2 -> o.z = v.coerceIn(0f, 1f)
                 3 -> o.rx = v.coerceIn(0f, 10f)
+                4 -> o.ry = v.coerceIn(0f, 1f)
+                5 -> o.rz = v
                 6 -> o.sx = v.coerceIn(0f, 5f)
                 7 -> o.sy = if (v >= 0.5f) 1f else 0f
                 8 -> o.sz = if (v >= 0.5f) 1f else 0f
@@ -728,28 +930,41 @@ end
         val light = o?.shape?.isLight == true
         val sun = o?.shape == Shape.SUN
         val st = o?.shape == Shape.SETTINGS
+        val cam = o?.shape == Shape.CAMERA
         skyRow.visibility = if (st) View.VISIBLE else View.GONE
         objSwatches.visibility = if (st) View.GONE else View.VISIBLE
         settingsHint.visibility = if (st) View.VISIBLE else View.GONE
-        colliderBtn.visibility = if (o != null && !joy && !light && !st) View.VISIBLE else View.GONE
+        colliderBtn.visibility = if (o != null && !joy && !light && !st && !cam) View.VISIBLE else View.GONE
+        lightPanel.visibility = if (light) View.VISIBLE else View.GONE
+        shadowBtn.visibility = colliderBtn.visibility
         nameField.isEnabled = o != null
         for ((i, f) in fields.withIndex()) {
             f.isEnabled = o != null && when {
-                st -> i in 0..3 || i == 6 || i == 7 || i == 8
+                st -> i in 0..5 || i == 6 || i == 7 || i == 8
+                cam -> i in 0..4 || i == 6
                 joy -> i == 0 || i == 1 || i == 6
                 light -> i in 0..2 || i == 6 || i == 7 || (sun && (i == 3 || i == 4))
                 else -> true
             }
         }
         rowLabels[0].text = if (joy) "Screen %" else if (st) "World" else "Pos"
-        rowLabels[1].text = if (st) "Snap" else "Rot"
-        rowLabels[2].text = if (joy) "Size" else if (st) "Time/Grid/Col" else if (sun) "Power/Amb" else if (light) "Power/Rng" else "Scale"
+        rowLabels[1].text = if (st) "Snap/Shd/Gnd" else if (cam) "Pitch/Yaw" else "Rot"
+        rowLabels[2].text = if (joy) "Size" else if (st) "Time/Grid/Col" else if (cam) "FOV" else if (sun) "Power/Amb" else if (light) "Power/Rng" else "Scale"
         if (o == null) {
             if (!nameField.hasFocus()) nameField.setText("")
             for (f in fields) if (!f.hasFocus()) f.setText("")
             return
         }
         if (!nameField.hasFocus()) nameField.setText(o.name)
+        shadowBtn.text = "Casts shadow: " + (if (o.shadow) "On" else "Off")
+        if (o.shape.isLight) {
+            val isSun = o.shape == Shape.SUN
+            labelA.text = String.format(Locale.US, "Brightness   %.2f", o.sx)
+            labelB.text = if (isSun) String.format(Locale.US, "Ambient (light in the shadows)   %.2f", o.sy)
+            else String.format(Locale.US, "Distance (how far the light reaches)   %.0f", o.sy)
+            if (!sliderA.isPressed) sliderA.progress = (o.sx * 20f).toInt().coerceIn(0, 100)
+            if (!sliderB.isPressed) sliderB.progress = (if (isSun) o.sy * 100f else o.sy - 1f).toInt().coerceIn(0, 100)
+        }
         colliderBtn.text = "Collider: " + arrayOf("Off", "Solid (blocks)", "Trigger (events only)")[o.collider.coerceIn(0, 2)]
         val v = floatArrayOf(o.x, o.y, o.z, o.rx, o.ry, o.rz, o.sx, o.sy, o.sz)
         for (i in 0 until 9) {
@@ -774,6 +989,7 @@ end
         hierarchyView.visibility = if (panel == Panel.HIER) View.VISIBLE else View.GONE
         inspectorView.visibility = if (panel == Panel.INSPECT) View.VISIBLE else View.GONE
         scriptView.visibility = if (panel == Panel.SCRIPT) View.VISIBLE else View.GONE
+        materialView.visibility = if (panel == Panel.MATERIAL) View.VISIBLE else View.GONE
         lastCount = -1
         updateInfo()
     }
@@ -789,13 +1005,35 @@ end
         updateInfo()
     }
 
+    /** Floating X / Y / Z tag that follows the selected object on screen (editor only). */
+    private fun updateCoordLabel() {
+        val o = scene.selected
+        if (!showCoords || playing || o == null || o.shape.isScreen || o.shape == Shape.SETTINGS) {
+            coordLabel.visibility = View.GONE
+            return
+        }
+        val p = editor.renderer.project(o.x, o.y, o.z)
+        if (p == null) {
+            coordLabel.visibility = View.GONE
+            return
+        }
+        coordLabel.text = String.format(Locale.US, "%s\nX %.2f  Y %.2f  Z %.2f", o.name, o.x, o.y, o.z)
+        coordLabel.visibility = View.VISIBLE
+        val w = coordLabel.width.toFloat()
+        val h = coordLabel.height.toFloat()
+        coordLabel.x = (p[0] - w / 2f).coerceIn(0f, maxOf(0f, root.width - w))
+        coordLabel.y = (p[1] - h - dp(26)).coerceIn(0f, maxOf(0f, root.height - h))
+    }
+
     private fun updateInfo() {
         val o = scene.selected
         info.text = (if (playing) "PLAYING  |  " else "") + (o?.name ?: "Nothing selected") +
+            (if (o != null && !o.shape.isScreen && o.shape != Shape.SETTINGS) String.format(Locale.US, " (%.2f, %.2f, %.2f)", o.x, o.y, o.z) else "") +
             "  |  " + scene.objects.size + " objects" + (if (playing) "" else "  |  drag: " + editor.mode.name.lowercase() + (if (editor.axis > 0) " " + arrayOf("", "X", "Y", "Z")[editor.axis] else ""))
         if (panel == Panel.HIER && (scene.objects.size != lastCount || scene.selected !== lastSel)) rebuildHierarchy()
         if (panel == Panel.INSPECT) refreshInspector()
         if (panel == Panel.SCRIPT) refreshScript()
+        if (panel == Panel.MATERIAL) refreshMaterial()
         refreshJoystick()
     }
 
@@ -847,7 +1085,9 @@ end
         val items = listOf(
             "Perspective", "Top", "Front", "Back", "Left", "Right",
             "Focus selected", "Frame all",
-            "Narrow lens (30 deg)", "Normal lens (50 deg)", "Wide lens (75 deg)", "Reset view"
+            "Narrow lens (30 deg)", "Normal lens (50 deg)", "Wide lens (75 deg)", "Reset view",
+            "Camera object: preview view (" + (if (editor.renderer.previewCam) "on" else "off") + ")",
+            "Camera object: copy this view"
         )
         items.forEachIndexed { i, t -> pm.menu.add(0, i, i, t) }
         pm.setOnMenuItemClickListener { item -> applyCameraPreset(item.itemId); true }
@@ -872,6 +1112,11 @@ end
                 }
             }
             7 -> frameAll()
+            12 -> {
+                if (scene.objects.none { o -> o.shape == Shape.CAMERA }) toast("Add a Camera object first (Hierarchy)")
+                else r.previewCam = !r.previewCam
+            }
+            13 -> alignCameraObject()
             8 -> r.fov = 30f
             9 -> r.fov = 50f
             10 -> r.fov = 75f
@@ -883,6 +1128,23 @@ end
         editor.refresh()
     }
 
+    /** Puts the Camera object where the editor camera is now, looking the same way. */
+    private fun alignCameraObject() {
+        val cam = scene.objects.firstOrNull { o -> o.shape == Shape.CAMERA }
+        if (cam == null) { toast("Add a Camera object first (Hierarchy)"); return }
+        val r = editor.renderer
+        val p = Math.toRadians(r.pitch.toDouble())
+        val y = Math.toRadians(r.yaw.toDouble())
+        cam.x = r.target[0] + r.dist * (cos(p) * sin(y)).toFloat()
+        cam.y = r.target[1] + r.dist * sin(p).toFloat()
+        cam.z = r.target[2] + r.dist * (cos(p) * cos(y)).toFloat()
+        cam.rx = r.pitch
+        cam.ry = r.yaw
+        cam.sx = r.fov
+        editor.refresh()
+        toast("Camera object set to the current view")
+    }
+
     /** Centres the camera on everything in the scene and zooms out to fit it. */
     private fun frameAll() {
         val r = editor.renderer
@@ -890,7 +1152,7 @@ end
         var maxX = -Float.MAX_VALUE; var maxY = -Float.MAX_VALUE; var maxZ = -Float.MAX_VALUE
         var any = false
         for (o in scene.objects) {
-            if (o.shape.isScreen || o.shape == Shape.SETTINGS) continue
+            if (o.shape.isScreen || o.shape == Shape.SETTINGS || o.shape == Shape.CAMERA) continue
             val hx = if (o.shape.isLight) 0.3f else 0.5f * o.sx
             val hy = if (o.shape.isLight) 0.3f else 0.5f * o.sy
             val hz = if (o.shape.isLight) 0.3f else 0.5f * o.sz

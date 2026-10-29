@@ -165,6 +165,8 @@ class ScriptEngine(private val scene: Scene, private val log: (String) -> Unit) 
         t.set("sx", o.sx.toDouble()); t.set("sy", o.sy.toDouble()); t.set("sz", o.sz.toDouble())
         t.set("r", o.color[0].toDouble()); t.set("g", o.color[1].toDouble()); t.set("b", o.color[2].toDouble())
         t.set("collider", o.collider.toDouble())
+        t.set("opacity", o.opacity.toDouble())
+        t.set("emit", o.emit.toDouble())
     }
 
     private fun num(t: LuaTable, k: String): Float? {
@@ -185,6 +187,8 @@ class ScriptEngine(private val scene: Scene, private val log: (String) -> Unit) 
         num(t, "sy")?.let { o.sy = it.coerceIn(0.01f, 100f) }
         num(t, "sz")?.let { o.sz = it.coerceIn(0.01f, 100f) }
         num(t, "collider")?.let { o.collider = it.toInt().coerceIn(0, 2) }
+        num(t, "opacity")?.let { o.opacity = it.coerceIn(0f, 1f) }
+        num(t, "emit")?.let { o.emit = it.coerceIn(0f, 1f) }
         o.color = floatArrayOf(
             (num(t, "r") ?: o.color[0]).coerceIn(0f, 1f),
             (num(t, "g") ?: o.color[1]).coerceIn(0f, 1f),

@@ -152,6 +152,14 @@ end
         }
         put(scene, Shape.CUBE, "Hazard 1", 0f, 0.4f, -2.5f, 0.8f, 0.8f, 0.8f, floatArrayOf(0.85f, 0.2f, 0.2f), HAZARD, 2)
         put(scene, Shape.CUBE, "Hazard 2", 0f, 0.4f, 2.5f, 0.8f, 0.8f, 0.8f, floatArrayOf(0.85f, 0.2f, 0.2f), HAZARD, 2)
+        for (o in scene.objects) {
+            when {
+                o.name.startsWith("Coin") -> { o.emit = 0.45f; o.spec = 0.6f }
+                o.name == "Player" -> { o.spec = 1f; o.gloss = 0.85f }
+                o.name.startsWith("Hazard") -> o.emit = 0.3f
+                o.name == "Floor" -> { o.pattern = 1; o.spec = 0f }
+            }
+        }
         val wall = floatArrayOf(0.45f, 0.35f, 0.30f)
         put(scene, Shape.CUBE, "Wall N", 0f, 0.5f, -6.2f, 12.8f, 1f, 0.4f, wall, "", 1)
         put(scene, Shape.CUBE, "Wall S", 0f, 0.5f, 6.2f, 12.8f, 1f, 0.4f, wall, "", 1)
