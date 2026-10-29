@@ -137,6 +137,15 @@ object Meshes {
         return Mesh(o.toFloatArray(), GLES20.GL_LINE_LOOP)
     }
 
+    /** Full-screen quad in clip space (used for the sky backdrop). */
+    fun quad(): Mesh {
+        val v = floatArrayOf(
+            -1f, -1f, 0f, 0f, 0f, 1f, 1f, -1f, 0f, 0f, 0f, 1f, 1f, 1f, 0f, 0f, 0f, 1f,
+            -1f, -1f, 0f, 0f, 0f, 1f, 1f, 1f, 0f, 0f, 0f, 1f, -1f, 1f, 0f, 0f, 0f, 1f
+        )
+        return Mesh(v, GLES20.GL_TRIANGLES)
+    }
+
     fun gizmo(): Mesh {
         val o = ArrayList<Float>()
         line(o, 0f, 0f, 0f, 1.2f, 0f, 0f)

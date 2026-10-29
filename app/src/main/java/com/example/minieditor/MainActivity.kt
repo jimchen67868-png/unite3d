@@ -3,12 +3,16 @@ package com.example.minieditor
 import android.app.Activity
 import android.app.AlertDialog
 import android.content.Intent
+import android.content.res.ColorStateList
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.graphics.Typeface
 import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
+import android.media.ExifInterface
 import android.net.Uri
 import android.os.Bundle
 import android.provider.OpenableColumns
@@ -30,7 +34,9 @@ import android.widget.ScrollView
 import android.widget.SeekBar
 import android.widget.TextView
 import android.widget.Toast
+import java.io.ByteArrayInputStream
 import java.io.File
+import java.io.FileOutputStream
 import java.util.Locale
 import kotlin.math.cos
 import kotlin.math.sin
@@ -56,6 +62,18 @@ class MainActivity : Activity(), SensorEventListener {
     private var showCoords = true
     @Volatile private var labelPending = false
     private lateinit var colliderBtn: Button
+    private lateinit var importButton: Button
+    private lateinit var photoBtn: Button
+    private lateinit var skyPhotoBtn: Button
+    private lateinit var skyModeBtn: Button
+    private lateinit var topScroll: MaxHeightScrollView
+    private lateinit var shadowPanel: LinearLayout
+    private lateinit var skyPanel: LinearLayout
+    private lateinit var skyLabels: Array<TextView>
+    private lateinit var skySliders: Array<SeekBar>
+    private lateinit var skyPreview: View
+    private lateinit var shLabels: Array<TextView>
+    private lateinit var shSliders: Array<SeekBar>
     private lateinit var materialView: LinearLayout
     private lateinit var matLabels: Array<TextView>
     private lateinit var matSliders: Array<SeekBar>
@@ -102,6 +120,9 @@ class MainActivity : Activity(), SensorEventListener {
     private val reqExport = 43
     private val reqOpen = 44
     private val reqObj = 45
+    private val reqPhoto = 46
+    private var photoForSelected = false
+    private var photoForSky = false
 
     // play mode
     private var playing = false
@@ -112,6 +133,10 @@ class MainActivity : Activity(), SensorEventListener {
     private var ax = 0f
     private var ay = 0f
     private var az = 0f
+
+    private val tintColors = intArrayOf(
+        0xFF000000.toInt(), 0xFF0D1330.toInt(), 0xFF2A0F33.toInt(), 0xFF2B1A0A.toInt(), 0xFF0F2B14.toInt()
+    )
 
     private val skyColors = intArrayOf(
         0xFF0D0F1F.toInt(), 0xFF59406B.toInt(), 0xFF87CEEB.toInt(),
@@ -221,6 +246,7 @@ end
         playButton.setBackgroundColor(0xFF2E8B57.toInt())
         viewButton = btn("1st person") { toggleFirstPerson() }
         cameraButton = btn("Camera") { showCameraMenu() }
+        importButton = btn("Import", true) { showImportMenu() }
 
         val bottom = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -231,7 +257,7 @@ end
                 btn("+Cube", true) { scene.add(Shape.CUBE); editor.refresh() },
                 btn("+Pyramid", true) { scene.add(Shape.PYRAMID); editor.refresh() },
                 btn("+Sphere", true) { scene.add(Shape.SPHERE); editor.refresh() },
-                btn("Import", true) { pickModel() }
+                importButton
             ))
             addView(row(modeButtons[Mode.MOVE]!!, modeButtons[Mode.ROTATE]!!, modeButtons[Mode.SCALE]!!, yButton))
             addView(row(
@@ -274,7 +300,9 @@ end
             visibility = View.GONE
         }
         root.addView(coordLabel, FrameLayout.LayoutParams(-2, -2, Gravity.TOP or Gravity.START))
-        root.addView(topPanel, FrameLayout.LayoutParams(-1, -2, Gravity.TOP))
+        topScroll = MaxHeightScrollView(this)
+        topScroll.addView(topPanel)
+        root.addView(topScroll, FrameLayout.LayoutParams(-1, -2, Gravity.TOP))
         root.addView(bottom, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM))
         joystick = JoystickView(this).apply { visibility = View.GONE }
         root.addView(joystick, FrameLayout.LayoutParams(dp(150), dp(150), Gravity.TOP or Gravity.START))
@@ -283,10 +311,14 @@ end
             buttonViews.add(v)
             root.addView(v, FrameLayout.LayoutParams(dp(90), dp(90), Gravity.TOP or Gravity.START))
         }
-        root.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> refreshJoystick() }
+        root.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
+            topScroll.maxHeightPx = (root.height * 0.6f).toInt()
+            refreshJoystick()
+        }
         setContentView(root)
 
         editor.onChange = { updateInfo() }
+        editor.renderer.photoLoader = { key -> decodePhoto(key) }
         editor.renderer.onFrame = {
             if (!labelPending) {
                 labelPending = true
@@ -308,6 +340,7 @@ end
         pm.menu.add(0, 5, 4, "Export OBJ...")
         pm.menu.add(0, 6, 5, "New scene")
         pm.menu.add(0, 9, 8, "Show coordinates: " + (if (showCoords) "on" else "off"))
+        pm.menu.add(0, 10, 9, "Shadow settings...")
         pm.menu.add(0, 7, 6, "Load sample game (Coin Rush)")
         pm.menu.add(0, 8, 7, "Editor lighting: " + (if (editor.renderer.editorBright) "Bright (tap for Scene)" else "Scene (tap for Bright)"))
         pm.setOnMenuItemClickListener { item ->
@@ -324,6 +357,12 @@ end
                     7 -> loadSample()
                     8 -> { editor.renderer.editorBright = !editor.renderer.editorBright; editor.refresh() }
                     9 -> { showCoords = !showCoords; editor.refresh() }
+                    10 -> {
+                        val s = scene.objects.firstOrNull { it.shape == Shape.SETTINGS } ?: scene.addSettings()
+                        scene.selected = s
+                        if (panel != Panel.INSPECT) setPanel(Panel.INSPECT)
+                        editor.refresh()
+                    }
                 }
             }
             true
@@ -596,6 +635,7 @@ end
             }
         }
         presetBtn = btn("Preset...") { showPresetMenu() }
+        photoBtn = btn("Photo: none") { showPhotoMenu() }
         patternBtn = btn("Pattern: None") {
             val o = matTarget()
             if (o != null) { o.pattern = (o.pattern + 1) % 3; editor.refresh() }
@@ -604,7 +644,7 @@ end
             orientation = LinearLayout.VERTICAL
             visibility = View.GONE
             setPadding(dp(6), dp(4), dp(6), dp(4))
-            addView(row(presetBtn, patternBtn))
+            addView(row(presetBtn, patternBtn, photoBtn))
             for (i in 0..3) {
                 addView(matLabels[i])
                 addView(matSliders[i])
@@ -651,10 +691,12 @@ end
         for (sb in matSliders) sb.isEnabled = o != null
         presetBtn.isEnabled = o != null
         patternBtn.isEnabled = o != null
+        photoBtn.isEnabled = o != null
         if (o == null) {
             for (l in matLabels) l.text = "Select a cube, pyramid, sphere or model to edit its material"
             for (i in 1..3) matLabels[i].text = ""
             patternBtn.text = "Pattern: -"
+            photoBtn.text = "Photo: -"
             return
         }
         matLabels[0].text = String.format(Locale.US, "Shininess   %.2f", o.spec)
@@ -664,6 +706,7 @@ end
         val vals = floatArrayOf(o.spec, o.gloss, o.emit, o.opacity)
         for (i in 0..3) if (!matSliders[i].isPressed) matSliders[i].progress = (vals[i] * 100f).toInt().coerceIn(0, 100)
         patternBtn.text = "Pattern: " + arrayOf("None", "Checker", "Stripes")[o.pattern.coerceIn(0, 2)]
+        photoBtn.text = "Photo: " + (if (o.photo.isEmpty()) "none" else "on")
     }
 
     // ---------- Hierarchy ----------
@@ -744,12 +787,13 @@ end
         for (k in 0 until 3) addView(makeField(start + k))
     }
 
-    private fun swatchRow(colors: IntArray) = LinearLayout(this).apply {
+    private fun swatchRow(colors: IntArray, onPick: ((Int) -> Unit)? = null) = LinearLayout(this).apply {
         orientation = LinearLayout.HORIZONTAL
         for (c in colors) addView(View(this@MainActivity).apply {
             setBackgroundColor(c)
             layoutParams = LinearLayout.LayoutParams(0, dp(28), 1f).also { it.setMargins(dp(2), dp(6), dp(2), dp(2)) }
             setOnClickListener {
+                if (onPick != null) { onPick(c); return@setOnClickListener }
                 scene.selected?.let { o ->
                     o.color = floatArrayOf(Color.red(c) / 255f, Color.green(c) / 255f, Color.blue(c) / 255f)
                     editor.refresh()
@@ -778,6 +822,49 @@ end
             skyRow = swatchRow(skyColors)
             skyRow.visibility = View.GONE
             addView(skyRow)
+            skyLabels = Array(3) {
+                TextView(this@MainActivity).apply {
+                    textSize = 12f; setTextColor(0xFFDDDDDD.toInt()); setPadding(dp(4), dp(4), dp(4), 0)
+                }
+            }
+            val sliderTints = intArrayOf(0xFFE65A4D.toInt(), 0xFF4DB373.toInt(), 0xFF4D8CE6.toInt())
+            skySliders = Array(3) { i ->
+                SeekBar(this@MainActivity).apply {
+                    max = 100
+                    progressTintList = ColorStateList.valueOf(sliderTints[i])
+                    thumbTintList = ColorStateList.valueOf(sliderTints[i])
+                    setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                        override fun onProgressChanged(sb: SeekBar?, p: Int, fromUser: Boolean) {
+                            if (fromUser) applySky(i, p)
+                        }
+                        override fun onStartTrackingTouch(sb: SeekBar?) {}
+                        override fun onStopTrackingTouch(sb: SeekBar?) {}
+                    })
+                }
+            }
+            skyPreview = View(this@MainActivity).apply {
+                layoutParams = LinearLayout.LayoutParams(-1, dp(18)).also { it.setMargins(dp(4), dp(6), dp(4), dp(2)) }
+            }
+            skyPhotoBtn = btn("Sky photo: none") { showSkyPhotoMenu() }
+            skyModeBtn = btn("Mapping: Panorama") {
+                val s = scene.selected
+                if (s != null && s.shape == Shape.SETTINGS) {
+                    s.pattern = if (s.pattern == 1) 0 else 1
+                    editor.refresh()
+                }
+            }
+            skyPanel = LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.VERTICAL
+                visibility = View.GONE
+                addView(TextView(this@MainActivity).apply {
+                    text = "Sky colour - mix any colour"
+                    textSize = 12f; setTextColor(0xFFAAAAAA.toInt()); setPadding(dp(4), dp(6), dp(4), 0)
+                })
+                addView(skyPreview)
+                addView(row(skyPhotoBtn, skyModeBtn))
+                for (i in 0..2) { addView(skyLabels[i]); addView(skySliders[i]) }
+            }
+            addView(skyPanel)
             settingsHint = TextView(this@MainActivity).apply {
                 text = "Settings: World = gravity, fog distance (0 = off), ambient 0-1.  Snap/Shd/Gnd = grid snap (0 = off), shadow strength 0-1 (0 = off), ground height for shadows.  Last row = time scale, show grid (1/0), collisions on (1/0).  Swatches = sky colour."
                 textSize = 11f
@@ -837,6 +924,43 @@ end
                 addView(sliderB)
             }
             addView(lightPanel)
+            shLabels = Array(3) {
+                TextView(this@MainActivity).apply {
+                    textSize = 12f; setTextColor(0xFFDDDDDD.toInt()); setPadding(dp(4), dp(6), dp(4), 0)
+                }
+            }
+            shSliders = Array(3) { i ->
+                SeekBar(this@MainActivity).apply {
+                    max = 100
+                    setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                        override fun onProgressChanged(sb: SeekBar?, p: Int, fromUser: Boolean) {
+                            if (fromUser) applyShadow(i, p)
+                        }
+                        override fun onStartTrackingTouch(sb: SeekBar?) {}
+                        override fun onStopTrackingTouch(sb: SeekBar?) {}
+                    })
+                }
+            }
+            val tintLabel = TextView(this@MainActivity).apply {
+                text = "Shadow colour"
+                textSize = 12f; setTextColor(0xFFDDDDDD.toInt()); setPadding(dp(4), dp(6), dp(4), 0)
+            }
+            shadowPanel = LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.VERTICAL
+                visibility = View.GONE
+                addView(shLabels[0]); addView(shSliders[0])
+                addView(shLabels[1]); addView(shSliders[1])
+                addView(shLabels[2]); addView(shSliders[2])
+                addView(tintLabel)
+                addView(swatchRow(tintColors) { c ->
+                    val st = scene.selected
+                    if (st != null && st.shape == Shape.SETTINGS) {
+                        st.tint = floatArrayOf(Color.red(c) / 255f, Color.green(c) / 255f, Color.blue(c) / 255f)
+                        editor.refresh()
+                    }
+                })
+            }
+            addView(shadowPanel)
         }
     }
 
@@ -858,6 +982,28 @@ end
         if (which == 0) o.sx = p / 20f
         else if (o.shape == Shape.SUN) o.sy = p / 100f
         else o.sy = (1f + p).coerceAtMost(100f)
+        editor.refresh()
+    }
+
+    /** Settings shadow sliders: 0 = strength, 1 = softness, 2 = ground height (-5 to 10). */
+    private fun applyShadow(i: Int, p: Int) {
+        val o = scene.selected ?: return
+        if (o.shape != Shape.SETTINGS) return
+        when (i) {
+            0 -> o.ry = p / 100f
+            1 -> o.soft = p / 100f
+            2 -> o.rz = -5f + p * 0.15f
+        }
+        editor.refresh()
+    }
+
+    /** Sky colour sliders: 0 = red, 1 = green, 2 = blue (the Settings object's colour). */
+    private fun applySky(i: Int, p: Int) {
+        val o = scene.selected ?: return
+        if (o.shape != Shape.SETTINGS) return
+        val c = o.color.copyOf()
+        c[i] = p / 100f
+        o.color = c
         editor.refresh()
     }
 
@@ -932,10 +1078,12 @@ end
         val st = o?.shape == Shape.SETTINGS
         val cam = o?.shape == Shape.CAMERA
         skyRow.visibility = if (st) View.VISIBLE else View.GONE
+        skyPanel.visibility = if (st) View.VISIBLE else View.GONE
         objSwatches.visibility = if (st) View.GONE else View.VISIBLE
         settingsHint.visibility = if (st) View.VISIBLE else View.GONE
         colliderBtn.visibility = if (o != null && !joy && !light && !st && !cam) View.VISIBLE else View.GONE
         lightPanel.visibility = if (light) View.VISIBLE else View.GONE
+        shadowPanel.visibility = if (st) View.VISIBLE else View.GONE
         shadowBtn.visibility = colliderBtn.visibility
         nameField.isEnabled = o != null
         for ((i, f) in fields.withIndex()) {
@@ -964,6 +1112,24 @@ end
             else String.format(Locale.US, "Distance (how far the light reaches)   %.0f", o.sy)
             if (!sliderA.isPressed) sliderA.progress = (o.sx * 20f).toInt().coerceIn(0, 100)
             if (!sliderB.isPressed) sliderB.progress = (if (isSun) o.sy * 100f else o.sy - 1f).toInt().coerceIn(0, 100)
+        }
+        if (o.shape == Shape.SETTINGS) {
+            shLabels[0].text = String.format(Locale.US, "Shadow strength   %.2f  (0 = no shadows)", o.ry)
+            shLabels[1].text = String.format(Locale.US, "Softness (blurry edge)   %.2f", o.soft)
+            shLabels[2].text = String.format(Locale.US, "Ground height   %.2f  (where shadows land)", o.rz)
+            if (!shSliders[0].isPressed) shSliders[0].progress = (o.ry * 100f).toInt().coerceIn(0, 100)
+            if (!shSliders[1].isPressed) shSliders[1].progress = (o.soft * 100f).toInt().coerceIn(0, 100)
+            if (!shSliders[2].isPressed) shSliders[2].progress = ((o.rz + 5f) / 0.15f).toInt().coerceIn(0, 100)
+            skyPhotoBtn.text = "Sky photo: " + (if (o.photo.isEmpty()) "none" else "on")
+            skyModeBtn.text = "Mapping: " + (if (o.pattern == 1) "Backdrop" else "Panorama")
+            val names = arrayOf("Red", "Green", "Blue")
+            for (i in 0..2) {
+                skyLabels[i].text = String.format(Locale.US, "%s   %.2f", names[i], o.color[i])
+                if (!skySliders[i].isPressed) skySliders[i].progress = (o.color[i] * 100f).toInt().coerceIn(0, 100)
+            }
+            skyPreview.setBackgroundColor(
+                Color.rgb((o.color[0] * 255f).toInt().coerceIn(0, 255), (o.color[1] * 255f).toInt().coerceIn(0, 255), (o.color[2] * 255f).toInt().coerceIn(0, 255))
+            )
         }
         colliderBtn.text = "Collider: " + arrayOf("Off", "Solid (blocks)", "Trigger (events only)")[o.collider.coerceIn(0, 2)]
         val v = floatArrayOf(o.x, o.y, o.z, o.rx, o.ry, o.rz, o.sx, o.sy, o.sz)
@@ -1260,6 +1426,7 @@ end
             reqExport -> writeProject(uri)
             reqOpen -> readProject(uri)
             reqObj -> writeObj(uri)
+            reqPhoto -> importPhoto(uri)
         }
     }
 
@@ -1293,6 +1460,135 @@ end
         }.start()
     }
 
+    // ---------- Photos ----------
+
+    private fun photosDir() = File(filesDir, "photos").apply { mkdirs() }
+
+    private fun photoKeys(): List<String> = photosDir().listFiles()?.map { it.name }?.sorted() ?: emptyList()
+
+    /** Called on the GL thread. Photos are stored already rotated and shrunk, so this is a plain decode. */
+    private fun decodePhoto(key: String): Bitmap? {
+        val f = File(photosDir(), key)
+        return if (f.exists()) BitmapFactory.decodeFile(f.path) else null
+    }
+
+    private fun showImportMenu() {
+        val pm = PopupMenu(this, importButton)
+        pm.menu.add(0, 1, 0, "3D model (.obj, .glb, .gltf)")
+        pm.menu.add(0, 2, 1, "Photo (as a picture panel)")
+        pm.setOnMenuItemClickListener { item ->
+            if (item.itemId == 1) pickModel() else { photoForSelected = false; photoForSky = false; pickPhoto() }
+            true
+        }
+        pm.show()
+    }
+
+    private fun showSkyPhotoMenu() {
+        val st = scene.selected
+        if (st == null || st.shape != Shape.SETTINGS) return
+        val keys = photoKeys()
+        val pm = PopupMenu(this, skyPhotoBtn)
+        pm.menu.add(0, 0, 0, "No sky photo")
+        keys.forEachIndexed { i, _ -> pm.menu.add(0, 100 + i, 1 + i, "Photo " + (i + 1)) }
+        pm.menu.add(0, 1, 1000, "Import new photo...")
+        pm.setOnMenuItemClickListener { item ->
+            when {
+                item.itemId == 0 -> { st.photo = ""; editor.refresh() }
+                item.itemId == 1 -> { photoForSky = true; photoForSelected = false; pickPhoto() }
+                item.itemId >= 100 -> { st.photo = keys[item.itemId - 100]; editor.refresh() }
+            }
+            true
+        }
+        pm.show()
+    }
+
+    private fun pickPhoto() {
+        val i = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "image/*"
+        }
+        startActivityForResult(i, reqPhoto)
+    }
+
+    private fun showPhotoMenu() {
+        val o = matTarget()
+        if (o == null) { toast("Select a cube, pyramid, sphere or model first"); return }
+        val keys = photoKeys()
+        val pm = PopupMenu(this, photoBtn)
+        pm.menu.add(0, 0, 0, "No photo")
+        keys.forEachIndexed { i, _ -> pm.menu.add(0, 100 + i, 1 + i, "Photo " + (i + 1)) }
+        pm.menu.add(0, 1, 1000, "Import new photo...")
+        pm.setOnMenuItemClickListener { item ->
+            when {
+                item.itemId == 0 -> { o.photo = ""; editor.refresh() }
+                item.itemId == 1 -> { photoForSelected = true; photoForSky = false; pickPhoto() }
+                item.itemId >= 100 -> { o.photo = keys[item.itemId - 100]; editor.refresh() }
+            }
+            true
+        }
+        pm.show()
+    }
+
+    /** Copies the picked picture into app storage (rotated upright, at most 1280 px) and shows it on an object. */
+    private fun importPhoto(uri: Uri) {
+        toast("Importing photo ...")
+        Thread {
+            try {
+                val bytes = contentResolver.openInputStream(uri)!!.use { it.readBytes() }
+                val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+                var sample = 1
+                while (maxOf(bounds.outWidth, bounds.outHeight) / sample > 2048) sample *= 2
+                var bmp = BitmapFactory.decodeByteArray(
+                    bytes, 0, bytes.size, BitmapFactory.Options().apply { inSampleSize = sample }
+                ) ?: throw IllegalArgumentException("Not a picture")
+                val orient = try {
+                    ExifInterface(ByteArrayInputStream(bytes)).getAttributeInt(
+                        ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL
+                    )
+                } catch (e: Throwable) { ExifInterface.ORIENTATION_NORMAL }
+                val deg = when (orient) {
+                    ExifInterface.ORIENTATION_ROTATE_90 -> 90f
+                    ExifInterface.ORIENTATION_ROTATE_180 -> 180f
+                    ExifInterface.ORIENTATION_ROTATE_270 -> 270f
+                    else -> 0f
+                }
+                if (deg != 0f) {
+                    val m = android.graphics.Matrix()
+                    m.postRotate(deg)
+                    bmp = Bitmap.createBitmap(bmp, 0, 0, bmp.width, bmp.height, m, true)
+                }
+                val longest = maxOf(bmp.width, bmp.height)
+                if (longest > 1280) {
+                    val k = 1280f / longest
+                    bmp = Bitmap.createScaledBitmap(bmp, (bmp.width * k).toInt(), (bmp.height * k).toInt(), true)
+                }
+                val key = System.currentTimeMillis().toString() + "_photo.jpg"
+                FileOutputStream(File(photosDir(), key)).use { bmp.compress(Bitmap.CompressFormat.JPEG, 90, it) }
+                val aspect = bmp.width.toFloat() / bmp.height
+                runOnUiThread {
+                    val sel = matTarget()
+                    val skyObj = scene.objects.firstOrNull { it.shape == Shape.SETTINGS }
+                    if (photoForSky && skyObj != null) {
+                        skyObj.photo = key
+                        toast("Sky photo set")
+                    } else if (photoForSelected && sel != null) {
+                        sel.photo = key
+                        toast("Photo applied")
+                    } else {
+                        scene.addPhoto(key, aspect)
+                        toast("Photo added as a panel. Resize it in Inspector.")
+                    }
+                    photoForSelected = false
+                    photoForSky = false
+                    editor.refresh()
+                }
+            } catch (e: Throwable) {
+                runOnUiThread { toast("Photo import failed: " + e.message) }
+            }
+        }.start()
+    }
+
     // ---------- Export / open (scene + models + scripts as a .zip) ----------
 
     private fun exportProject() {
@@ -1315,6 +1611,7 @@ end
     private fun writeProject(uri: Uri) {
         val json = scene.toJson()
         val keys = scene.objects.mapNotNull { it.model?.key }.toSet()
+        val photoKeys = scene.objects.map { it.photo }.filter { it.isNotEmpty() }.toSet()
         Thread {
             try {
                 contentResolver.openOutputStream(uri)!!.use { os ->
@@ -1326,6 +1623,14 @@ end
                             val f = File(modelsDir(), k)
                             if (f.exists()) {
                                 z.putNextEntry(ZipEntry("models/" + k))
+                                z.write(f.readBytes())
+                                z.closeEntry()
+                            }
+                        }
+                        for (k in photoKeys) {
+                            val f = File(photosDir(), k)
+                            if (f.exists()) {
+                                z.putNextEntry(ZipEntry("photos/" + k))
                                 z.write(f.readBytes())
                                 z.closeEntry()
                             }
@@ -1352,6 +1657,7 @@ end
                         val data = z.readBytes()
                         if (name == "scene.json") json = String(data)
                         else if (e.name.startsWith("models/")) File(modelsDir(), name).writeBytes(data)
+                        else if (e.name.startsWith("photos/")) File(photosDir(), name).writeBytes(data)
                     }
                 }
                 val text = json ?: throw IllegalArgumentException("No scene.json in file")

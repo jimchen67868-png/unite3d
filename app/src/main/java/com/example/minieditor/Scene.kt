@@ -36,6 +36,9 @@ class SceneObject(
     var emit = 0f         // glow 0-1
     var opacity = 1f      // 1 = solid, lower = see-through
     var pattern = 0       // 0 none, 1 checker, 2 stripes
+    var soft = 0.4f       // Settings: shadow softness 0-1
+    var tint = floatArrayOf(0f, 0f, 0f)   // Settings: shadow colour
+    var photo: String = ""   // key of an imported photo used as the surface picture
     var collider: Int = 0   // 0 = none, 1 = solid (blocks), 2 = trigger (events only)
 }
 
@@ -134,6 +137,21 @@ class Scene {
         return o
     }
 
+    /** A thin standing panel showing an imported photo, sized to the photo's shape. */
+    fun addPhoto(key: String, aspect: Float): SceneObject {
+        val o = add(Shape.CUBE)
+        o.name = "Photo " + counter
+        val a = aspect.coerceIn(0.2f, 5f)
+        val h = if (a >= 1f) 2f else 2.5f
+        o.sx = h * a
+        o.sy = h
+        o.sz = 0.06f
+        o.y = h / 2f
+        o.photo = key
+        o.spec = 0.1f
+        return o
+    }
+
     /** A solid 1x1x1 cube sitting on the grid, ready for building. */
     fun addBlock(): SceneObject {
         val o = add(Shape.CUBE)
@@ -154,6 +172,7 @@ class Scene {
         o.script = s.script
         o.collider = s.collider
         o.shadow = s.shadow
+        o.photo = s.photo
         o.spec = s.spec; o.gloss = s.gloss; o.emit = s.emit; o.opacity = s.opacity; o.pattern = s.pattern
         objects.add(o)
         selected = o
@@ -175,6 +194,7 @@ class Scene {
             put("shadow", o.shadow)
             put("spec", o.spec.toDouble()); put("gloss", o.gloss.toDouble())
             put("emit", o.emit.toDouble()); put("opacity", o.opacity.toDouble()); put("pattern", o.pattern)
+            put("photo", o.photo); put("soft", o.soft.toDouble()); put("tintR", o.tint[0].toDouble()); put("tintG", o.tint[1].toDouble()); put("tintB", o.tint[2].toDouble())
             o.model?.let { put("model", it.key) }
             put("x", o.x.toDouble()); put("y", o.y.toDouble()); put("z", o.z.toDouble())
             put("rx", o.rx.toDouble()); put("ry", o.ry.toDouble()); put("rz", o.rz.toDouble())
@@ -206,7 +226,10 @@ class Scene {
             ).also { it.script = j.optString("script", ""); it.collider = j.optInt("collider", 0); it.shadow = j.optBoolean("shadow", true)
                 it.spec = j.optDouble("spec", 0.25).toFloat(); it.gloss = j.optDouble("gloss", 0.5).toFloat()
                 it.emit = j.optDouble("emit", 0.0).toFloat(); it.opacity = j.optDouble("opacity", 1.0).toFloat()
-                it.pattern = j.optInt("pattern", 0) })
+                it.pattern = j.optInt("pattern", 0)
+                it.soft = j.optDouble("soft", 0.4).toFloat()
+                it.photo = j.optString("photo", "")
+                it.tint = floatArrayOf(j.optDouble("tintR", 0.0).toFloat(), j.optDouble("tintG", 0.0).toFloat(), j.optDouble("tintB", 0.0).toFloat()) })
         }
         selected = null
         objects.clear()

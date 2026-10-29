@@ -1,6 +1,8 @@
 package com.example.minieditor
 
+import android.graphics.Bitmap
 import android.opengl.GLES20
+import android.opengl.GLUtils
 import android.opengl.GLSurfaceView
 import android.opengl.Matrix
 import javax.microedition.khronos.egl.EGLConfig
@@ -45,11 +47,17 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
     private var uLPos = 0; private var uLCol = 0; private var uLCount = 0
     private var uEye = 0; private var uFogColor = 0; private var uFogEnd = 0
     private var uSpec = 0; private var uGloss = 0; private var uEmit = 0; private var uPattern = 0; private var uObjScale = 0
+    private var uTex = 0; private var uUseTex = 0; private var uMapMode = 0
     private lateinit var meshes: Map<Shape, Mesh>
     private lateinit var grid: Mesh
     private lateinit var gizmo: Mesh
     private lateinit var circle: Mesh
+    private lateinit var quad: Mesh
+    private val photoAspect = HashMap<String, Float>()
+    private var skyLit = 0f
     private val modelMeshes = HashMap<String, Mesh>()
+    private val photoTex = HashMap<String, Int>()
+    @Volatile var photoLoader: ((String) -> Bitmap?)? = null
 
     private val vertexSrc = """
         uniform mat4 uMVP;
@@ -59,7 +67,9 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         varying vec3 vN;
         varying vec3 vW;
         varying vec3 vL;
+        varying vec3 vLN;
         void main() {
+            vLN = aNorm;
             vN = (uModel * vec4(aNorm, 0.0)).xyz;
             vW = (uModel * vec4(aPos, 1.0)).xyz;
             vL = aPos;
@@ -92,7 +102,39 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         varying vec3 vN;
         varying vec3 vW;
         varying vec3 vL;
+        varying vec3 vLN;
+        uniform sampler2D uTex;
+        uniform float uUseTex;
+        uniform float uMapMode;
+        vec2 photoUV(vec3 p, vec3 n) {
+            vec3 a = abs(n);
+            if (uMapMode > 0.5) {
+                float u = atan(p.z, p.x) / 6.2831853 + 0.5;
+                float v = 0.5 - asin(clamp(p.y / 0.5, -1.0, 1.0)) / 3.1415926;
+                return vec2(u, v);
+            }
+            if (a.y >= a.x && a.y >= a.z) {
+                if (n.y > 0.0) return vec2(p.x + 0.5, p.z + 0.5);
+                return vec2(p.x + 0.5, 0.5 - p.z);
+            }
+            if (a.x >= a.z) {
+                if (n.x > 0.0) return vec2(0.5 - p.z, 0.5 - p.y);
+                return vec2(p.z + 0.5, 0.5 - p.y);
+            }
+            if (n.z > 0.0) return vec2(p.x + 0.5, 0.5 - p.y);
+            return vec2(0.5 - p.x, 0.5 - p.y);
+        }
         void main() {
+            if (uLit > 2.5) {
+                vec2 q = vec2(vL.x * 0.5 + 0.5, 0.5 - vL.y * 0.5);
+                vec2 uv = vec2(0.5 + (q.x - 0.5) * uObjScale.x + uObjScale.z, 0.5 + (q.y - 0.5) * uObjScale.y);
+                gl_FragColor = vec4(texture2D(uTex, uv).rgb, 1.0);
+                return;
+            }
+            if (uLit > 1.5) {
+                gl_FragColor = vec4(texture2D(uTex, photoUV(vL, normalize(vLN))).rgb, 1.0);
+                return;
+            }
             if (uLit < 0.5) { gl_FragColor = uColor; return; }
             vec3 n = normalize(vN);
             vec3 v = normalize(uEye - vW);
@@ -120,6 +162,9 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
                 }
             }
             vec3 base = uColor.rgb;
+            if (uUseTex > 0.5) {
+                base = texture2D(uTex, photoUV(vL, normalize(vLN))).rgb * uColor.rgb;
+            }
             if (uPattern > 0.5) {
                 vec3 q = vL * uObjScale * 2.0;
                 float k = 0.0;
@@ -150,6 +195,7 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
     override fun onSurfaceCreated(gl: GL10?, config: EGLConfig?) {
         GLES20.glClearColor(0.15f, 0.16f, 0.19f, 1f)
         GLES20.glEnable(GLES20.GL_DEPTH_TEST)
+        photoTex.clear()   // textures are lost with the GL context
         prog = GLES20.glCreateProgram()
         GLES20.glAttachShader(prog, compile(GLES20.GL_VERTEX_SHADER, vertexSrc))
         GLES20.glAttachShader(prog, compile(GLES20.GL_FRAGMENT_SHADER, fragmentSrc))
@@ -174,10 +220,14 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         uEmit = GLES20.glGetUniformLocation(prog, "uEmit")
         uPattern = GLES20.glGetUniformLocation(prog, "uPattern")
         uObjScale = GLES20.glGetUniformLocation(prog, "uObjScale")
+        uTex = GLES20.glGetUniformLocation(prog, "uTex")
+        uUseTex = GLES20.glGetUniformLocation(prog, "uUseTex")
+        uMapMode = GLES20.glGetUniformLocation(prog, "uMapMode")
         meshes = mapOf(Shape.CUBE to Meshes.cube(), Shape.PYRAMID to Meshes.pyramid(), Shape.SPHERE to Meshes.sphere())
         grid = Meshes.grid()
         gizmo = Meshes.gizmo()
         circle = Meshes.circle()
+        quad = Meshes.quad()
     }
 
     override fun onSurfaceChanged(gl: GL10?, width: Int, height: Int) {
@@ -256,7 +306,7 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         GLES20.glUniformMatrix4fv(uMVP, 1, false, mvp, 0)
         GLES20.glUniformMatrix4fv(uModel, 1, false, modelM, 0)
         GLES20.glUniform4f(uColor, color[0], color[1], color[2], alpha)
-        GLES20.glUniform1f(uLit, if (lit) 1f else 0f)
+        GLES20.glUniform1f(uLit, if (skyLit > 0f) skyLit else if (lit) 1f else 0f)
         m.draw(aPos, aNorm, first, n)
     }
 
@@ -369,12 +419,45 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         drawMesh(gizmo, vpc, model, floatArrayOf(0.4f, 0.8f, 1f), false, 4, 2)
     }
 
+    /** GL texture for an imported photo (loaded once on first use; 0 if the file is missing). */
+    private fun textureFor(key: String): Int {
+        val cached = photoTex[key]
+        if (cached != null) return cached
+        var id = 0
+        val bmp = try { photoLoader?.invoke(key) } catch (e: Throwable) { null }
+        if (bmp != null) {
+            val ids = IntArray(1)
+            GLES20.glGenTextures(1, ids, 0)
+            GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, ids[0])
+            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR)
+            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_LINEAR)
+            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE)
+            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE)
+            GLUtils.texImage2D(GLES20.GL_TEXTURE_2D, 0, bmp, 0)
+            photoAspect[key] = bmp.width.toFloat() / bmp.height
+            bmp.recycle()
+            id = ids[0]
+        }
+        photoTex[key] = id
+        return id
+    }
+
     private fun setMaterial(o: SceneObject) {
         GLES20.glUniform1f(uSpec, o.spec.coerceIn(0f, 1f))
         GLES20.glUniform1f(uGloss, o.gloss.coerceIn(0f, 1f))
         GLES20.glUniform1f(uEmit, o.emit.coerceIn(0f, 1f))
         GLES20.glUniform1f(uPattern, o.pattern.toFloat())
         GLES20.glUniform3f(uObjScale, o.sx, o.sy, o.sz)
+        val tex = if (o.photo.isNotEmpty()) textureFor(o.photo) else 0
+        if (tex > 0) {
+            GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
+            GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, tex)
+            GLES20.glUniform1i(uTex, 0)
+            GLES20.glUniform1f(uMapMode, if (o.shape == Shape.SPHERE) 1f else 0f)
+            GLES20.glUniform1f(uUseTex, 1f)
+        } else {
+            GLES20.glUniform1f(uUseTex, 0f)
+        }
     }
 
     private fun drawObject(o: SceneObject, vpc: FloatArray, sel: SceneObject?, alpha: Float) {
@@ -384,9 +467,12 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         Matrix.rotateM(model, 0, o.rx, 1f, 0f, 0f)
         Matrix.rotateM(model, 0, o.rz, 0f, 0f, 1f)
         Matrix.scaleM(model, 0, o.sx, o.sy, o.sz)
-        val c = if (o === sel)
+        val hasPhoto = o.photo.isNotEmpty() && textureFor(o.photo) > 0
+        val c = if (hasPhoto) {
+            if (o === sel) floatArrayOf(1.3f, 1.3f, 1.3f) else floatArrayOf(1f, 1f, 1f)
+        } else if (o === sel) {
             floatArrayOf(o.color[0] * 0.6f + 0.4f, o.color[1] * 0.6f + 0.4f, o.color[2] * 0.6f + 0.4f)
-        else o.color
+        } else o.color
         setMaterial(o)
         val mesh = meshFor(o)
         drawMesh(mesh, vpc, model, c, true, 0, mesh.count, alpha)
@@ -430,25 +516,27 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         }
     }
 
+    private fun passAlpha(total: Float, n: Int): Float =
+        1f - Math.pow((1f - total.coerceIn(0f, 0.99f)).toDouble(), 1.0 / n).toFloat()
+
     /**
-     * Soft ground shadows: every object that casts a shadow is flattened onto the ground (Settings: ground height)
-     * once for the sun and once for each point light. Strength = Settings shadow value (0 = off, default 0.5).
+     * Ground shadows: every object that casts a shadow is flattened onto the ground (Settings: ground height)
+     * for the sun and for each point light. Settings controls strength, softness (several slightly shifted copies
+     * blended together), colour and ground height. Defaults without a Settings object: strength 0.5, softness 0.4, black.
      */
     private fun drawShadows(vpc: FloatArray) {
         val st = scene.objects.firstOrNull { it.shape == Shape.SETTINGS }
         val strength = if (st != null) st.ry.coerceIn(0f, 1f) else 0.5f
         if (strength <= 0.01f) return
         val gh = (if (st != null) st.rz else 0f) + 0.01f
+        val soft = (st?.soft ?: 0.4f).coerceIn(0f, 1f)
+        val tint = st?.tint ?: floatArrayOf(0f, 0f, 0f)
         val casters = scene.objects.filter { o ->
             o.shadow && !o.shape.isScreen && !o.shape.isLight && o.shape != Shape.SETTINGS && o.shape != Shape.CAMERA &&
                 o.y + 0.5f * o.sy > gh + 0.04f
         }
         if (casters.isEmpty()) return
-        GLES20.glEnable(GLES20.GL_BLEND)
-        GLES20.glBlendFunc(GLES20.GL_SRC_ALPHA, GLES20.GL_ONE_MINUS_SRC_ALPHA)
-        val black = floatArrayOf(0f, 0f, 0f)
 
-        // sun (the Sun object, or the built-in sun)
         val sun = scene.objects.firstOrNull { it.shape == Shape.SUN }
         var lx = 0.4f
         var ly = 1f
@@ -463,23 +551,39 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
             sunPower = sun.sx
         }
         val ll = sqrt(lx * lx + ly * ly + lz * lz)
-        if (ll > 0f && ly / ll > 0.08f && sunPower > 0.05f) {
-            dirMatrix(shM, -lx / ll, -ly / ll, -lz / ll, gh)
-            drawShadowSet(casters, vpc, black, strength * 0.6f * minOf(1f, sunPower)) { false }
-        }
+        val sunOk = ll > 0f && ly / ll > 0.08f && sunPower > 0.05f
+        val lights = scene.objects.filter { it.shape == Shape.LIGHT }.take(4).filter { l -> l.y >= gh + 0.3f && l.sx >= 0.05f }
+        if (!sunOk && lights.isEmpty()) return
 
-        // point lights
-        for (l in scene.objects.filter { it.shape == Shape.LIGHT }.take(4)) {
-            if (l.y < gh + 0.3f || l.sx < 0.05f) continue
-            pointMatrix(shM, l.x, l.y, l.z, gh)
-            val a = strength * 0.6f * minOf(1f, l.sx / 1.5f)
-            drawShadowSet(casters, vpc, black, a) { o ->
-                val dx = o.x - l.x
-                val dy = o.y - l.y
-                val dz = o.z - l.z
-                o.y >= l.y - 0.1f || dx * dx + dy * dy + dz * dz > l.sy * l.sy
+        val samples = if (soft > 0.02f) 5 else 1
+        val ox = floatArrayOf(0f, 1f, -1f, 0f, 0f)
+        val oz = floatArrayOf(0f, 0f, 0f, 1f, -1f)
+        GLES20.glEnable(GLES20.GL_BLEND)
+        GLES20.glBlendFunc(GLES20.GL_SRC_ALPHA, GLES20.GL_ONE_MINUS_SRC_ALPHA)
+        GLES20.glEnable(GLES20.GL_POLYGON_OFFSET_FILL)
+        for (k in 0 until samples) {
+            // each copy sits a hair closer to the camera so every copy blends, but copies of the same
+            // pass never double up where one object's flattened faces overlap
+            GLES20.glPolygonOffset(0f, -(k + 1) * 1.5f)
+            if (sunOk) {
+                val sp = soft * 0.15f
+                dirMatrix(shM, -lx / ll + ox[k] * sp, -ly / ll, -lz / ll + oz[k] * sp, gh)
+                val total = strength * 0.6f * minOf(1f, sunPower)
+                drawShadowSet(casters, vpc, tint, passAlpha(total, samples)) { false }
+            }
+            for (l in lights) {
+                val j = soft * 0.8f
+                pointMatrix(shM, l.x + ox[k] * j, l.y, l.z + oz[k] * j, gh)
+                val total = strength * 0.6f * minOf(1f, l.sx / 1.5f)
+                drawShadowSet(casters, vpc, tint, passAlpha(total, samples)) { o ->
+                    val dx = o.x - l.x
+                    val dy = o.y - l.y
+                    val dz = o.z - l.z
+                    o.y >= l.y - 0.1f || dx * dx + dy * dy + dz * dz > l.sy * l.sy
+                }
             }
         }
+        GLES20.glDisable(GLES20.GL_POLYGON_OFFSET_FILL)
         GLES20.glDisable(GLES20.GL_BLEND)
     }
 
@@ -500,6 +604,43 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         GLES20.glUseProgram(prog)
         System.arraycopy(eyeC, 0, curEye, 0, 3)
         setLights(eyeC)
+
+        // Sky photo (Settings): panorama wraps all the way round the camera; backdrop is a fixed picture behind the scene
+        val skyKey = settings?.photo ?: ""
+        if (skyKey.isNotEmpty()) {
+            val tex = textureFor(skyKey)
+            if (tex > 0) {
+                val backdrop = settings != null && settings.pattern == 1
+                GLES20.glDisable(GLES20.GL_DEPTH_TEST)
+                GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
+                GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, tex)
+                GLES20.glUniform1i(uTex, 0)
+                GLES20.glUniform1f(uUseTex, 1f)
+                val white = floatArrayOf(1f, 1f, 1f)
+                Matrix.setIdentityM(model, 0)
+                if (backdrop) {
+                    val a = photoAspect[skyKey] ?: 1f
+                    val sa = w.toFloat() / h
+                    var uS = 1f
+                    var vS = 1f
+                    if (a > sa) uS = sa / a else vS = a / sa
+                    val pan = (1f - uS) * 0.5f * sin(Math.toRadians(yaw.toDouble())).toFloat()
+                    GLES20.glUniform3f(uObjScale, uS, vS, pan)
+                    val ident = FloatArray(16)
+                    Matrix.setIdentityM(ident, 0)
+                    skyLit = 3f
+                    drawMesh(quad, ident, model, white, false)
+                } else {
+                    GLES20.glUniform1f(uMapMode, 1f)
+                    Matrix.translateM(model, 0, eyeC[0], eyeC[1], eyeC[2])
+                    Matrix.scaleM(model, 0, 140f, 140f, 140f)
+                    skyLit = 2f
+                    drawMesh(meshes.getValue(Shape.SPHERE), vpc, model, white, false)
+                }
+                skyLit = 0f
+                GLES20.glEnable(GLES20.GL_DEPTH_TEST)
+            }
+        }
 
         // Grid + axes
         Matrix.setIdentityM(model, 0)
