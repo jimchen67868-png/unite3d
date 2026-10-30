@@ -118,6 +118,21 @@ class ScriptEngine(private val scene: Scene, private val log: (String) -> Unit) 
         }
     }
 
+    /** groundHeight(x, z) = height of the terrain surface at that spot (0 if there is no terrain). */
+    private val groundFn = object : VarArgFunction() {
+        override fun invoke(args: Varargs): Varargs {
+            val x = args.optdouble(1, 0.0).toFloat()
+            val z = args.optdouble(2, 0.0).toFloat()
+            var best: Float? = null
+            for (o in tables.keys) {
+                if (o.shape != Shape.TERRAIN) continue
+                val h = TerrainGen.heightAt(o, x, z) ?: continue
+                best = if (best == null) h else maxOf(best, h)
+            }
+            return LuaValue.valueOf((best ?: 0f).toDouble())
+        }
+    }
+
     private val destroyFn = object : OneArgFunction() {
         override fun call(arg: LuaValue): LuaValue {
             for ((o, t) in tables.entries.toList()) {
@@ -198,13 +213,20 @@ class ScriptEngine(private val scene: Scene, private val log: (String) -> Unit) 
 
     private fun pullAll() { for ((o, t) in tables.entries.toList()) pull(o, t) }
 
+    /** Ignores tiny tilts so hand shake does not move things. */
+    private fun deadZone(v: Float): Float {
+        val a = abs(v)
+        if (a < 0.06f) return 0f
+        return (a - 0.06f) / 0.94f * (if (v < 0f) -1f else 1f)
+    }
+
     private fun updateInput() {
         input.set("touching", LuaValue.valueOf(touching))
         input.set("x", touchX.toDouble())
         input.set("y", touchY.toDouble())
         val g = 9.81f
-        val tx = (-ax / g).coerceIn(-1f, 1f)
-        val ty = (-ay / g).coerceIn(-1f, 1f)
+        val tx = deadZone((-ax / g).coerceIn(-1f, 1f))
+        val ty = deadZone((-ay / g).coerceIn(-1f, 1f))
         val yaw = Math.toRadians(camYaw.toDouble())
         val c = cos(yaw).toFloat()
         val s = sin(yaw).toFloat()
@@ -314,10 +336,11 @@ class ScriptEngine(private val scene: Scene, private val log: (String) -> Unit) 
         if (st != null && st.sz < 0.5f) return
         val cols = ArrayList<SceneObject>()
         for (o in tables.keys) {
-            if (o.collider != 0 && !o.shape.isScreen && !o.shape.isLight && o.shape != Shape.SETTINGS) cols.add(o)
+            if (o.collider != 0 && !o.shape.isScreen && !o.shape.isLight && o.shape != Shape.SETTINGS && o.shape != Shape.TERRAIN) cols.add(o)
         }
+        val terrains = tables.keys.filter { it.shape == Shape.TERRAIN && it.collider == 1 && it.heights != null }
         val n = cols.size
-        if (n < 2) return
+        if (n < 2 && terrains.isEmpty()) return
         val moved = BooleanArray(n) { i ->
             val o = cols[i]
             val p = prev[o]
@@ -345,6 +368,25 @@ class ScriptEngine(private val scene: Scene, private val log: (String) -> Unit) 
                     } else {
                         a.z += (if (dz >= 0f) 1f else -1f) * ov[2] * k
                     }
+                }
+            }
+        }
+        // solid objects stand on the terrain surface
+        for (i in 0 until n) {
+            val a = cols[i]
+            if (a.collider != 1) continue
+            for (tr in terrains) {
+                val ex = 0.5f * a.sx * 0.7f
+                val ez = 0.5f * a.sz * 0.7f
+                val c = TerrainGen.heightAt(tr, a.x, a.z) ?: continue
+                var top = c
+                top = maxOf(top, TerrainGen.heightAt(tr, a.x + ex, a.z) ?: c)
+                top = maxOf(top, TerrainGen.heightAt(tr, a.x - ex, a.z) ?: c)
+                top = maxOf(top, TerrainGen.heightAt(tr, a.x, a.z + ez) ?: c)
+                top = maxOf(top, TerrainGen.heightAt(tr, a.x, a.z - ez) ?: c)
+                if (a.y - 0.5f * a.sy < top) {
+                    a.y = top + 0.5f * a.sy
+                    grounded.add(a)
                 }
             }
         }
@@ -384,6 +426,7 @@ class ScriptEngine(private val scene: Scene, private val log: (String) -> Unit) 
                 g.set("camera", camera)
                 g.set("find", findFn)
                 g.set("spawn", spawnFn)
+                g.set("groundHeight", groundFn)
                 g.set("destroy", destroyFn)
                 g.set("log", logFn)
                 g.set("print", logFn)

@@ -38,6 +38,7 @@ import java.io.ByteArrayInputStream
 import java.io.File
 import java.io.FileOutputStream
 import java.util.Locale
+import kotlin.random.Random
 import kotlin.math.cos
 import kotlin.math.sin
 import kotlin.math.sqrt
@@ -62,6 +63,10 @@ class MainActivity : Activity(), SensorEventListener {
     private var showCoords = true
     @Volatile private var labelPending = false
     private lateinit var colliderBtn: Button
+    private lateinit var terrainPanel: LinearLayout
+    private lateinit var sculptBtn: Button
+    private lateinit var brushLabels: Array<TextView>
+    private lateinit var brushSliders: Array<SeekBar>
     private lateinit var importButton: Button
     private lateinit var photoBtn: Button
     private lateinit var skyPhotoBtn: Button
@@ -131,6 +136,14 @@ class MainActivity : Activity(), SensorEventListener {
     private var lastFrame = 0L
     private val logLines = ArrayList<String>()
     private var ax = 0f
+    private var fax = 0f
+    private var fay = 0f
+    private var faz = 0f
+    private var bax = 0f
+    private var bay = 0f
+    private var baz = 0f
+    private var sensorInit = false
+    private var tiltOn = true
     private var ay = 0f
     private var az = 0f
 
@@ -341,6 +354,7 @@ end
         pm.menu.add(0, 6, 5, "New scene")
         pm.menu.add(0, 9, 8, "Show coordinates: " + (if (showCoords) "on" else "off"))
         pm.menu.add(0, 10, 9, "Shadow settings...")
+        pm.menu.add(0, 11, 10, "Tilt control: " + (if (tiltOn) "on" else "off"))
         pm.menu.add(0, 7, 6, "Load sample game (Coin Rush)")
         pm.menu.add(0, 8, 7, "Editor lighting: " + (if (editor.renderer.editorBright) "Bright (tap for Scene)" else "Scene (tap for Bright)"))
         pm.setOnMenuItemClickListener { item ->
@@ -357,6 +371,7 @@ end
                     7 -> loadSample()
                     8 -> { editor.renderer.editorBright = !editor.renderer.editorBright; editor.refresh() }
                     9 -> { showCoords = !showCoords; editor.refresh() }
+                    11 -> { tiltOn = !tiltOn; toast("Tilt control " + (if (tiltOn) "on" else "off")) }
                     10 -> {
                         val s = scene.objects.firstOrNull { it.shape == Shape.SETTINGS } ?: scene.addSettings()
                         scene.selected = s
@@ -400,7 +415,9 @@ end
             lastFrame = frameTimeNanos
             readButtons()
             engine?.let {
-                it.ax = ax; it.ay = ay; it.az = az
+                it.ax = if (tiltOn) fax - bax else 0f
+                it.ay = if (tiltOn) fay - bay else 0f
+                it.az = if (tiltOn) faz - baz else 0f
                 it.camYaw = editor.renderer.yaw
                 it.joyX = joystick.jx; it.joyY = joystick.jy; it.joyActive = joystick.active
                 it.jump = btnJump
@@ -502,6 +519,7 @@ end
         } catch (e: Throwable) {
             appendLog("Script error: " + e.message)
         }
+        sensorInit = false
         val sm = getSystemService(SENSOR_SERVICE) as SensorManager
         sm.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)?.let {
             sm.registerListener(this, it, SensorManager.SENSOR_DELAY_GAME)
@@ -648,8 +666,24 @@ end
             for (i in 0..3) {
                 addView(matLabels[i])
                 addView(matSliders[i])
+                if (i == 3) {
+                    // fine control: the slider is touchy, these change opacity by an exact amount
+                    addView(row(
+                        btn("-10%") { nudgeOpacity(-0.1f) },
+                        btn("-1%") { nudgeOpacity(-0.01f) },
+                        btn("+1%") { nudgeOpacity(0.01f) },
+                        btn("+10%") { nudgeOpacity(0.1f) },
+                        btn("Solid") { nudgeOpacity(1f) }
+                    ))
+                }
             }
         }
+    }
+
+    private fun nudgeOpacity(d: Float) {
+        val o = matTarget() ?: return
+        o.opacity = (Math.round((o.opacity + d) * 100f) / 100f).coerceIn(0.02f, 1f)
+        editor.refresh()
     }
 
     private fun applyMat(i: Int, p: Int) {
@@ -658,7 +692,7 @@ end
             0 -> o.spec = p / 100f
             1 -> o.gloss = p / 100f
             2 -> o.emit = p / 100f
-            3 -> o.opacity = (p / 100f).coerceAtLeast(0.05f)
+            3 -> o.opacity = (p / 100f).coerceAtLeast(0.02f)
         }
         editor.refresh()
     }
@@ -702,7 +736,8 @@ end
         matLabels[0].text = String.format(Locale.US, "Shininess   %.2f", o.spec)
         matLabels[1].text = String.format(Locale.US, "Gloss (tight highlight)   %.2f", o.gloss)
         matLabels[2].text = String.format(Locale.US, "Glow (lights itself)   %.2f", o.emit)
-        matLabels[3].text = String.format(Locale.US, "Opacity (lower = see-through)   %.2f", o.opacity)
+        val pct = Math.round(o.opacity * 100f)
+        matLabels[3].text = String.format(Locale.US, "Opacity   %d%% visible,  %d%% see-through", pct, 100 - pct)
         val vals = floatArrayOf(o.spec, o.gloss, o.emit, o.opacity)
         for (i in 0..3) if (!matSliders[i].isPressed) matSliders[i].progress = (vals[i] * 100f).toInt().coerceIn(0, 100)
         patternBtn.text = "Pattern: " + arrayOf("None", "Checker", "Stripes")[o.pattern.coerceIn(0, 2)]
@@ -734,7 +769,8 @@ end
                 btn("+Block", true) { scene.addBlock(); editor.refresh() }
             ))
             addView(row(
-                btn("+Camera", true) { if (scene.addCamera() == null) toast("Camera already added") else editor.refresh() }
+                btn("+Camera", true) { if (scene.addCamera() == null) toast("Camera already added") else editor.refresh() },
+                btn("+Terrain", true) { scene.addTerrain(); editor.refresh() }
             ))
             addView(scroll)
         }
@@ -745,7 +781,7 @@ end
         for (o in scene.objects) {
             val sel = o === scene.selected
             hierList.addView(TextView(this).apply {
-                text = (if (sel) "▶ " else "    ") + o.name + (if (o.script.isNotBlank()) "  {lua}" else "") + (if (o.shape.isScreen) "  [screen]" else "") + (if (o.shape.isLight) "  [light]" else "") + (if (o.shape == Shape.SETTINGS) "  [settings]" else "") + (if (o.shape == Shape.CAMERA) "  [camera]" else "")
+                text = (if (sel) "▶ " else "    ") + o.name + (if (o.script.isNotBlank()) "  {lua}" else "") + (if (o.shape.isScreen) "  [screen]" else "") + (if (o.shape.isLight) "  [light]" else "") + (if (o.shape == Shape.SETTINGS) "  [settings]" else "") + (if (o.shape == Shape.CAMERA) "  [camera]" else "") + (if (o.shape == Shape.TERRAIN) "  [terrain]" else "")
                 textSize = 14f
                 setTextColor(if (sel) 0xFF7FB0FF.toInt() else Color.WHITE)
                 setPadding(dp(10), dp(8), dp(10), dp(8))
@@ -948,6 +984,22 @@ end
             shadowPanel = LinearLayout(this@MainActivity).apply {
                 orientation = LinearLayout.VERTICAL
                 visibility = View.GONE
+                addView(row(
+                    btn("Hard black") {
+                        val s = scene.selected
+                        if (s != null && s.shape == Shape.SETTINGS) {
+                            s.ry = 1f; s.soft = 0f; s.tint = floatArrayOf(0f, 0f, 0f)
+                            editor.refresh()
+                        }
+                    },
+                    btn("Soft") {
+                        val s = scene.selected
+                        if (s != null && s.shape == Shape.SETTINGS) {
+                            s.ry = 0.5f; s.soft = 0.5f; s.tint = floatArrayOf(0f, 0f, 0f)
+                            editor.refresh()
+                        }
+                    }
+                ))
                 addView(shLabels[0]); addView(shSliders[0])
                 addView(shLabels[1]); addView(shSliders[1])
                 addView(shLabels[2]); addView(shSliders[2])
@@ -961,6 +1013,42 @@ end
                 })
             }
             addView(shadowPanel)
+            sculptBtn = btn("Sculpt: Off") { editor.sculpt = (editor.sculpt + 1) % 5; editor.refresh() }
+            brushLabels = Array(2) {
+                TextView(this@MainActivity).apply {
+                    textSize = 12f; setTextColor(0xFFDDDDDD.toInt()); setPadding(dp(4), dp(6), dp(4), 0)
+                }
+            }
+            brushSliders = Array(2) { i ->
+                SeekBar(this@MainActivity).apply {
+                    max = 100
+                    setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                        override fun onProgressChanged(sb: SeekBar?, p: Int, fromUser: Boolean) {
+                            if (!fromUser) return
+                            if (i == 0) editor.brushRadius = 1f + p * 0.09f else editor.brushStrength = (p / 100f).coerceAtLeast(0.05f)
+                            editor.refresh()
+                        }
+                        override fun onStartTrackingTouch(sb: SeekBar?) {}
+                        override fun onStopTrackingTouch(sb: SeekBar?) {}
+                    })
+                }
+            }
+            terrainPanel = LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.VERTICAL
+                visibility = View.GONE
+                addView(TextView(this@MainActivity).apply {
+                    text = "Terrain: turn Sculpt on, then drag over the hills. Turn it off to orbit again. Size W/H/D sets width, tallest height and depth."
+                    textSize = 11f; setTextColor(0xFFAAAAAA.toInt()); setPadding(dp(4), dp(4), dp(4), dp(2))
+                })
+                addView(row(
+                    sculptBtn,
+                    btn("New hills") { regenTerrain(false) },
+                    btn("Flat") { regenTerrain(true) }
+                ))
+                addView(brushLabels[0]); addView(brushSliders[0])
+                addView(brushLabels[1]); addView(brushSliders[1])
+            }
+            addView(terrainPanel)
         }
     }
 
@@ -1004,6 +1092,14 @@ end
         val c = o.color.copyOf()
         c[i] = p / 100f
         o.color = c
+        editor.refresh()
+    }
+
+    private fun regenTerrain(flat: Boolean) {
+        val o = scene.selected
+        if (o == null || o.shape != Shape.TERRAIN) return
+        o.heights = if (flat) TerrainGen.flat() else TerrainGen.generate(Random.nextInt(1, 100000), 0.5f)
+        o.hVersion++
         editor.refresh()
     }
 
@@ -1077,6 +1173,7 @@ end
         val sun = o?.shape == Shape.SUN
         val st = o?.shape == Shape.SETTINGS
         val cam = o?.shape == Shape.CAMERA
+        val ter = o?.shape == Shape.TERRAIN
         skyRow.visibility = if (st) View.VISIBLE else View.GONE
         skyPanel.visibility = if (st) View.VISIBLE else View.GONE
         objSwatches.visibility = if (st) View.GONE else View.VISIBLE
@@ -1084,12 +1181,14 @@ end
         colliderBtn.visibility = if (o != null && !joy && !light && !st && !cam) View.VISIBLE else View.GONE
         lightPanel.visibility = if (light) View.VISIBLE else View.GONE
         shadowPanel.visibility = if (st) View.VISIBLE else View.GONE
+        terrainPanel.visibility = if (ter) View.VISIBLE else View.GONE
         shadowBtn.visibility = colliderBtn.visibility
         nameField.isEnabled = o != null
         for ((i, f) in fields.withIndex()) {
             f.isEnabled = o != null && when {
                 st -> i in 0..5 || i == 6 || i == 7 || i == 8
                 cam -> i in 0..4 || i == 6
+                ter -> i in 0..2 || i in 6..8
                 joy -> i == 0 || i == 1 || i == 6
                 light -> i in 0..2 || i == 6 || i == 7 || (sun && (i == 3 || i == 4))
                 else -> true
@@ -1097,7 +1196,7 @@ end
         }
         rowLabels[0].text = if (joy) "Screen %" else if (st) "World" else "Pos"
         rowLabels[1].text = if (st) "Snap/Shd/Gnd" else if (cam) "Pitch/Yaw" else "Rot"
-        rowLabels[2].text = if (joy) "Size" else if (st) "Time/Grid/Col" else if (cam) "FOV" else if (sun) "Power/Amb" else if (light) "Power/Rng" else "Scale"
+        rowLabels[2].text = if (joy) "Size" else if (st) "Time/Grid/Col" else if (cam) "FOV" else if (ter) "Size W/H/D" else if (sun) "Power/Amb" else if (light) "Power/Rng" else "Scale"
         if (o == null) {
             if (!nameField.hasFocus()) nameField.setText("")
             for (f in fields) if (!f.hasFocus()) f.setText("")
@@ -1105,6 +1204,11 @@ end
         }
         if (!nameField.hasFocus()) nameField.setText(o.name)
         shadowBtn.text = "Casts shadow: " + (if (o.shadow) "On" else "Off")
+        sculptBtn.text = "Sculpt: " + arrayOf("Off", "Raise", "Lower", "Smooth", "Flatten")[editor.sculpt.coerceIn(0, 4)]
+        brushLabels[0].text = String.format(Locale.US, "Brush size   %.1f", editor.brushRadius)
+        brushLabels[1].text = String.format(Locale.US, "Brush strength   %.2f", editor.brushStrength)
+        if (!brushSliders[0].isPressed) brushSliders[0].progress = ((editor.brushRadius - 1f) / 0.09f).toInt().coerceIn(0, 100)
+        if (!brushSliders[1].isPressed) brushSliders[1].progress = (editor.brushStrength * 100f).toInt().coerceIn(0, 100)
         if (o.shape.isLight) {
             val isSun = o.shape == Shape.SUN
             labelA.text = String.format(Locale.US, "Brightness   %.2f", o.sx)
@@ -1196,6 +1300,7 @@ end
         info.text = (if (playing) "PLAYING  |  " else "") + (o?.name ?: "Nothing selected") +
             (if (o != null && !o.shape.isScreen && o.shape != Shape.SETTINGS) String.format(Locale.US, " (%.2f, %.2f, %.2f)", o.x, o.y, o.z) else "") +
             "  |  " + scene.objects.size + " objects" + (if (playing) "" else "  |  drag: " + editor.mode.name.lowercase() + (if (editor.axis > 0) " " + arrayOf("", "X", "Y", "Z")[editor.axis] else ""))
+        if (scene.selected?.shape != Shape.TERRAIN && editor.sculpt != 0) editor.sculpt = 0
         if (panel == Panel.HIER && (scene.objects.size != lastCount || scene.selected !== lastSel)) rebuildHierarchy()
         if (panel == Panel.INSPECT) refreshInspector()
         if (panel == Panel.SCRIPT) refreshScript()
@@ -1727,7 +1832,16 @@ end
 
     override fun onSensorChanged(e: SensorEvent) {
         if (e.sensor.type == Sensor.TYPE_ACCELEROMETER) {
-            ax = e.values[0]; ay = e.values[1]; az = e.values[2]
+            if (!sensorInit) {
+                // the way you hold the phone when Play starts counts as "level"
+                fax = e.values[0]; fay = e.values[1]; faz = e.values[2]
+                bax = fax; bay = fay; baz = faz
+                sensorInit = true
+            } else {
+                fax += 0.15f * (e.values[0] - fax)
+                fay += 0.15f * (e.values[1] - fay)
+                faz += 0.15f * (e.values[2] - faz)
+            }
         }
     }
 

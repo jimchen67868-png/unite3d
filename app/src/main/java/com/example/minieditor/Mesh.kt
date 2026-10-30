@@ -14,6 +14,13 @@ class Mesh(data: FloatArray, private val mode: Int) {
         .asFloatBuffer().also { it.put(data); it.position(0) }
     val count = data.size / 6
 
+    /** Overwrites the vertices in place (same size) - used when terrain is sculpted. */
+    fun update(data: FloatArray) {
+        buf.position(0)
+        buf.put(data)
+        buf.position(0)
+    }
+
     fun draw(posLoc: Int, normLoc: Int, first: Int = 0, n: Int = count) {
         buf.position(0)
         GLES20.glVertexAttribPointer(posLoc, 3, GLES20.GL_FLOAT, false, 24, buf)
@@ -111,7 +118,7 @@ object Meshes {
         Shape.CUBE -> cubeData()
         Shape.PYRAMID -> pyramidData()
         Shape.SPHERE -> sphereData()
-        Shape.MODEL, Shape.JOYSTICK, Shape.BUTTON, Shape.LIGHT, Shape.SUN, Shape.SETTINGS, Shape.CAMERA -> null
+        Shape.MODEL, Shape.JOYSTICK, Shape.BUTTON, Shape.LIGHT, Shape.SUN, Shape.SETTINGS, Shape.CAMERA, Shape.TERRAIN -> null
     }
 
     /** Grid lines first; the last 4 vertices are the X axis and Z axis. */

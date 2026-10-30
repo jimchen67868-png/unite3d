@@ -47,7 +47,7 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
     private var uLPos = 0; private var uLCol = 0; private var uLCount = 0
     private var uEye = 0; private var uFogColor = 0; private var uFogEnd = 0
     private var uSpec = 0; private var uGloss = 0; private var uEmit = 0; private var uPattern = 0; private var uObjScale = 0
-    private var uTex = 0; private var uUseTex = 0; private var uMapMode = 0
+    private var uTex = 0; private var uUseTex = 0; private var uMapMode = 0; private var uTerrain = 0
     private lateinit var meshes: Map<Shape, Mesh>
     private lateinit var grid: Mesh
     private lateinit var gizmo: Mesh
@@ -57,6 +57,7 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
     private var skyLit = 0f
     private val modelMeshes = HashMap<String, Mesh>()
     private val photoTex = HashMap<String, Int>()
+    private val terrainCache = HashMap<SceneObject, Pair<String, Mesh>>()
     @Volatile var photoLoader: ((String) -> Bitmap?)? = null
 
     private val vertexSrc = """
@@ -106,6 +107,7 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         uniform sampler2D uTex;
         uniform float uUseTex;
         uniform float uMapMode;
+        uniform float uTerrain;
         vec2 photoUV(vec3 p, vec3 n) {
             vec3 a = abs(n);
             if (uMapMode > 0.5) {
@@ -162,6 +164,12 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
                 }
             }
             vec3 base = uColor.rgb;
+            if (uTerrain > 0.5) {
+                float f = clamp(vL.y / max(uObjScale.y, 0.001), 0.0, 1.0);
+                vec3 g = mix(vec3(0.30, 0.55, 0.25), vec3(0.50, 0.42, 0.30), smoothstep(0.25, 0.65, f));
+                g = mix(g, vec3(0.93, 0.94, 0.97), smoothstep(0.75, 0.95, f));
+                base = g * uColor.rgb;
+            }
             if (uUseTex > 0.5) {
                 base = texture2D(uTex, photoUV(vL, normalize(vLN))).rgb * uColor.rgb;
             }
@@ -223,6 +231,7 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         uTex = GLES20.glGetUniformLocation(prog, "uTex")
         uUseTex = GLES20.glGetUniformLocation(prog, "uUseTex")
         uMapMode = GLES20.glGetUniformLocation(prog, "uMapMode")
+        uTerrain = GLES20.glGetUniformLocation(prog, "uTerrain")
         meshes = mapOf(Shape.CUBE to Meshes.cube(), Shape.PYRAMID to Meshes.pyramid(), Shape.SPHERE to Meshes.sphere())
         grid = Meshes.grid()
         gizmo = Meshes.gizmo()
@@ -448,6 +457,7 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         GLES20.glUniform1f(uEmit, o.emit.coerceIn(0f, 1f))
         GLES20.glUniform1f(uPattern, o.pattern.toFloat())
         GLES20.glUniform3f(uObjScale, o.sx, o.sy, o.sz)
+        GLES20.glUniform1f(uTerrain, if (o.shape == Shape.TERRAIN) 1f else 0f)
         val tex = if (o.photo.isNotEmpty()) textureFor(o.photo) else 0
         if (tex > 0) {
             GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
@@ -466,9 +476,15 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         Matrix.rotateM(model, 0, o.ry, 0f, 1f, 0f)
         Matrix.rotateM(model, 0, o.rx, 1f, 0f, 0f)
         Matrix.rotateM(model, 0, o.rz, 0f, 0f, 1f)
-        Matrix.scaleM(model, 0, o.sx, o.sy, o.sz)
+        if (o.shape == Shape.TERRAIN) {
+            // terrain geometry is already in world size
+            Matrix.setIdentityM(model, 0)
+            Matrix.translateM(model, 0, o.x, o.y, o.z)
+        } else {
+            Matrix.scaleM(model, 0, o.sx, o.sy, o.sz)
+        }
         val hasPhoto = o.photo.isNotEmpty() && textureFor(o.photo) > 0
-        val c = if (hasPhoto) {
+        val c = if (hasPhoto || o.shape == Shape.TERRAIN) {
             if (o === sel) floatArrayOf(1.3f, 1.3f, 1.3f) else floatArrayOf(1f, 1f, 1f)
         } else if (o === sel) {
             floatArrayOf(o.color[0] * 0.6f + 0.4f, o.color[1] * 0.6f + 0.4f, o.color[2] * 0.6f + 0.4f)
@@ -517,7 +533,7 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
     }
 
     private fun passAlpha(total: Float, n: Int): Float =
-        1f - Math.pow((1f - total.coerceIn(0f, 0.99f)).toDouble(), 1.0 / n).toFloat()
+        1f - Math.pow((1f - total.coerceIn(0f, 1f)).toDouble(), 1.0 / n).toFloat()
 
     /**
      * Ground shadows: every object that casts a shadow is flattened onto the ground (Settings: ground height)
@@ -532,7 +548,7 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         val soft = (st?.soft ?: 0.4f).coerceIn(0f, 1f)
         val tint = st?.tint ?: floatArrayOf(0f, 0f, 0f)
         val casters = scene.objects.filter { o ->
-            o.shadow && !o.shape.isScreen && !o.shape.isLight && o.shape != Shape.SETTINGS && o.shape != Shape.CAMERA &&
+            o.shadow && !o.shape.isScreen && !o.shape.isLight && o.shape != Shape.SETTINGS && o.shape != Shape.CAMERA && o.shape != Shape.TERRAIN &&
                 o.y + 0.5f * o.sy > gh + 0.04f
         }
         if (casters.isEmpty()) return
@@ -568,13 +584,13 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
             if (sunOk) {
                 val sp = soft * 0.15f
                 dirMatrix(shM, -lx / ll + ox[k] * sp, -ly / ll, -lz / ll + oz[k] * sp, gh)
-                val total = strength * 0.6f * minOf(1f, sunPower)
+                val total = strength
                 drawShadowSet(casters, vpc, tint, passAlpha(total, samples)) { false }
             }
             for (l in lights) {
                 val j = soft * 0.8f
                 pointMatrix(shM, l.x + ox[k] * j, l.y, l.z + oz[k] * j, gh)
-                val total = strength * 0.6f * minOf(1f, l.sx / 1.5f)
+                val total = strength * minOf(1f, l.sx / 1.5f)
                 drawShadowSet(casters, vpc, tint, passAlpha(total, samples)) { o ->
                     val dx = o.x - l.x
                     val dy = o.y - l.y
@@ -587,7 +603,23 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         GLES20.glDisable(GLES20.GL_BLEND)
     }
 
+    private fun terrainMeshFor(o: SceneObject): Mesh {
+        val key = "" + o.hVersion + "|" + o.sx + "|" + o.sy + "|" + o.sz
+        val e = terrainCache[o]
+        if (e != null && e.first == key) return e.second
+        val data = TerrainGen.buildMesh(o)
+        if (e == null) {
+            val m = Mesh(data, GLES20.GL_TRIANGLES)
+            terrainCache[o] = Pair(key, m)
+            return m
+        }
+        e.second.update(data)
+        terrainCache[o] = Pair(key, e.second)
+        return e.second
+    }
+
     private fun meshFor(o: SceneObject): Mesh {
+        if (o.shape == Shape.TERRAIN) return terrainMeshFor(o)
         val md = o.model
         return if (md != null) modelMeshes.getOrPut(md.key) { Mesh(md.data, GLES20.GL_TRIANGLES) }
         else meshes.getValue(o.shape)
@@ -667,7 +699,7 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
             GLES20.glEnable(GLES20.GL_BLEND)
             GLES20.glBlendFunc(GLES20.GL_SRC_ALPHA, GLES20.GL_ONE_MINUS_SRC_ALPHA)
             GLES20.glDepthMask(false)
-            for (o in seeThrough) drawObject(o, vpc, sel, o.opacity.coerceIn(0.05f, 1f))
+            for (o in seeThrough) drawObject(o, vpc, sel, o.opacity.coerceIn(0.02f, 1f))
             GLES20.glDepthMask(true)
             GLES20.glDisable(GLES20.GL_BLEND)
         }

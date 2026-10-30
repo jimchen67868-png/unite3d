@@ -9,7 +9,8 @@ enum class Shape(val label: String, val radius: Float) {
     JOYSTICK("Joystick", 0f), BUTTON("Button", 0f),
     LIGHT("Light", 0.4f), SUN("Sun", 0.4f),
     SETTINGS("Settings", 0f),
-    CAMERA("Camera", 0.4f);
+    CAMERA("Camera", 0.4f),
+    TERRAIN("Terrain", 0f);
 
     val isScreen: Boolean get() = this == JOYSTICK || this == BUTTON
     val isLight: Boolean get() = this == LIGHT || this == SUN
@@ -39,6 +40,8 @@ class SceneObject(
     var soft = 0.4f       // Settings: shadow softness 0-1
     var tint = floatArrayOf(0f, 0f, 0f)   // Settings: shadow colour
     var photo: String = ""   // key of an imported photo used as the surface picture
+    var heights: FloatArray? = null   // Terrain: 49 x 49 heights, 0..1
+    var hVersion = 0                  // bumps whenever the heights change
     var collider: Int = 0   // 0 = none, 1 = solid (blocks), 2 = trigger (events only)
 }
 
@@ -137,6 +140,20 @@ class Scene {
         return o
     }
 
+    /** Hills you can reshape. Size comes from the scale: width, tallest height, depth. Solid by default. */
+    fun addTerrain(): SceneObject {
+        counter++
+        val o = SceneObject(Shape.TERRAIN, "Terrain", x = 0f, y = 0f, z = 0f, sx = 24f, sy = 3f, sz = 24f,
+            color = floatArrayOf(1f, 1f, 1f))
+        o.heights = TerrainGen.generate(1, 0.5f)
+        o.hVersion = 1
+        o.collider = 1
+        o.shadow = false
+        objects.add(o)
+        selected = o
+        return o
+    }
+
     /** A thin standing panel showing an imported photo, sized to the photo's shape. */
     fun addPhoto(key: String, aspect: Float): SceneObject {
         val o = add(Shape.CUBE)
@@ -173,6 +190,7 @@ class Scene {
         o.collider = s.collider
         o.shadow = s.shadow
         o.photo = s.photo
+        o.heights = s.heights?.copyOf()
         o.spec = s.spec; o.gloss = s.gloss; o.emit = s.emit; o.opacity = s.opacity; o.pattern = s.pattern
         objects.add(o)
         selected = o
@@ -194,6 +212,7 @@ class Scene {
             put("shadow", o.shadow)
             put("spec", o.spec.toDouble()); put("gloss", o.gloss.toDouble())
             put("emit", o.emit.toDouble()); put("opacity", o.opacity.toDouble()); put("pattern", o.pattern)
+            o.heights?.let { put("heights", TerrainGen.encode(it)) }
             put("photo", o.photo); put("soft", o.soft.toDouble()); put("tintR", o.tint[0].toDouble()); put("tintG", o.tint[1].toDouble()); put("tintB", o.tint[2].toDouble())
             o.model?.let { put("model", it.key) }
             put("x", o.x.toDouble()); put("y", o.y.toDouble()); put("z", o.z.toDouble())
@@ -229,6 +248,8 @@ class Scene {
                 it.pattern = j.optInt("pattern", 0)
                 it.soft = j.optDouble("soft", 0.4).toFloat()
                 it.photo = j.optString("photo", "")
+                it.heights = if (j.has("heights")) TerrainGen.decode(j.getString("heights")) else null
+                it.hVersion = 1
                 it.tint = floatArrayOf(j.optDouble("tintR", 0.0).toFloat(), j.optDouble("tintG", 0.0).toFloat(), j.optDouble("tintB", 0.0).toFloat()) })
         }
         selected = null

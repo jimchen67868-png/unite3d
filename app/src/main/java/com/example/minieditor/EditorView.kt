@@ -19,6 +19,10 @@ class EditorView(ctx: Context, val scene: Scene) : GLSurfaceView(ctx) {
         set(v) { field = v; renderer.axisMode = v }
     var onChange: (() -> Unit)? = null
     var onTouchStart: (() -> Unit)? = null
+    var sculpt = 0   // 0 off, 1 raise, 2 lower, 3 smooth, 4 flatten
+    var brushRadius = 3f
+    var brushStrength = 0.5f
+    private var sculpting = false
     var playing: Boolean = false
         set(v) { field = v; renderer.playing = v }
     var touching = false
@@ -75,6 +79,7 @@ class EditorView(ctx: Context, val scene: Scene) : GLSurfaceView(ctx) {
     /** Ray vs the object's real (rotated, scaled) box or ellipsoid, with a little extra reach so small objects are easy to hit. */
     private fun hitT(o: SceneObject, r: FloatArray): Float? {
         val tol = renderer.dist * 0.02f
+        if (o.shape == Shape.TERRAIN) return TerrainGen.rayHit(o, r)
         if (o.shape.isLight || o.shape == Shape.CAMERA) return raySphere(r, o.x, o.y, o.z, maxOf(0.4f, renderer.dist * 0.04f))
         val m = FloatArray(16)
         Matrix.setIdentityM(m, 0)
@@ -126,6 +131,16 @@ class EditorView(ctx: Context, val scene: Scene) : GLSurfaceView(ctx) {
         return if (tmin > 0f) tmin else 0f
     }
 
+    /** Raises, lowers, smooths or flattens the selected terrain under the finger. */
+    private fun applyBrush(x: Float, y: Float) {
+        val o = scene.selected ?: return
+        if (o.shape != Shape.TERRAIN) return
+        val r = renderer.ray(x, y)
+        val t = TerrainGen.rayHit(o, r) ?: return
+        TerrainGen.brush(o, r[0] + r[3] * t, r[2] + r[5] * t, sculpt, brushRadius, brushStrength)
+        refresh()
+    }
+
     /** Everything under the finger, nearest first. */
     private fun pickAll(x: Float, y: Float): List<SceneObject> {
         val r = renderer.ray(x, y)
@@ -170,6 +185,7 @@ class EditorView(ctx: Context, val scene: Scene) : GLSurfaceView(ctx) {
         dragging = false
         dragTarget = null
         pending = null
+        sculpting = false
     }
 
     override fun onTouchEvent(e: MotionEvent): Boolean {
@@ -187,6 +203,15 @@ class EditorView(ctx: Context, val scene: Scene) : GLSurfaceView(ctx) {
                 multi = false; moved = false; dragging = false; dragTarget = null
                 onTouchStart?.invoke()
                 lastX = e.x; lastY = e.y; downX = e.x; downY = e.y
+                val selNow = scene.selected
+                sculpting = !playing && sculpt > 0 && selNow != null && selNow.shape == Shape.TERRAIN
+                if (sculpting) {
+                    moved = true
+                    pendingList = emptyList()
+                    pending = null
+                    applyBrush(e.x, e.y)
+                    return true
+                }
                 // Only remember what is under the finger. Selecting or moving waits until
                 // the finger moves or lifts, so a pinch that starts on an object does nothing to it.
                 pendingList = if (playing) emptyList() else pickAll(e.x, e.y)
@@ -198,6 +223,7 @@ class EditorView(ctx: Context, val scene: Scene) : GLSurfaceView(ctx) {
             }
             MotionEvent.ACTION_MOVE -> {
                 if (multi) return true
+                if (sculpting) { applyBrush(e.x, e.y); lastX = e.x; lastY = e.y; return true }
                 val dx = e.x - lastX
                 val dy = e.y - lastY
                 lastX = e.x; lastY = e.y
@@ -244,10 +270,10 @@ class EditorView(ctx: Context, val scene: Scene) : GLSurfaceView(ctx) {
                     scene.selected = choice
                     refresh()
                 }
-                dragging = false; dragTarget = null; pending = null
+                dragging = false; dragTarget = null; pending = null; sculpting = false
             }
             MotionEvent.ACTION_CANCEL -> {
-                dragging = false; dragTarget = null; pending = null
+                dragging = false; dragTarget = null; pending = null; sculpting = false
             }
         }
         return true
