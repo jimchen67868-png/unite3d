@@ -39,6 +39,7 @@ import java.io.File
 import java.io.FileOutputStream
 import java.util.Locale
 import kotlin.random.Random
+import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.sin
 import kotlin.math.sqrt
@@ -63,6 +64,10 @@ class MainActivity : Activity(), SensorEventListener {
     private var showCoords = true
     @Volatile private var labelPending = false
     private lateinit var colliderBtn: Button
+    private lateinit var treeTypeBtn: Button
+    private lateinit var grassPanel: LinearLayout
+    private lateinit var grassLabel: TextView
+    private lateinit var grassSlider: SeekBar
     private var waterLoop = false
     private lateinit var attachBtn: Button
     private lateinit var terrainPanel: LinearLayout
@@ -858,6 +863,11 @@ end
                 btn("+Bone", true) { scene.addBone(); editor.refresh() },
                 btn("+Water", true) { scene.addWater(); editor.refresh() }
             ))
+            addView(row(
+                btn("+Tree", true) { scene.addTree(0); editor.refresh() },
+                btn("+Pine", true) { scene.addTree(1); editor.refresh() },
+                btn("+Grass", true) { scene.addGrass(); editor.refresh() }
+            ))
             addView(scroll)
         }
     }
@@ -883,7 +893,9 @@ end
                     (if (o.shape == Shape.CAMERA) "  [camera]" else "") +
                     (if (o.shape == Shape.TERRAIN) "  [terrain]" else "") +
                     (if (o.shape == Shape.BONE) "  [bone]" else "") +
-                    (if (o.shape == Shape.WATER) "  [water]" else "")
+                    (if (o.shape == Shape.WATER) "  [water]" else "") +
+                    (if (o.shape == Shape.TREE) "  [tree]" else "") +
+                    (if (o.shape == Shape.GRASS) "  [grass]" else "")
                 textSize = 14f
                 setTextColor(if (sel) 0xFF7FB0FF.toInt() else Color.WHITE)
                 setPadding(dp(10), dp(8), dp(10), dp(8))
@@ -1047,6 +1059,37 @@ end
             addView(shadowBtn)
             attachBtn = btn("Attach to: none") { showAttachMenu() }
             addView(attachBtn)
+            treeTypeBtn = btn("Tree type: Round") {
+                val t = scene.selected
+                if (t != null && t.shape == Shape.TREE) { t.pattern = if (t.pattern == 1) 0 else 1; editor.refresh() }
+            }
+            treeTypeBtn.visibility = View.GONE
+            addView(treeTypeBtn)
+            grassLabel = TextView(this@MainActivity).apply {
+                textSize = 12f; setTextColor(0xFFDDDDDD.toInt()); setPadding(dp(4), dp(6), dp(4), 0)
+            }
+            grassSlider = SeekBar(this@MainActivity).apply {
+                max = 100
+                setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                    override fun onProgressChanged(sb: SeekBar?, p: Int, fromUser: Boolean) {
+                        val g = scene.selected
+                        if (fromUser && g != null && g.shape == Shape.GRASS) { g.rx = 0.2f + p * 0.028f; editor.refresh() }
+                    }
+                    override fun onStartTrackingTouch(sb: SeekBar?) {}
+                    override fun onStopTrackingTouch(sb: SeekBar?) {}
+                })
+            }
+            grassPanel = LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.VERTICAL
+                visibility = View.GONE
+                addView(row(btn("Reshuffle blades") {
+                    val g = scene.selected
+                    if (g != null && g.shape == Shape.GRASS) { g.hVersion++; editor.refresh() }
+                }))
+                addView(grassLabel)
+                addView(grassSlider)
+            }
+            addView(grassPanel)
             labelA = TextView(this@MainActivity).apply {
                 textSize = 12f; setTextColor(0xFFDDDDDD.toInt()); setPadding(dp(4), dp(6), dp(4), 0)
             }
@@ -1149,6 +1192,10 @@ end
                     btn("New hills") { regenTerrain(false) },
                     btn("Flat") { regenTerrain(true) }
                 ))
+                addView(row(
+                    btn("Plant trees") { plantTrees() },
+                    btn("Plant grass") { plantGrass() }
+                ))
                 addView(brushLabels[0]); addView(brushSliders[0])
                 addView(brushLabels[1]); addView(brushSliders[1])
             }
@@ -1197,6 +1244,47 @@ end
         c[i] = p / 100f
         o.color = c
         editor.refresh()
+    }
+
+    /** Adds a stand of trees on the selected terrain: not on peaks, not under water. */
+    private fun plantTrees() {
+        val t = scene.selected
+        if (t == null || t.shape != Shape.TERRAIN) return
+        val rnd = Random(System.nanoTime())
+        val seas = scene.objects.filter { it.shape == Shape.WATER }
+        var made = 0
+        var tries = 0
+        while (made < 14 && tries < 150) {
+            tries++
+            val x = t.x + (rnd.nextFloat() - 0.5f) * t.sx * 0.9f
+            val z = t.z + (rnd.nextFloat() - 0.5f) * t.sz * 0.9f
+            val h = TerrainGen.heightAt(t, x, z) ?: continue
+            if (h > t.y + t.sy * 0.7f) continue
+            if (seas.any { w -> abs(x - w.x) <= w.sx / 2f && abs(z - w.z) <= w.sz / 2f && h < w.y + 0.15f }) continue
+            val tr = scene.addTree(rnd.nextInt(2))
+            val k = 0.8f + rnd.nextFloat() * 0.5f
+            tr.x = x; tr.z = z; tr.y = h - 0.05f
+            tr.sx = 2f * k; tr.sy = 3f * k; tr.sz = 2f * k
+            tr.ry = rnd.nextFloat() * 360f
+            tr.shadow = false
+            made++
+        }
+        scene.selected = t
+        lastCount = -1
+        editor.refresh()
+        toast("Planted $made trees")
+    }
+
+    /** Covers the selected terrain with grass that follows the hills. */
+    private fun plantGrass() {
+        val t = scene.selected
+        if (t == null || t.shape != Shape.TERRAIN) return
+        val g = scene.addGrass()
+        g.x = t.x; g.z = t.z; g.y = t.y; g.sx = t.sx; g.sz = t.sz
+        scene.selected = t
+        lastCount = -1
+        editor.refresh()
+        toast("Grass planted on the terrain")
     }
 
     private fun regenTerrain(flat: Boolean) {
@@ -1292,16 +1380,20 @@ end
         val ter = o?.shape == Shape.TERRAIN
         val bone = o?.shape == Shape.BONE
         val water = o?.shape == Shape.WATER
+        val tree = o?.shape == Shape.TREE
+        val grass = o?.shape == Shape.GRASS
         skyRow.visibility = if (st) View.VISIBLE else View.GONE
         skyPanel.visibility = if (st) View.VISIBLE else View.GONE
         objSwatches.visibility = if (st) View.GONE else View.VISIBLE
         settingsHint.visibility = if (st) View.VISIBLE else View.GONE
-        colliderBtn.visibility = if (o != null && !joy && !light && !st && !cam && !bone && !water) View.VISIBLE else View.GONE
+        colliderBtn.visibility = if (o != null && !joy && !light && !st && !cam && !bone && !water && !grass) View.VISIBLE else View.GONE
         lightPanel.visibility = if (light) View.VISIBLE else View.GONE
         shadowPanel.visibility = if (st) View.VISIBLE else View.GONE
         terrainPanel.visibility = if (ter) View.VISIBLE else View.GONE
         shadowBtn.visibility = colliderBtn.visibility
         attachBtn.visibility = if (o != null && !joy && !st && !ter) View.VISIBLE else View.GONE
+        treeTypeBtn.visibility = if (tree) View.VISIBLE else View.GONE
+        grassPanel.visibility = if (grass) View.VISIBLE else View.GONE
         nameField.isEnabled = o != null
         for ((i, f) in fields.withIndex()) {
             f.isEnabled = o != null && when {
@@ -1310,14 +1402,16 @@ end
                 ter -> i in 0..2 || i in 6..8
                 bone -> i in 0..5 || i == 7
                 water -> i in 0..4 || i in 6..8
+                tree -> i in 0..2 || i == 4 || i in 6..8
+                grass -> i in 0..3 || i in 6..8
                 joy -> i == 0 || i == 1 || i == 6
                 light -> i in 0..2 || i == 6 || i == 7 || (sun && (i == 3 || i == 4))
                 else -> true
             }
         }
         rowLabels[0].text = if (joy) "Screen %" else if (st) "World" else "Pos"
-        rowLabels[1].text = if (st) "Snap/Shd/Gnd" else if (cam) "Pitch/Yaw" else if (water) "Speed/Dir" else "Rot"
-        rowLabels[2].text = if (joy) "Size" else if (st) "Time/Grid/Col" else if (cam) "FOV" else if (ter) "Size W/H/D" else if (bone) "Bone length" else if (water) "Size/Wave H" else if (sun) "Power/Amb" else if (light) "Power/Rng" else "Scale"
+        rowLabels[1].text = if (st) "Snap/Shd/Gnd" else if (cam) "Pitch/Yaw" else if (water) "Speed/Dir" else if (grass) "Density" else "Rot"
+        rowLabels[2].text = if (joy) "Size" else if (st) "Time/Grid/Col" else if (cam) "FOV" else if (ter) "Size W/H/D" else if (bone) "Bone length" else if (water) "Size/Wave H" else if (grass) "Size/Blade H" else if (sun) "Power/Amb" else if (light) "Power/Rng" else "Scale"
         if (o == null) {
             if (!nameField.hasFocus()) nameField.setText("")
             for (f in fields) if (!f.hasFocus()) f.setText("")
@@ -1325,6 +1419,11 @@ end
         }
         if (!nameField.hasFocus()) nameField.setText(o.name)
         shadowBtn.text = "Casts shadow: " + (if (o.shadow) "On" else "Off")
+        treeTypeBtn.text = "Tree type: " + (if (o.pattern == 1) "Pine" else "Round")
+        if (o.shape == Shape.GRASS) {
+            grassLabel.text = String.format(Locale.US, "Grass density   %.2f   (blade height = Size/Blade H, middle)", o.rx)
+            if (!grassSlider.isPressed) grassSlider.progress = ((o.rx - 0.2f) / 0.028f).toInt().coerceIn(0, 100)
+        }
         attachBtn.text = "Attach to: " + (Rig.find(scene, o.parentId)?.name ?: "none")
         sculptBtn.text = "Sculpt: " + arrayOf("Off", "Raise", "Lower", "Smooth", "Flatten")[editor.sculpt.coerceIn(0, 4)]
         brushLabels[0].text = String.format(Locale.US, "Brush size   %.1f", editor.brushRadius)

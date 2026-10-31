@@ -163,6 +163,25 @@ end
         land.hVersion++
         val sea = scene.addWater()
         sea.sx = 30f; sea.sz = 30f; sea.y = 1.2f
+        val grass = scene.addGrass()
+        grass.x = 0f; grass.z = 0f; grass.y = 0f; grass.sx = 30f; grass.sz = 30f
+        val rnd = kotlin.random.Random(11)
+        var trees = 0
+        var tries = 0
+        while (trees < 14 && tries < 300) {
+            tries++
+            val tx = (rnd.nextFloat() - 0.5f) * 27f
+            val tz = (rnd.nextFloat() - 0.5f) * 27f
+            val th = TerrainGen.heightAt(land, tx, tz) ?: continue
+            if (th < sea.y + 0.3f || th > land.y + land.sy * 0.7f) continue
+            val tr = scene.addTree(rnd.nextInt(2))
+            val k = 0.8f + rnd.nextFloat() * 0.5f
+            tr.x = tx; tr.z = tz; tr.y = th - 0.05f
+            tr.sx = 2f * k; tr.sy = 3f * k; tr.sz = 2f * k
+            tr.ry = rnd.nextFloat() * 360f
+            tr.shadow = false
+            trees++
+        }
         val floater = "function update(dt)\n  local wy = waterHeight(self.x, self.z)\n  if wy then\n    self.y = wy + 0.1 + math.sin(time * 2 + self.x) * 0.03\n    self.rz = math.sin(time * 1.5 + self.x) * 8\n    self.rx = math.cos(time * 1.2 + self.z) * 8\n  end\nend\n"
         var made = 0
         var gz = -12f

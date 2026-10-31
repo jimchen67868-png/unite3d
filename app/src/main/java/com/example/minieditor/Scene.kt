@@ -12,7 +12,9 @@ enum class Shape(val label: String, val radius: Float) {
     CAMERA("Camera", 0.4f),
     TERRAIN("Terrain", 0f),
     BONE("Bone", 0.3f),
-    WATER("Water", 0f);
+    WATER("Water", 0f),
+    TREE("Tree", 0f),
+    GRASS("Grass", 0f);
 
     val isScreen: Boolean get() = this == JOYSTICK || this == BUTTON
     val isLight: Boolean get() = this == LIGHT || this == SUN
@@ -145,6 +147,29 @@ class Scene {
         return o
     }
 
+    /** A tree standing on y (its base). pattern 0 = round tree, 1 = pine. Scale = width / height / depth. */
+    fun addTree(type: Int): SceneObject {
+        val o = add(Shape.TREE)
+        o.name = (if (type == 1) "Pine " else "Tree ") + counter
+        o.pattern = type
+        o.y = 0f
+        o.sx = 2f; o.sy = 3f; o.sz = 2f
+        o.color = floatArrayOf(0.2f, 0.55f, 0.22f)
+        return o
+    }
+
+    /** A patch of grass: size = scale width/depth, blade height = scale Y, rx = density (1 = normal), y = ground level. */
+    fun addGrass(): SceneObject {
+        val o = add(Shape.GRASS)
+        o.name = "Grass " + counter
+        o.x = 0f; o.y = 0f; o.z = 0f
+        o.sx = 8f; o.sy = 0.45f; o.sz = 8f
+        o.rx = 1f
+        o.color = floatArrayOf(1f, 1f, 1f)
+        o.shadow = false
+        return o
+    }
+
     /**
      * Water with moving waves. Size = scale width/depth, sy = wave height, rx = wave speed, ry = wave direction.
      * Use the Material panel for transparency and shininess, the colour swatches for the tint.
@@ -246,6 +271,7 @@ class Scene {
             put("spec", o.spec.toDouble()); put("gloss", o.gloss.toDouble())
             put("emit", o.emit.toDouble()); put("opacity", o.opacity.toDouble()); put("pattern", o.pattern)
             o.heights?.let { put("heights", TerrainGen.encode(it)) }
+            put("hv", o.hVersion)
             if (o.uid != 0) put("uid", o.uid)
             if (o.parentId != 0) {
                 put("parent", o.parentId)
@@ -287,7 +313,7 @@ class Scene {
                 it.soft = j.optDouble("soft", 0.4).toFloat()
                 it.photo = j.optString("photo", "")
                 it.heights = if (j.has("heights")) TerrainGen.decode(j.getString("heights")) else null
-                it.hVersion = 1
+                it.hVersion = j.optInt("hv", 1)
                 it.uid = j.optInt("uid", 0)
                 it.parentId = j.optInt("parent", 0)
                 it.rel = j.optJSONArray("rel")?.let { a -> FloatArray(16) { k -> a.getDouble(k).toFloat() } }

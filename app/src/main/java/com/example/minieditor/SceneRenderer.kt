@@ -54,7 +54,11 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
     private lateinit var circle: Mesh
     private lateinit var quad: Mesh
     private lateinit var waterMesh: Mesh
-    private var uWater = 0; private var uTime = 0; private var uWave = 0
+    private var uWater = 0; private var uTime = 0; private var uWave = 0; private var uGrass = 0
+    private val treeTrunk = arrayOfNulls<Mesh>(2)
+    private val treeCrown = arrayOfNulls<Mesh>(2)
+    private val treeAll = arrayOfNulls<Mesh>(2)
+    private val grassCache = HashMap<SceneObject, Pair<String, Mesh>>()
     private val photoAspect = HashMap<String, Float>()
     private var skyLit = 0f
     private val modelMeshes = HashMap<String, Mesh>()
@@ -68,6 +72,7 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         uniform float uWater;
         uniform float uTime;
         uniform vec3 uWave;
+        uniform float uGrass;
         attribute vec3 aPos;
         attribute vec3 aNorm;
         varying vec3 vN;
@@ -75,6 +80,8 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         varying vec3 vL;
         varying vec3 vLN;
         varying float vIsWater;
+        varying float vIsGrass;
+        varying float vTip;
         vec3 waveSum(vec2 p) {
             float t = uTime * uWave.y;
             float c = cos(uWave.z);
@@ -102,6 +109,13 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
                 vN = nrm;
             } else {
                 vN = (uModel * vec4(nrm, 0.0)).xyz;
+            }
+            vIsGrass = uGrass;
+            vTip = aNorm.x;
+            if (uGrass > 0.5) {
+                pos.x += sin(uTime * 2.0 + aPos.x * 1.7 + aPos.z * 1.3) * 0.12 * aNorm.x;
+                pos.z += cos(uTime * 1.6 + aPos.x * 1.1 - aPos.z * 1.9) * 0.08 * aNorm.x;
+                vN = vec3(0.0, 1.0, 0.0);
             }
             vLN = aNorm;
             vW = (uModel * vec4(pos, 1.0)).xyz;
@@ -137,6 +151,8 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         varying vec3 vL;
         varying vec3 vLN;
         varying float vIsWater;
+        varying float vIsGrass;
+        varying float vTip;
         uniform sampler2D uTex;
         uniform float uUseTex;
         uniform float uMapMode;
@@ -202,6 +218,9 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
                 vec3 g = mix(vec3(0.30, 0.55, 0.25), vec3(0.50, 0.42, 0.30), smoothstep(0.25, 0.65, f));
                 g = mix(g, vec3(0.93, 0.94, 0.97), smoothstep(0.75, 0.95, f));
                 base = g * uColor.rgb;
+            }
+            if (vIsGrass > 0.5) {
+                base = mix(vec3(0.08, 0.25, 0.05), vec3(0.50, 0.80, 0.25), vTip) * uColor.rgb;
             }
             if (uUseTex > 0.5) {
                 base = texture2D(uTex, photoUV(vL, normalize(vLN))).rgb * uColor.rgb;
@@ -275,6 +294,7 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         uWater = GLES20.glGetUniformLocation(prog, "uWater")
         uTime = GLES20.glGetUniformLocation(prog, "uTime")
         uWave = GLES20.glGetUniformLocation(prog, "uWave")
+        uGrass = GLES20.glGetUniformLocation(prog, "uGrass")
         meshes = mapOf(Shape.CUBE to Meshes.cube(), Shape.PYRAMID to Meshes.pyramid(), Shape.SPHERE to Meshes.sphere())
         grid = Meshes.grid()
         gizmo = Meshes.gizmo()
@@ -539,6 +559,69 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         }
     }
 
+    private fun trunkMesh(t: Int): Mesh = treeTrunk[t] ?: Mesh(Veg.trunk(t), GLES20.GL_TRIANGLES).also { treeTrunk[t] = it }
+    private fun crownMesh(t: Int): Mesh = treeCrown[t] ?: Mesh(Veg.crown(t), GLES20.GL_TRIANGLES).also { treeCrown[t] = it }
+    private fun treeAllMesh(t: Int): Mesh = treeAll[t] ?: Mesh(Veg.both(t), GLES20.GL_TRIANGLES).also { treeAll[t] = it }
+
+    private fun setPlain(spec: Float, gloss: Float) {
+        GLES20.glUniform1f(uSpec, spec)
+        GLES20.glUniform1f(uGloss, gloss)
+        GLES20.glUniform1f(uEmit, 0f)
+        GLES20.glUniform1f(uPattern, 0f)
+        GLES20.glUniform3f(uObjScale, 1f, 1f, 1f)
+        GLES20.glUniform1f(uTerrain, 0f)
+        GLES20.glUniform1f(uUseTex, 0f)
+    }
+
+    /** A tree: brown trunk plus a crown in the object's colour. */
+    private fun drawTree(o: SceneObject, vpc: FloatArray, sel: SceneObject?) {
+        val t = o.pattern.coerceIn(0, 1)
+        Matrix.setIdentityM(model, 0)
+        Matrix.translateM(model, 0, o.x, o.y, o.z)
+        Matrix.rotateM(model, 0, o.ry, 0f, 1f, 0f)
+        Matrix.scaleM(model, 0, o.sx, o.sy, o.sz)
+        setPlain(0.1f, 0.2f)
+        drawMesh(trunkMesh(t), vpc, model, floatArrayOf(0.38f, 0.26f, 0.15f), true)
+        val c = if (o === sel)
+            floatArrayOf(minOf(1f, o.color[0] * 0.6f + 0.4f), minOf(1f, o.color[1] * 0.6f + 0.4f), minOf(1f, o.color[2] * 0.6f + 0.4f))
+        else o.color
+        drawMesh(crownMesh(t), vpc, model, c, true)
+    }
+
+    /** Grass blades sit on the terrain surface when there is terrain under them; they sway in the wind. */
+    private fun drawGrass(o: SceneObject, vpc: FloatArray, sel: SceneObject?) {
+        val terrains = scene.objects.filter { it.shape == Shape.TERRAIN }
+        val sig = StringBuilder()
+        sig.append(o.x).append('|').append(o.y).append('|').append(o.z).append('|')
+            .append(o.sx).append('|').append(o.sy).append('|').append(o.sz).append('|').append(o.rx).append('|').append(o.hVersion)
+        for (t in terrains) {
+            sig.append('#').append(t.hVersion).append(',').append(t.x).append(',').append(t.y).append(',').append(t.z)
+                .append(',').append(t.sx).append(',').append(t.sy).append(',').append(t.sz)
+        }
+        val key = sig.toString()
+        var entry = grassCache[o]
+        if (entry == null || entry.first != key) {
+            val data = Veg.grass(o) { x, z ->
+                var best = o.y
+                for (t in terrains) {
+                    val h = TerrainGen.heightAt(t, x, z)
+                    if (h != null) best = h
+                }
+                best
+            }
+            if (data.isEmpty()) return
+            entry = Pair(key, Mesh(data, GLES20.GL_TRIANGLES))
+            grassCache[o] = entry
+        }
+        Matrix.setIdentityM(model, 0)
+        setPlain(0f, 0.1f)
+        GLES20.glUniform1f(uGrass, 1f)
+        GLES20.glUniform1f(uTime, Water.time())
+        val c = if (o === sel) floatArrayOf(1.4f, 1.4f, 1.4f) else o.color
+        drawMesh(entry.second, vpc, model, c, true)
+        GLES20.glUniform1f(uGrass, 0f)
+    }
+
     private fun drawWater(o: SceneObject, vpc: FloatArray, sel: SceneObject?, alpha: Float) {
         Matrix.setIdentityM(model, 0)
         Matrix.translateM(model, 0, o.x, o.y, o.z)
@@ -562,6 +645,8 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
 
     private fun drawObject(o: SceneObject, vpc: FloatArray, sel: SceneObject?, alpha: Float) {
         if (o.shape == Shape.WATER) { drawWater(o, vpc, sel, alpha); return }
+        if (o.shape == Shape.TREE) { drawTree(o, vpc, sel); return }
+        if (o.shape == Shape.GRASS) { drawGrass(o, vpc, sel); return }
         Matrix.setIdentityM(model, 0)
         Matrix.translateM(model, 0, o.x, o.y, o.z)
         Matrix.rotateM(model, 0, o.ry, 0f, 1f, 0f)
@@ -639,7 +724,7 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         val soft = (st?.soft ?: 0.4f).coerceIn(0f, 1f)
         val tint = st?.tint ?: floatArrayOf(0f, 0f, 0f)
         val casters = scene.objects.filter { o ->
-            o.shadow && !o.shape.isScreen && !o.shape.isLight && o.shape != Shape.SETTINGS && o.shape != Shape.CAMERA && o.shape != Shape.TERRAIN && o.shape != Shape.BONE && o.shape != Shape.WATER &&
+            o.shadow && !o.shape.isScreen && !o.shape.isLight && o.shape != Shape.SETTINGS && o.shape != Shape.CAMERA && o.shape != Shape.TERRAIN && o.shape != Shape.BONE && o.shape != Shape.WATER && o.shape != Shape.GRASS &&
                 o.y + 0.5f * o.sy > gh + 0.04f
         }
         if (casters.isEmpty()) return
@@ -711,6 +796,7 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
 
     private fun meshFor(o: SceneObject): Mesh {
         if (o.shape == Shape.TERRAIN) return terrainMeshFor(o)
+        if (o.shape == Shape.TREE) return treeAllMesh(o.pattern.coerceIn(0, 1))
         val md = o.model
         return if (md != null) modelMeshes.getOrPut(md.key) { Mesh(md.data, GLES20.GL_TRIANGLES) }
         else meshes.getValue(o.shape)
@@ -728,6 +814,7 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         System.arraycopy(eyeC, 0, curEye, 0, 3)
         setLights(eyeC)
         GLES20.glUniform1f(uWater, 0f)
+        GLES20.glUniform1f(uGrass, 0f)
 
         // Sky photo (Settings): panorama wraps all the way round the camera; backdrop is a fixed picture behind the scene
         val skyKey = settings?.photo ?: ""

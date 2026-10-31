@@ -89,6 +89,30 @@ class EditorView(ctx: Context, val scene: Scene) : GLSurfaceView(ctx) {
         return if (dist < maxOf(0.25f, o.sy * 0.12f, renderer.dist * 0.03f)) s else null
     }
 
+    /** Ray vs an axis-aligned box (centre cx,cy,cz and half sizes), with a little extra reach. */
+    private fun aabbHit(r: FloatArray, cx: Float, cy: Float, cz: Float, hx: Float, hy: Float, hz: Float, tol: Float): Float? {
+        val c = floatArrayOf(cx, cy, cz)
+        val h = floatArrayOf(hx + tol, hy + tol, hz + tol)
+        var tmin = -Float.MAX_VALUE
+        var tmax = Float.MAX_VALUE
+        for (i in 0..2) {
+            val d = r[3 + i]
+            val p = r[i] - c[i]
+            if (abs(d) < 1e-9f) {
+                if (p < -h[i] || p > h[i]) return null
+            } else {
+                var t1 = (-h[i] - p) / d
+                var t2 = (h[i] - p) / d
+                if (t1 > t2) { val tmp = t1; t1 = t2; t2 = tmp }
+                tmin = maxOf(tmin, t1)
+                tmax = minOf(tmax, t2)
+                if (tmin > tmax) return null
+            }
+        }
+        if (tmax < 0f) return null
+        return if (tmin > 0f) tmin else 0f
+    }
+
     private fun raySphere(r: FloatArray, cx: Float, cy: Float, cz: Float, rad: Float): Float? {
         val ox = r[0] - cx
         val oy = r[1] - cy
@@ -108,7 +132,10 @@ class EditorView(ctx: Context, val scene: Scene) : GLSurfaceView(ctx) {
         val tol = renderer.dist * 0.02f
         if (o.shape == Shape.TERRAIN) return TerrainGen.rayHit(o, r)
         if (o.shape == Shape.BONE) return boneHit(o, r)
-        if (o.shape == Shape.WATER) {
+        if (o.shape == Shape.TREE) {
+            return aabbHit(r, o.x, o.y + o.sy / 2f, o.z, 0.38f * o.sx, o.sy / 2f, 0.38f * o.sz, tol)
+        }
+        if (o.shape == Shape.WATER || o.shape == Shape.GRASS) {
             if (abs(r[4]) < 1e-6f) return null
             val t = (o.y - r[1]) / r[4]
             if (t <= 0f) return null
@@ -185,7 +212,7 @@ class EditorView(ctx: Context, val scene: Scene) : GLSurfaceView(ctx) {
             if (o.shape.isScreen || o.shape == Shape.SETTINGS) continue
             val t = hitT(o, r) ?: continue
             // water is picked last, so things under or on it stay selectable
-            hits.add(Pair(if (o.shape == Shape.WATER) t + 1000f else t, o))
+            hits.add(Pair(if (o.shape == Shape.WATER || o.shape == Shape.GRASS) t + 1000f else t, o))
         }
         hits.sortBy { it.first }
         return hits.map { it.second }
