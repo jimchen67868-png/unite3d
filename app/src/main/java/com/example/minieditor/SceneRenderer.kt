@@ -53,6 +53,8 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
     private lateinit var gizmo: Mesh
     private lateinit var circle: Mesh
     private lateinit var quad: Mesh
+    private lateinit var waterMesh: Mesh
+    private var uWater = 0; private var uTime = 0; private var uWave = 0
     private val photoAspect = HashMap<String, Float>()
     private var skyLit = 0f
     private val modelMeshes = HashMap<String, Mesh>()
@@ -63,18 +65,48 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
     private val vertexSrc = """
         uniform mat4 uMVP;
         uniform mat4 uModel;
+        uniform float uWater;
+        uniform float uTime;
+        uniform vec3 uWave;
         attribute vec3 aPos;
         attribute vec3 aNorm;
         varying vec3 vN;
         varying vec3 vW;
         varying vec3 vL;
         varying vec3 vLN;
+        varying float vIsWater;
+        vec3 waveSum(vec2 p) {
+            float t = uTime * uWave.y;
+            float c = cos(uWave.z);
+            float s = sin(uWave.z);
+            vec2 q = vec2(p.x * c - p.y * s, p.x * s + p.y * c);
+            float ph1 = q.x * 0.9 + t * 1.3;
+            float ph2 = q.y * 1.4 + t * 1.0;
+            float ph3 = (q.x * 0.6 + q.y * 0.8) * 2.1 + t * 1.9;
+            float h = 0.5 * sin(ph1) + 0.3 * sin(ph2) + 0.2 * sin(ph3);
+            float dqx = 0.5 * 0.9 * cos(ph1) + 0.2 * 2.1 * 0.6 * cos(ph3);
+            float dqy = 0.3 * 1.4 * cos(ph2) + 0.2 * 2.1 * 0.8 * cos(ph3);
+            float dx = dqx * c + dqy * s;
+            float dz = -dqx * s + dqy * c;
+            return vec3(h, dx, dz) * uWave.x;
+        }
         void main() {
+            vec3 pos = aPos;
+            vec3 nrm = aNorm;
+            vIsWater = uWater;
+            if (uWater > 0.5) {
+                vec2 wxz = (uModel * vec4(aPos, 1.0)).xz;
+                vec3 w = waveSum(wxz);
+                pos.y += w.x;
+                nrm = normalize(vec3(-w.y, 1.0, -w.z));
+                vN = nrm;
+            } else {
+                vN = (uModel * vec4(nrm, 0.0)).xyz;
+            }
             vLN = aNorm;
-            vN = (uModel * vec4(aNorm, 0.0)).xyz;
-            vW = (uModel * vec4(aPos, 1.0)).xyz;
+            vW = (uModel * vec4(pos, 1.0)).xyz;
             vL = aPos;
-            gl_Position = uMVP * vec4(aPos, 1.0);
+            gl_Position = uMVP * vec4(pos, 1.0);
         }
     """.trimIndent()
 
@@ -104,6 +136,7 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         varying vec3 vW;
         varying vec3 vL;
         varying vec3 vLN;
+        varying float vIsWater;
         uniform sampler2D uTex;
         uniform float uUseTex;
         uniform float uMapMode;
@@ -184,12 +217,19 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
                 base = mix(base, base * 0.45, k);
             }
             vec3 c = base * light + spec * uSpec + base * uEmit;
+            float alpha = uColor.a;
+            if (vIsWater > 0.5) {
+                // more sky reflection and less see-through at grazing angles
+                float fres = pow(1.0 - clamp(dot(n, v), 0.0, 1.0), 3.0);
+                c = mix(c, uFogColor, fres * 0.6);
+                alpha = clamp(alpha + fres * 0.5, 0.0, 1.0);
+            }
             if (uFogEnd > 0.0) {
                 float fd = length(vW - uEye);
                 float ff = clamp((fd - uFogEnd * 0.3) / (uFogEnd * 0.7), 0.0, 1.0);
                 c = mix(c, uFogColor, ff);
             }
-            gl_FragColor = vec4(c, uColor.a);
+            gl_FragColor = vec4(c, alpha);
         }
     """.trimIndent()
 
@@ -232,11 +272,15 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         uUseTex = GLES20.glGetUniformLocation(prog, "uUseTex")
         uMapMode = GLES20.glGetUniformLocation(prog, "uMapMode")
         uTerrain = GLES20.glGetUniformLocation(prog, "uTerrain")
+        uWater = GLES20.glGetUniformLocation(prog, "uWater")
+        uTime = GLES20.glGetUniformLocation(prog, "uTime")
+        uWave = GLES20.glGetUniformLocation(prog, "uWave")
         meshes = mapOf(Shape.CUBE to Meshes.cube(), Shape.PYRAMID to Meshes.pyramid(), Shape.SPHERE to Meshes.sphere())
         grid = Meshes.grid()
         gizmo = Meshes.gizmo()
         circle = Meshes.circle()
         quad = Meshes.quad()
+        waterMesh = Meshes.waterGrid()
     }
 
     override fun onSurfaceChanged(gl: GL10?, width: Int, height: Int) {
@@ -405,6 +449,31 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         }
     }
 
+    /** Editor-only bone: a joint ball and a tapered bone along the bone's local Y axis (its length = Y scale). */
+    private fun drawBoneMarker(o: SceneObject, vpc: FloatArray) {
+        val dx = o.x - curEye[0]
+        val dy = o.y - curEye[1]
+        val dz = o.z - curEye[2]
+        val d = sqrt(dx * dx + dy * dy + dz * dz)
+        val len = max(o.sy, 0.2f)
+        val selected = o === scene.selected
+        val col = if (selected) floatArrayOf(1f, 1f, 0.45f) else floatArrayOf(0.95f, 0.72f, 0.3f)
+        val w = max(0.14f * len, d * 0.012f)
+        Matrix.setIdentityM(model, 0)
+        Matrix.translateM(model, 0, o.x, o.y, o.z)
+        Matrix.rotateM(model, 0, o.ry, 0f, 1f, 0f)
+        Matrix.rotateM(model, 0, o.rx, 1f, 0f, 0f)
+        Matrix.rotateM(model, 0, o.rz, 0f, 0f, 1f)
+        Matrix.translateM(model, 0, 0f, len / 2f, 0f)
+        Matrix.scaleM(model, 0, w, len, w)
+        drawMesh(meshes.getValue(Shape.PYRAMID), vpc, model, col, false)
+        val k = max(0.12f, d * 0.022f)
+        Matrix.setIdentityM(model, 0)
+        Matrix.translateM(model, 0, o.x, o.y, o.z)
+        Matrix.scaleM(model, 0, k, k, k)
+        drawMesh(meshes.getValue(Shape.SPHERE), vpc, model, floatArrayOf(1f, 0.92f, 0.55f), false)
+    }
+
     /** Editor-only camera marker: a small body plus a line showing where it looks. */
     private fun drawCameraMarker(o: SceneObject, vpc: FloatArray) {
         val dx = o.x - curEye[0]
@@ -470,7 +539,29 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         }
     }
 
+    private fun drawWater(o: SceneObject, vpc: FloatArray, sel: SceneObject?, alpha: Float) {
+        Matrix.setIdentityM(model, 0)
+        Matrix.translateM(model, 0, o.x, o.y, o.z)
+        Matrix.scaleM(model, 0, o.sx, 1f, o.sz)
+        GLES20.glUniform1f(uSpec, o.spec.coerceIn(0f, 1f))
+        GLES20.glUniform1f(uGloss, o.gloss.coerceIn(0f, 1f))
+        GLES20.glUniform1f(uEmit, o.emit.coerceIn(0f, 1f))
+        GLES20.glUniform1f(uPattern, 0f)
+        GLES20.glUniform3f(uObjScale, 1f, 1f, 1f)
+        GLES20.glUniform1f(uTerrain, 0f)
+        GLES20.glUniform1f(uUseTex, 0f)
+        GLES20.glUniform1f(uWater, 1f)
+        GLES20.glUniform1f(uTime, Water.time())
+        GLES20.glUniform3f(uWave, o.sy, o.rx, Math.toRadians(o.ry.toDouble()).toFloat())
+        val c = if (o === sel)
+            floatArrayOf(minOf(1f, o.color[0] + 0.25f), minOf(1f, o.color[1] + 0.25f), minOf(1f, o.color[2] + 0.25f))
+        else o.color
+        drawMesh(waterMesh, vpc, model, c, true, 0, waterMesh.count, alpha)
+        GLES20.glUniform1f(uWater, 0f)
+    }
+
     private fun drawObject(o: SceneObject, vpc: FloatArray, sel: SceneObject?, alpha: Float) {
+        if (o.shape == Shape.WATER) { drawWater(o, vpc, sel, alpha); return }
         Matrix.setIdentityM(model, 0)
         Matrix.translateM(model, 0, o.x, o.y, o.z)
         Matrix.rotateM(model, 0, o.ry, 0f, 1f, 0f)
@@ -548,7 +639,7 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         val soft = (st?.soft ?: 0.4f).coerceIn(0f, 1f)
         val tint = st?.tint ?: floatArrayOf(0f, 0f, 0f)
         val casters = scene.objects.filter { o ->
-            o.shadow && !o.shape.isScreen && !o.shape.isLight && o.shape != Shape.SETTINGS && o.shape != Shape.CAMERA && o.shape != Shape.TERRAIN &&
+            o.shadow && !o.shape.isScreen && !o.shape.isLight && o.shape != Shape.SETTINGS && o.shape != Shape.CAMERA && o.shape != Shape.TERRAIN && o.shape != Shape.BONE && o.shape != Shape.WATER &&
                 o.y + 0.5f * o.sy > gh + 0.04f
         }
         if (casters.isEmpty()) return
@@ -636,6 +727,7 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         GLES20.glUseProgram(prog)
         System.arraycopy(eyeC, 0, curEye, 0, 3)
         setLights(eyeC)
+        GLES20.glUniform1f(uWater, 0f)
 
         // Sky photo (Settings): panorama wraps all the way round the camera; backdrop is a fixed picture behind the scene
         val skyKey = settings?.photo ?: ""
@@ -687,9 +779,9 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         val sel = scene.selected
         val seeThrough = ArrayList<SceneObject>()
         for (o in scene.objects) {
-            if (o.shape.isLight || o.shape == Shape.CAMERA) continue
+            if (o.shape.isLight || o.shape == Shape.CAMERA || o.shape == Shape.BONE) continue
             if (o.shape.isScreen || o.shape == Shape.SETTINGS || o === fpHide) continue
-            if (o.opacity < 0.99f) { seeThrough.add(o); continue }
+            if (o.shape == Shape.WATER || o.opacity < 0.99f) { seeThrough.add(o); continue }
             drawObject(o, vpc, sel, 1f)
         }
         if (seeThrough.isNotEmpty()) {
@@ -712,6 +804,7 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
             for (o in scene.objects) {
                 if (o.shape.isLight) drawLightMarker(o, vpc)
                 else if (o.shape == Shape.CAMERA) drawCameraMarker(o, vpc)
+                else if (o.shape == Shape.BONE) drawBoneMarker(o, vpc)
             }
             GLES20.glEnable(GLES20.GL_DEPTH_TEST)
         }

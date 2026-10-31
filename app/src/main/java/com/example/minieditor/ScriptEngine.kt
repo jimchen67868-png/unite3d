@@ -133,6 +133,14 @@ class ScriptEngine(private val scene: Scene, private val log: (String) -> Unit) 
         }
     }
 
+    /** waterHeight(x, z) = height of the moving water surface there, or nil if there is no water. */
+    private val waterFn = object : VarArgFunction() {
+        override fun invoke(args: Varargs): Varargs {
+            val y = Water.surfaceAt(scene, args.optdouble(1, 0.0).toFloat(), args.optdouble(2, 0.0).toFloat())
+            return if (y == null) LuaValue.NIL else LuaValue.valueOf(y.toDouble())
+        }
+    }
+
     private val destroyFn = object : OneArgFunction() {
         override fun call(arg: LuaValue): LuaValue {
             for ((o, t) in tables.entries.toList()) {
@@ -182,6 +190,9 @@ class ScriptEngine(private val scene: Scene, private val log: (String) -> Unit) 
         t.set("collider", o.collider.toDouble())
         t.set("opacity", o.opacity.toDouble())
         t.set("emit", o.emit.toDouble())
+        val wy = Water.surfaceAt(scene, o.x, o.z)
+        t.set("inWater", LuaValue.valueOf(wy != null && o.y < wy))
+        if (wy != null) t.set("waterY", wy.toDouble()) else t.set("waterY", LuaValue.NIL)
     }
 
     private fun num(t: LuaTable, k: String): Float? {
@@ -427,6 +438,7 @@ class ScriptEngine(private val scene: Scene, private val log: (String) -> Unit) 
                 g.set("find", findFn)
                 g.set("spawn", spawnFn)
                 g.set("groundHeight", groundFn)
+                g.set("waterHeight", waterFn)
                 g.set("destroy", destroyFn)
                 g.set("log", logFn)
                 g.set("print", logFn)
@@ -446,6 +458,7 @@ class ScriptEngine(private val scene: Scene, private val log: (String) -> Unit) 
         pullAll()
         pullWorld()
         pullCamera()
+        Rig.apply(scene)
     }
 
     fun update(rawDt: Float) {
@@ -466,6 +479,8 @@ class ScriptEngine(private val scene: Scene, private val log: (String) -> Unit) 
         pullAll()
         pullWorld()
         pullCamera()
+        Rig.apply(scene)
         collide()
+        Rig.apply(scene)
     }
 }

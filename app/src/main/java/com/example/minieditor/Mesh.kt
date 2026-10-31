@@ -118,7 +118,7 @@ object Meshes {
         Shape.CUBE -> cubeData()
         Shape.PYRAMID -> pyramidData()
         Shape.SPHERE -> sphereData()
-        Shape.MODEL, Shape.JOYSTICK, Shape.BUTTON, Shape.LIGHT, Shape.SUN, Shape.SETTINGS, Shape.CAMERA, Shape.TERRAIN -> null
+        Shape.MODEL, Shape.JOYSTICK, Shape.BUTTON, Shape.LIGHT, Shape.SUN, Shape.SETTINGS, Shape.CAMERA, Shape.TERRAIN, Shape.BONE, Shape.WATER -> null
     }
 
     /** Grid lines first; the last 4 vertices are the X axis and Z axis. */
@@ -151,6 +151,23 @@ object Meshes {
             -1f, -1f, 0f, 0f, 0f, 1f, 1f, 1f, 0f, 0f, 0f, 1f, -1f, 1f, 0f, 0f, 0f, 1f
         )
         return Mesh(v, GLES20.GL_TRIANGLES)
+    }
+
+    /** Flat grid, x and z from -0.5 to 0.5, used for water (waves are added in the shader). */
+    fun waterGrid(): Mesh {
+        val n = 40
+        val o = ArrayList<Float>()
+        fun v(i: Int, j: Int) {
+            o.add(i.toFloat() / n - 0.5f); o.add(0f); o.add(j.toFloat() / n - 0.5f)
+            o.add(0f); o.add(1f); o.add(0f)
+        }
+        for (j in 0 until n) {
+            for (i in 0 until n) {
+                v(i, j); v(i + 1, j); v(i + 1, j + 1)
+                v(i, j); v(i + 1, j + 1); v(i, j + 1)
+            }
+        }
+        return Mesh(o.toFloatArray(), GLES20.GL_TRIANGLES)
     }
 
     fun gizmo(): Mesh {

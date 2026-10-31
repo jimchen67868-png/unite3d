@@ -63,6 +63,8 @@ class MainActivity : Activity(), SensorEventListener {
     private var showCoords = true
     @Volatile private var labelPending = false
     private lateinit var colliderBtn: Button
+    private var waterLoop = false
+    private lateinit var attachBtn: Button
     private lateinit var terrainPanel: LinearLayout
     private lateinit var sculptBtn: Button
     private lateinit var brushLabels: Array<TextView>
@@ -355,6 +357,8 @@ end
         pm.menu.add(0, 9, 8, "Show coordinates: " + (if (showCoords) "on" else "off"))
         pm.menu.add(0, 10, 9, "Shadow settings...")
         pm.menu.add(0, 11, 10, "Tilt control: " + (if (tiltOn) "on" else "off"))
+        pm.menu.add(0, 12, 11, "Load sample: robot arm (bones)")
+        pm.menu.add(0, 13, 12, "Load sample: lake (water)")
         pm.menu.add(0, 7, 6, "Load sample game (Coin Rush)")
         pm.menu.add(0, 8, 7, "Editor lighting: " + (if (editor.renderer.editorBright) "Bright (tap for Scene)" else "Scene (tap for Bright)"))
         pm.setOnMenuItemClickListener { item ->
@@ -372,6 +376,8 @@ end
                     8 -> { editor.renderer.editorBright = !editor.renderer.editorBright; editor.refresh() }
                     9 -> { showCoords = !showCoords; editor.refresh() }
                     11 -> { tiltOn = !tiltOn; toast("Tilt control " + (if (tiltOn) "on" else "off")) }
+                    12 -> loadRigSample()
+                    13 -> loadLakeSample()
                     10 -> {
                         val s = scene.objects.firstOrNull { it.shape == Shape.SETTINGS } ?: scene.addSettings()
                         scene.selected = s
@@ -380,6 +386,84 @@ end
                     }
                 }
             }
+            true
+        }
+        pm.show()
+    }
+
+    private fun loadLakeSample() {
+        val go = {
+            Samples.lake(scene)
+            editor.renderer.dist = 24f
+            editor.renderer.pitch = 35f
+            editor.renderer.target[0] = 0f; editor.renderer.target[1] = 1f; editor.renderer.target[2] = 0f
+            editor.refresh()
+            toast("Lake loaded - select the Water to change its waves, colour and transparency")
+        }
+        if (scene.objects.isEmpty()) {
+            go()
+        } else {
+            AlertDialog.Builder(this)
+                .setTitle("Load lake sample?")
+                .setMessage("This replaces the current scene. Use File > Export scene zip first if you want to keep it.")
+                .setPositiveButton("Load") { _, _ -> go() }
+                .setNegativeButton("Cancel", null)
+                .show()
+        }
+    }
+
+    // Water waves move all the time, so keep drawing while there is water in the scene.
+    private val waterCb = object : Choreographer.FrameCallback {
+        override fun doFrame(frameTimeNanos: Long) {
+            if (scene.objects.any { it.shape == Shape.WATER }) {
+                editor.requestRender()
+                Choreographer.getInstance().postFrameCallback(this)
+            } else {
+                waterLoop = false
+            }
+        }
+    }
+
+    private fun ensureWaterLoop() {
+        if (!waterLoop && scene.objects.any { it.shape == Shape.WATER }) {
+            waterLoop = true
+            Choreographer.getInstance().postFrameCallback(waterCb)
+        }
+    }
+
+    private fun loadRigSample() {
+        val go = {
+            Samples.robotArm(scene)
+            editor.renderer.dist = 13f
+            editor.renderer.pitch = 20f
+            editor.renderer.target[1] = 2f
+            editor.refresh()
+            toast("Robot arm loaded - tap Play. Rotate a bone to swing the parts on it.")
+        }
+        if (scene.objects.isEmpty()) {
+            go()
+        } else {
+            AlertDialog.Builder(this)
+                .setTitle("Load robot arm sample?")
+                .setMessage("This replaces the current scene. Use File > Export scene zip first if you want to keep it.")
+                .setPositiveButton("Load") { _, _ -> go() }
+                .setNegativeButton("Cancel", null)
+                .show()
+        }
+    }
+
+    private fun showAttachMenu() {
+        val o = scene.selected ?: return
+        if (o.shape.isScreen || o.shape == Shape.SETTINGS || o.shape == Shape.TERRAIN) return
+        val bones = scene.objects.filter { it.shape == Shape.BONE && it !== o && !Rig.isDescendant(scene, it, o) }
+        val pm = PopupMenu(this, attachBtn)
+        pm.menu.add(0, 0, 0, "None (free)")
+        bones.forEachIndexed { i, b -> pm.menu.add(0, 100 + i, 1 + i, b.name) }
+        if (bones.isEmpty()) toast("Add a Bone first (Hierarchy, +Bone)")
+        pm.setOnMenuItemClickListener { item ->
+            if (item.itemId == 0) Rig.detach(o) else Rig.bind(o, bones[item.itemId - 100])
+            lastCount = -1
+            editor.refresh()
             true
         }
         pm.show()
@@ -770,7 +854,9 @@ end
             ))
             addView(row(
                 btn("+Camera", true) { if (scene.addCamera() == null) toast("Camera already added") else editor.refresh() },
-                btn("+Terrain", true) { scene.addTerrain(); editor.refresh() }
+                btn("+Terrain", true) { scene.addTerrain(); editor.refresh() },
+                btn("+Bone", true) { scene.addBone(); editor.refresh() },
+                btn("+Water", true) { scene.addWater(); editor.refresh() }
             ))
             addView(scroll)
         }
@@ -778,10 +864,26 @@ end
 
     private fun rebuildHierarchy() {
         hierList.removeAllViews()
-        for (o in scene.objects) {
+        // attached objects are listed under their bone
+        val order = ArrayList<Pair<SceneObject, Int>>()
+        fun walk(o: SceneObject, depth: Int) {
+            if (depth > 16) return
+            order.add(Pair(o, depth))
+            if (o.uid != 0) for (c in scene.objects) if (c.parentId == o.uid && c !== o) walk(c, depth + 1)
+        }
+        for (o in scene.objects) if (Rig.find(scene, o.parentId) == null) walk(o, 0)
+        for ((o, depth) in order) {
             val sel = o === scene.selected
             hierList.addView(TextView(this).apply {
-                text = (if (sel) "▶ " else "    ") + o.name + (if (o.script.isNotBlank()) "  {lua}" else "") + (if (o.shape.isScreen) "  [screen]" else "") + (if (o.shape.isLight) "  [light]" else "") + (if (o.shape == Shape.SETTINGS) "  [settings]" else "") + (if (o.shape == Shape.CAMERA) "  [camera]" else "") + (if (o.shape == Shape.TERRAIN) "  [terrain]" else "")
+                text = (if (sel) "▶ " else "    ") + "    ".repeat(depth) + (if (depth > 0) "└ " else "") + o.name +
+                    (if (o.script.isNotBlank()) "  {lua}" else "") +
+                    (if (o.shape.isScreen) "  [screen]" else "") +
+                    (if (o.shape.isLight) "  [light]" else "") +
+                    (if (o.shape == Shape.SETTINGS) "  [settings]" else "") +
+                    (if (o.shape == Shape.CAMERA) "  [camera]" else "") +
+                    (if (o.shape == Shape.TERRAIN) "  [terrain]" else "") +
+                    (if (o.shape == Shape.BONE) "  [bone]" else "") +
+                    (if (o.shape == Shape.WATER) "  [water]" else "")
                 textSize = 14f
                 setTextColor(if (sel) 0xFF7FB0FF.toInt() else Color.WHITE)
                 setPadding(dp(10), dp(8), dp(10), dp(8))
@@ -943,6 +1045,8 @@ end
                 }
             }
             addView(shadowBtn)
+            attachBtn = btn("Attach to: none") { showAttachMenu() }
+            addView(attachBtn)
             labelA = TextView(this@MainActivity).apply {
                 textSize = 12f; setTextColor(0xFFDDDDDD.toInt()); setPadding(dp(4), dp(6), dp(4), 0)
             }
@@ -1109,7 +1213,19 @@ end
         if (t.isNotEmpty() && t != o.name) { o.name = t; lastCount = -1; editor.refresh() }
     }
 
+    /** Typed values on an attached object re-learn its offset from the bone instead of snapping back. */
     private fun applyField(i: Int) {
+        val o = scene.selected ?: return
+        Rig.editing = o
+        try {
+            applyFieldInner(i)
+        } finally {
+            Rig.editing = null
+            Rig.rebind(scene, o)
+        }
+    }
+
+    private fun applyFieldInner(i: Int) {
         val o = scene.selected ?: return
         val v = fields[i].text.toString().toFloatOrNull()
         if (v == null) { refreshInspector(); return }
@@ -1174,29 +1290,34 @@ end
         val st = o?.shape == Shape.SETTINGS
         val cam = o?.shape == Shape.CAMERA
         val ter = o?.shape == Shape.TERRAIN
+        val bone = o?.shape == Shape.BONE
+        val water = o?.shape == Shape.WATER
         skyRow.visibility = if (st) View.VISIBLE else View.GONE
         skyPanel.visibility = if (st) View.VISIBLE else View.GONE
         objSwatches.visibility = if (st) View.GONE else View.VISIBLE
         settingsHint.visibility = if (st) View.VISIBLE else View.GONE
-        colliderBtn.visibility = if (o != null && !joy && !light && !st && !cam) View.VISIBLE else View.GONE
+        colliderBtn.visibility = if (o != null && !joy && !light && !st && !cam && !bone && !water) View.VISIBLE else View.GONE
         lightPanel.visibility = if (light) View.VISIBLE else View.GONE
         shadowPanel.visibility = if (st) View.VISIBLE else View.GONE
         terrainPanel.visibility = if (ter) View.VISIBLE else View.GONE
         shadowBtn.visibility = colliderBtn.visibility
+        attachBtn.visibility = if (o != null && !joy && !st && !ter) View.VISIBLE else View.GONE
         nameField.isEnabled = o != null
         for ((i, f) in fields.withIndex()) {
             f.isEnabled = o != null && when {
                 st -> i in 0..5 || i == 6 || i == 7 || i == 8
                 cam -> i in 0..4 || i == 6
                 ter -> i in 0..2 || i in 6..8
+                bone -> i in 0..5 || i == 7
+                water -> i in 0..4 || i in 6..8
                 joy -> i == 0 || i == 1 || i == 6
                 light -> i in 0..2 || i == 6 || i == 7 || (sun && (i == 3 || i == 4))
                 else -> true
             }
         }
         rowLabels[0].text = if (joy) "Screen %" else if (st) "World" else "Pos"
-        rowLabels[1].text = if (st) "Snap/Shd/Gnd" else if (cam) "Pitch/Yaw" else "Rot"
-        rowLabels[2].text = if (joy) "Size" else if (st) "Time/Grid/Col" else if (cam) "FOV" else if (ter) "Size W/H/D" else if (sun) "Power/Amb" else if (light) "Power/Rng" else "Scale"
+        rowLabels[1].text = if (st) "Snap/Shd/Gnd" else if (cam) "Pitch/Yaw" else if (water) "Speed/Dir" else "Rot"
+        rowLabels[2].text = if (joy) "Size" else if (st) "Time/Grid/Col" else if (cam) "FOV" else if (ter) "Size W/H/D" else if (bone) "Bone length" else if (water) "Size/Wave H" else if (sun) "Power/Amb" else if (light) "Power/Rng" else "Scale"
         if (o == null) {
             if (!nameField.hasFocus()) nameField.setText("")
             for (f in fields) if (!f.hasFocus()) f.setText("")
@@ -1204,6 +1325,7 @@ end
         }
         if (!nameField.hasFocus()) nameField.setText(o.name)
         shadowBtn.text = "Casts shadow: " + (if (o.shadow) "On" else "Off")
+        attachBtn.text = "Attach to: " + (Rig.find(scene, o.parentId)?.name ?: "none")
         sculptBtn.text = "Sculpt: " + arrayOf("Off", "Raise", "Lower", "Smooth", "Flatten")[editor.sculpt.coerceIn(0, 4)]
         brushLabels[0].text = String.format(Locale.US, "Brush size   %.1f", editor.brushRadius)
         brushLabels[1].text = String.format(Locale.US, "Brush strength   %.2f", editor.brushStrength)
@@ -1306,6 +1428,7 @@ end
         if (panel == Panel.SCRIPT) refreshScript()
         if (panel == Panel.MATERIAL) refreshMaterial()
         refreshJoystick()
+        ensureWaterLoop()
     }
 
     /** Shows screen controls (Joystick, Jump button): a faint preview while editing, live while playing. */
@@ -1847,6 +1970,11 @@ end
 
     override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
 
-    override fun onPause() { stopPlay(); autoSave(); super.onPause(); editor.onPause() }
-    override fun onResume() { super.onResume(); editor.onResume() }
+    override fun onPause() {
+        stopPlay(); autoSave()
+        Choreographer.getInstance().removeFrameCallback(waterCb)
+        waterLoop = false
+        super.onPause(); editor.onPause()
+    }
+    override fun onResume() { super.onResume(); editor.onResume(); ensureWaterLoop() }
 }

@@ -136,6 +136,76 @@ end
         o.collider = collider
     }
 
+    private fun mk(
+        scene: Scene, shape: Shape, name: String, x: Float, y: Float, z: Float,
+        sx: Float, sy: Float, sz: Float, color: FloatArray, script: String = ""
+    ): SceneObject {
+        val o = scene.add(shape, null, name)
+        o.x = x; o.y = y; o.z = z
+        o.sx = sx; o.sy = sy; o.sz = sz
+        o.color = color
+        o.script = script
+        return o
+    }
+
+    /** Hills with a lake: floating crates ride the real wave height through waterHeight(). */
+    fun lake(scene: Scene) {
+        scene.objects.clear()
+        scene.selected = null
+        scene.addSettings()?.let {
+            it.y = 70f; it.z = 0.4f; it.ry = 0f
+            it.color = floatArrayOf(0.55f, 0.75f, 0.92f)
+        }
+        scene.addLight(Shape.SUN)?.let { it.sx = 1.1f; it.sy = 0.35f }
+        val land = scene.addTerrain()
+        land.sx = 30f; land.sy = 4f; land.sz = 30f
+        land.heights = TerrainGen.generate(7, 0.55f)
+        land.hVersion++
+        val sea = scene.addWater()
+        sea.sx = 30f; sea.sz = 30f; sea.y = 1.2f
+        val floater = "function update(dt)\n  local wy = waterHeight(self.x, self.z)\n  if wy then\n    self.y = wy + 0.1 + math.sin(time * 2 + self.x) * 0.03\n    self.rz = math.sin(time * 1.5 + self.x) * 8\n    self.rx = math.cos(time * 1.2 + self.z) * 8\n  end\nend\n"
+        var made = 0
+        var gz = -12f
+        while (gz <= 12f && made < 5) {
+            var gx = -12f
+            while (gx <= 12f && made < 5) {
+                val h = TerrainGen.heightAt(land, gx, gz)
+                if (h != null && h < sea.y - 0.5f && (gx.toInt() + gz.toInt()) % 2 == 0) {
+                    val o = mk(scene, if (made % 2 == 0) Shape.CUBE else Shape.SPHERE, "Floater " + (made + 1),
+                        gx, sea.y, gz, 0.7f, 0.7f, 0.7f,
+                        floatArrayOf(0.9f - made * 0.1f, 0.45f + made * 0.08f, 0.25f), floater)
+                    o.emit = 0.1f
+                    made++
+                }
+                gx += 3f
+            }
+            gz += 3f
+        }
+        scene.selected = null
+    }
+
+    /** A two-joint arm: rotating a bone swings every part attached to it. Scripts on the bones make it wave. */
+    fun robotArm(scene: Scene) {
+        scene.objects.clear()
+        scene.selected = null
+        mk(scene, Shape.CUBE, "Floor", 0f, -0.1f, 0f, 14f, 0.2f, 14f, floatArrayOf(0.35f, 0.38f, 0.42f))
+        mk(scene, Shape.CUBE, "Base", 0f, 0.2f, 0f, 1.6f, 0.4f, 1.6f, floatArrayOf(0.25f, 0.28f, 0.33f))
+
+        val shoulder = mk(scene, Shape.BONE, "Shoulder", 0f, 0.4f, 0f, 1f, 2f, 1f, floatArrayOf(1f, 1f, 1f),
+            "-- swings the whole arm forward and back\nfunction update(dt)\n  self.rx = math.sin(time * 1.2) * 30\nend\n")
+        val upper = mk(scene, Shape.CUBE, "Upper arm", 0f, 1.4f, 0f, 0.4f, 2f, 0.4f, floatArrayOf(0.85f, 0.35f, 0.3f))
+        val elbow = mk(scene, Shape.BONE, "Elbow", 0f, 2.4f, 0f, 1f, 2f, 1f, floatArrayOf(1f, 1f, 1f),
+            "-- bends the forearm (the elbow is attached to the shoulder, so it follows it)\nfunction update(dt)\n  self.rx = 20 + math.sin(time * 2.4) * 45\nend\n")
+        val fore = mk(scene, Shape.CUBE, "Forearm", 0f, 3.4f, 0f, 0.35f, 2f, 0.35f, floatArrayOf(0.3f, 0.6f, 0.9f))
+        val hand = mk(scene, Shape.SPHERE, "Hand", 0f, 4.55f, 0f, 0.6f, 0.6f, 0.6f, floatArrayOf(0.95f, 0.8f, 0.25f))
+
+        Rig.bind(upper, shoulder)
+        Rig.bind(elbow, shoulder)
+        Rig.bind(fore, elbow)
+        Rig.bind(hand, elbow)
+        scene.selected = null
+    }
+
     /** Collect coins for 30 seconds while dodging hazards. Tilt the phone or touch to move. */
     fun coinRush(scene: Scene) {
         scene.objects.clear()

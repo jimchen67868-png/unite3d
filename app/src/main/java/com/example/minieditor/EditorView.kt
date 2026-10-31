@@ -60,7 +60,34 @@ class EditorView(ctx: Context, val scene: Scene) : GLSurfaceView(ctx) {
         renderMode = RENDERMODE_WHEN_DIRTY
     }
 
-    fun refresh() { requestRender(); onChange?.invoke() }
+    fun refresh() { Rig.apply(scene); requestRender(); onChange?.invoke() }
+
+    /** Ray vs the bone's line from joint to tip (a thin capsule). */
+    private fun boneHit(o: SceneObject, r: FloatArray): Float? {
+        val m = FloatArray(16)
+        Rig.worldMatrix(o, m)
+        val tip = FloatArray(4)
+        Matrix.multiplyMV(tip, 0, m, 0, floatArrayOf(0f, maxOf(o.sy, 0.2f), 0f, 1f), 0)
+        val vx = tip[0] - o.x
+        val vy = tip[1] - o.y
+        val vz = tip[2] - o.z
+        val wx = r[0] - o.x
+        val wy = r[1] - o.y
+        val wz = r[2] - o.z
+        val b = r[3] * vx + r[4] * vy + r[5] * vz
+        val c = vx * vx + vy * vy + vz * vz
+        val dd = r[3] * wx + r[4] * wy + r[5] * wz
+        val e = vx * wx + vy * wy + vz * wz
+        val den = c - b * b
+        var t = if (abs(den) < 1e-6f) 0f else (e - b * dd) / den
+        t = t.coerceIn(0f, 1f)
+        val s = maxOf(0f, t * b - dd)
+        val qx = r[0] + r[3] * s - (o.x + t * vx)
+        val qy = r[1] + r[4] * s - (o.y + t * vy)
+        val qz = r[2] + r[5] * s - (o.z + t * vz)
+        val dist = sqrt(qx * qx + qy * qy + qz * qz)
+        return if (dist < maxOf(0.25f, o.sy * 0.12f, renderer.dist * 0.03f)) s else null
+    }
 
     private fun raySphere(r: FloatArray, cx: Float, cy: Float, cz: Float, rad: Float): Float? {
         val ox = r[0] - cx
@@ -80,6 +107,15 @@ class EditorView(ctx: Context, val scene: Scene) : GLSurfaceView(ctx) {
     private fun hitT(o: SceneObject, r: FloatArray): Float? {
         val tol = renderer.dist * 0.02f
         if (o.shape == Shape.TERRAIN) return TerrainGen.rayHit(o, r)
+        if (o.shape == Shape.BONE) return boneHit(o, r)
+        if (o.shape == Shape.WATER) {
+            if (abs(r[4]) < 1e-6f) return null
+            val t = (o.y - r[1]) / r[4]
+            if (t <= 0f) return null
+            val px = r[0] + r[3] * t
+            val pz = r[2] + r[5] * t
+            return if (abs(px - o.x) <= o.sx / 2f && abs(pz - o.z) <= o.sz / 2f) t else null
+        }
         if (o.shape.isLight || o.shape == Shape.CAMERA) return raySphere(r, o.x, o.y, o.z, maxOf(0.4f, renderer.dist * 0.04f))
         val m = FloatArray(16)
         Matrix.setIdentityM(m, 0)
@@ -148,7 +184,8 @@ class EditorView(ctx: Context, val scene: Scene) : GLSurfaceView(ctx) {
         for (o in scene.objects) {
             if (o.shape.isScreen || o.shape == Shape.SETTINGS) continue
             val t = hitT(o, r) ?: continue
-            hits.add(Pair(t, o))
+            // water is picked last, so things under or on it stay selectable
+            hits.add(Pair(if (o.shape == Shape.WATER) t + 1000f else t, o))
         }
         hits.sortBy { it.first }
         return hits.map { it.second }
@@ -186,6 +223,7 @@ class EditorView(ctx: Context, val scene: Scene) : GLSurfaceView(ctx) {
         dragTarget = null
         pending = null
         sculpting = false
+        Rig.editing = null
     }
 
     override fun onTouchEvent(e: MotionEvent): Boolean {
@@ -233,6 +271,7 @@ class EditorView(ctx: Context, val scene: Scene) : GLSurfaceView(ctx) {
                     if (p != null) {
                         scene.selected = p
                         dragTarget = p
+                        Rig.editing = p
                         dragging = true
                         dragStartTime = e.eventTime
                         saveVals(p)
@@ -270,9 +309,12 @@ class EditorView(ctx: Context, val scene: Scene) : GLSurfaceView(ctx) {
                     scene.selected = choice
                     refresh()
                 }
+                dragTarget?.let { Rig.rebind(scene, it) }
+                Rig.editing = null
                 dragging = false; dragTarget = null; pending = null; sculpting = false
             }
             MotionEvent.ACTION_CANCEL -> {
+                Rig.editing = null
                 dragging = false; dragTarget = null; pending = null; sculpting = false
             }
         }
@@ -332,6 +374,7 @@ class EditorView(ctx: Context, val scene: Scene) : GLSurfaceView(ctx) {
                 val f = 1f - dy * 0.005f
                 if (o.shape.isLight) { o.sx = (o.sx * f).coerceIn(0.05f, 5f); refresh(); return }
                 if (o.shape == Shape.CAMERA) { o.sx = (o.sx * f).coerceIn(20f, 120f); refresh(); return }
+                if (o.shape == Shape.BONE) { o.sy = (o.sy * f).coerceIn(0.1f, 20f); refresh(); return }
                 when (axis) {
                     1 -> o.sx = (o.sx * f).coerceIn(0.05f, 20f)
                     2 -> o.sy = (o.sy * f).coerceIn(0.05f, 20f)

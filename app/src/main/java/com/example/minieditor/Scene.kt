@@ -10,7 +10,9 @@ enum class Shape(val label: String, val radius: Float) {
     LIGHT("Light", 0.4f), SUN("Sun", 0.4f),
     SETTINGS("Settings", 0f),
     CAMERA("Camera", 0.4f),
-    TERRAIN("Terrain", 0f);
+    TERRAIN("Terrain", 0f),
+    BONE("Bone", 0.3f),
+    WATER("Water", 0f);
 
     val isScreen: Boolean get() = this == JOYSTICK || this == BUTTON
     val isLight: Boolean get() = this == LIGHT || this == SUN
@@ -42,6 +44,9 @@ class SceneObject(
     var photo: String = ""   // key of an imported photo used as the surface picture
     var heights: FloatArray? = null   // Terrain: 49 x 49 heights, 0..1
     var hVersion = 0                  // bumps whenever the heights change
+    var uid = 0                       // stable id so other objects can attach to this one
+    var parentId = 0                  // uid of the bone this object is attached to (0 = free)
+    var rel: FloatArray? = null       // position/rotation relative to that bone
     var collider: Int = 0   // 0 = none, 1 = solid (blocks), 2 = trigger (events only)
 }
 
@@ -140,6 +145,32 @@ class Scene {
         return o
     }
 
+    /**
+     * Water with moving waves. Size = scale width/depth, sy = wave height, rx = wave speed, ry = wave direction.
+     * Use the Material panel for transparency and shininess, the colour swatches for the tint.
+     */
+    fun addWater(): SceneObject {
+        counter++
+        val o = SceneObject(Shape.WATER, "Water", x = 0f, y = 0.5f, z = 0f, rx = 1f, ry = 0f, sx = 24f, sy = 0.15f, sz = 24f,
+            color = floatArrayOf(0.12f, 0.45f, 0.70f))
+        o.opacity = 0.6f
+        o.spec = 1f
+        o.gloss = 0.85f
+        o.shadow = false
+        objects.add(o)
+        selected = o
+        return o
+    }
+
+    /** A joint for rigging. Rotate it to swing everything attached to it. Length (the Y scale) is how long the bone is. */
+    fun addBone(): SceneObject {
+        val o = add(Shape.BONE)
+        o.name = "Bone " + counter
+        o.y = 0.5f
+        o.sy = 1.5f
+        return o
+    }
+
     /** Hills you can reshape. Size comes from the scale: width, tallest height, depth. Solid by default. */
     fun addTerrain(): SceneObject {
         counter++
@@ -191,6 +222,8 @@ class Scene {
         o.shadow = s.shadow
         o.photo = s.photo
         o.heights = s.heights?.copyOf()
+        o.parentId = s.parentId
+        o.rel = s.rel?.copyOf()
         o.spec = s.spec; o.gloss = s.gloss; o.emit = s.emit; o.opacity = s.opacity; o.pattern = s.pattern
         objects.add(o)
         selected = o
@@ -213,6 +246,11 @@ class Scene {
             put("spec", o.spec.toDouble()); put("gloss", o.gloss.toDouble())
             put("emit", o.emit.toDouble()); put("opacity", o.opacity.toDouble()); put("pattern", o.pattern)
             o.heights?.let { put("heights", TerrainGen.encode(it)) }
+            if (o.uid != 0) put("uid", o.uid)
+            if (o.parentId != 0) {
+                put("parent", o.parentId)
+                o.rel?.let { r -> put("rel", JSONArray().also { a -> for (v in r) a.put(v.toDouble()) }) }
+            }
             put("photo", o.photo); put("soft", o.soft.toDouble()); put("tintR", o.tint[0].toDouble()); put("tintG", o.tint[1].toDouble()); put("tintB", o.tint[2].toDouble())
             o.model?.let { put("model", it.key) }
             put("x", o.x.toDouble()); put("y", o.y.toDouble()); put("z", o.z.toDouble())
@@ -250,8 +288,12 @@ class Scene {
                 it.photo = j.optString("photo", "")
                 it.heights = if (j.has("heights")) TerrainGen.decode(j.getString("heights")) else null
                 it.hVersion = 1
+                it.uid = j.optInt("uid", 0)
+                it.parentId = j.optInt("parent", 0)
+                it.rel = j.optJSONArray("rel")?.let { a -> FloatArray(16) { k -> a.getDouble(k).toFloat() } }
                 it.tint = floatArrayOf(j.optDouble("tintR", 0.0).toFloat(), j.optDouble("tintG", 0.0).toFloat(), j.optDouble("tintB", 0.0).toFloat()) })
         }
+        Rig.nextUid = maxOf(Rig.nextUid, (list.maxOfOrNull { it.uid } ?: 0) + 1)
         selected = null
         objects.clear()
         objects.addAll(list)
