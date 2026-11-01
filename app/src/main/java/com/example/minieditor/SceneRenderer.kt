@@ -57,6 +57,7 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
     private var uWater = 0; private var uTime = 0; private var uWave = 0; private var uGrass = 0
     private var uParticle = 0; private var uCamRight = 0; private var uCamUp = 0
     private var uPSize = 0; private var uPHeight = 0; private var uPWind = 0
+    private var uGlass = 0; private var uVeg = 0; private var uEnv = 0; private var uHasEnv = 0
     private lateinit var fireMesh: Mesh
     private lateinit var smokeMesh: Mesh
     private val treeTrunk = arrayOfNulls<Mesh>(2)
@@ -197,6 +198,10 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         uniform float uUseTex;
         uniform float uMapMode;
         uniform float uTerrain;
+        uniform float uGlass;
+        uniform float uVeg;
+        uniform sampler2D uEnv;
+        uniform float uHasEnv;
         vec2 photoUV(vec3 p, vec3 n) {
             vec3 a = abs(n);
             if (uMapMode > 0.5) {
@@ -214,6 +219,33 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
             }
             if (n.z > 0.0) return vec2(p.x + 0.5, 0.5 - p.y);
             return vec2(0.5 - p.x, 0.5 - p.y);
+        }
+        float hash31(vec3 p) {
+            p = fract(p * 0.3183099 + 0.1);
+            p *= 17.0;
+            return fract(p.x * p.y * p.z * (p.x + p.y + p.z));
+        }
+        float vnoise(vec3 x) {
+            vec3 i = floor(x);
+            vec3 f = fract(x);
+            f = f * f * (3.0 - 2.0 * f);
+            return mix(
+                mix(mix(hash31(i), hash31(i + vec3(1.0, 0.0, 0.0)), f.x),
+                    mix(hash31(i + vec3(0.0, 1.0, 0.0)), hash31(i + vec3(1.0, 1.0, 0.0)), f.x), f.y),
+                mix(mix(hash31(i + vec3(0.0, 0.0, 1.0)), hash31(i + vec3(1.0, 0.0, 1.0)), f.x),
+                    mix(hash31(i + vec3(0.0, 1.0, 1.0)), hash31(i + vec3(1.0, 1.0, 1.0)), f.x), f.y), f.z);
+        }
+        // what a mirror-like surface sees in direction r: the sky photo if there is one, else a sky gradient and the sun
+        vec3 envColor(vec3 r) {
+            if (uHasEnv > 0.5) {
+                float eu = atan(r.z, r.x) / 6.2831853 + 0.5;
+                float ev = 0.5 - asin(clamp(r.y, -1.0, 1.0)) / 3.1415926;
+                return texture2D(uEnv, vec2(eu, ev)).rgb;
+            }
+            float t = clamp(r.y * 0.5 + 0.5, 0.0, 1.0);
+            vec3 sky = mix(uFogColor * 0.75, uFogColor * 1.1 + vec3(0.12), t);
+            float spot = pow(max(dot(r, uSunDir), 0.0), 220.0);
+            return sky + uSunCol * spot * 3.0;
         }
         void main() {
             if (vIsPart > 0.5) {
@@ -246,6 +278,11 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
             if (uLit < 0.5) { gl_FragColor = uColor; return; }
             vec3 n = normalize(vN);
             vec3 v = normalize(uEye - vW);
+            if (uVeg > 0.5 && uVeg < 1.5) {
+                vec3 pp = vL * 14.0;
+                vec3 pert = vec3(vnoise(pp), vnoise(pp + 7.1), vnoise(pp + 13.7)) - 0.5;
+                n = normalize(n + pert * 1.1);
+            }
             float shin = 4.0 + uGloss * 120.0;
             vec3 light = uAmbient;
             vec3 spec = vec3(0.0);
@@ -270,6 +307,16 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
                 }
             }
             vec3 base = uColor.rgb;
+            if (uVeg > 0.5 && uVeg < 1.5) {
+                float nn = vnoise(vL * 22.0);
+                float nn2 = vnoise(vL * 7.0 + 3.0);
+                float hgt = smoothstep(0.35, 1.0, vL.y);
+                base = base * (0.55 + 0.7 * nn) * mix(0.6, 1.2, hgt) * (0.85 + 0.3 * nn2);
+                base = mix(base, base * vec3(1.15, 1.1, 0.7), nn2 * 0.35);
+            } else if (uVeg > 1.5) {
+                float bk = vnoise(vec3(vL.x * 45.0, vL.y * 5.0, vL.z * 45.0));
+                base = base * (0.55 + 0.7 * bk);
+            }
             if (uTerrain > 0.5) {
                 float f = clamp(vL.y / max(uObjScale.y, 0.001), 0.0, 1.0);
                 vec3 g = mix(vec3(0.30, 0.55, 0.25), vec3(0.50, 0.42, 0.30), smoothstep(0.25, 0.65, f));
@@ -294,11 +341,26 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
             }
             vec3 c = base * light + spec * uSpec + base * uEmit;
             float alpha = uColor.a;
+            float nv = clamp(dot(n, v), 0.0, 1.0);
+            vec3 env = envColor(reflect(-v, n));
             if (vIsWater > 0.5) {
-                // more sky reflection and less see-through at grazing angles
-                float fres = pow(1.0 - clamp(dot(n, v), 0.0, 1.0), 3.0);
-                c = mix(c, uFogColor, fres * 0.6);
-                alpha = clamp(alpha + fres * 0.5, 0.0, 1.0);
+                // water: mostly see-through straight down, mirror-like at grazing angles
+                float wf = 0.02 + 0.98 * pow(1.0 - nv, 4.0);
+                c = mix(c, env, clamp(wf * 0.9 + 0.06, 0.0, 1.0));
+                alpha = clamp(alpha + wf * 0.6, 0.0, 1.0);
+            } else {
+                float f0 = 0.03 + 0.55 * uSpec * uGloss;
+                float fresnel = f0 + (1.0 - f0) * pow(1.0 - nv, 5.0);
+                // metals tint what they reflect
+                vec3 envT = env * mix(vec3(1.0), base * 1.4, clamp(uSpec * uGloss * 0.7, 0.0, 1.0));
+                if (uGlass > 0.5) {
+                    // glass: clear in the middle, bright reflections and more opaque toward the edges
+                    c = base * (0.45 + 0.4 * light) + spec * uSpec * 1.6 + base * uEmit;
+                    c = mix(c, envT, clamp(fresnel * 1.2 + 0.06, 0.0, 1.0));
+                    alpha = clamp(alpha + fresnel * 0.85, 0.0, 1.0);
+                } else {
+                    c = mix(c, envT, clamp(fresnel * uSpec * 1.3, 0.0, 1.0));
+                }
             }
             if (uFogEnd > 0.0) {
                 float fd = length(vW - uEye);
@@ -358,6 +420,10 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         uPSize = GLES20.glGetUniformLocation(prog, "uPSize")
         uPHeight = GLES20.glGetUniformLocation(prog, "uPHeight")
         uPWind = GLES20.glGetUniformLocation(prog, "uPWind")
+        uGlass = GLES20.glGetUniformLocation(prog, "uGlass")
+        uVeg = GLES20.glGetUniformLocation(prog, "uVeg")
+        uEnv = GLES20.glGetUniformLocation(prog, "uEnv")
+        uHasEnv = GLES20.glGetUniformLocation(prog, "uHasEnv")
         meshes = mapOf(Shape.CUBE to Meshes.cube(), Shape.PYRAMID to Meshes.pyramid(), Shape.SPHERE to Meshes.sphere())
         grid = Meshes.grid()
         gizmo = Meshes.gizmo()
@@ -652,11 +718,14 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         Matrix.rotateM(model, 0, o.ry, 0f, 1f, 0f)
         Matrix.scaleM(model, 0, o.sx, o.sy, o.sz)
         setPlain(0.1f, 0.2f)
+        GLES20.glUniform1f(uVeg, 2f)
         drawMesh(trunkMesh(t), vpc, model, floatArrayOf(0.38f, 0.26f, 0.15f), true)
         val c = if (o === sel)
             floatArrayOf(minOf(1f, o.color[0] * 0.6f + 0.4f), minOf(1f, o.color[1] * 0.6f + 0.4f), minOf(1f, o.color[2] * 0.6f + 0.4f))
         else o.color
+        GLES20.glUniform1f(uVeg, 1f)
         drawMesh(crownMesh(t), vpc, model, c, true)
+        GLES20.glUniform1f(uVeg, 0f)
     }
 
     /** Grass blades sit on the terrain surface when there is terrain under them; they sway in the wind. */
@@ -758,7 +827,9 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         } else o.color
         setMaterial(o)
         val mesh = meshFor(o)
+        GLES20.glUniform1f(uGlass, if (alpha < 0.99f) 1f else 0f)
         drawMesh(mesh, vpc, model, c, true, 0, mesh.count, alpha)
+        GLES20.glUniform1f(uGlass, 0f)
     }
 
     private val shM = FloatArray(16)
@@ -914,12 +985,21 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         GLES20.glUniform1f(uWater, 0f)
         GLES20.glUniform1f(uGrass, 0f)
         GLES20.glUniform1f(uParticle, 0f)
+        GLES20.glUniform1f(uGlass, 0f)
+        GLES20.glUniform1f(uVeg, 0f)
+        GLES20.glUniform1f(uHasEnv, 0f)
+        GLES20.glUniform1i(uEnv, 1)
 
         // Sky photo (Settings): panorama wraps all the way round the camera; backdrop is a fixed picture behind the scene
         val skyKey = settings?.photo ?: ""
         if (skyKey.isNotEmpty()) {
             val tex = textureFor(skyKey)
             if (tex > 0) {
+                // the sky photo is also what shiny things (glass, water, metal) reflect
+                GLES20.glActiveTexture(GLES20.GL_TEXTURE1)
+                GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, tex)
+                GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
+                GLES20.glUniform1f(uHasEnv, 1f)
                 val backdrop = settings != null && settings.pattern == 1
                 GLES20.glDisable(GLES20.GL_DEPTH_TEST)
                 GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
