@@ -132,6 +132,9 @@ class EditorView(ctx: Context, val scene: Scene) : GLSurfaceView(ctx) {
         val tol = renderer.dist * 0.02f
         if (o.shape == Shape.TERRAIN) return TerrainGen.rayHit(o, r)
         if (o.shape == Shape.BONE) return boneHit(o, r)
+        if (o.shape.isEmitter) {
+            return aabbHit(r, o.x, o.y + o.sy / 2f, o.z, 0.5f * o.sx + 0.2f, o.sy / 2f, 0.5f * o.sx + 0.2f, tol)
+        }
         if (o.shape == Shape.TREE) {
             return aabbHit(r, o.x, o.y + o.sy / 2f, o.z, 0.38f * o.sx, o.sy / 2f, 0.38f * o.sz, tol)
         }

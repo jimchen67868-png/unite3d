@@ -14,10 +14,13 @@ enum class Shape(val label: String, val radius: Float) {
     BONE("Bone", 0.3f),
     WATER("Water", 0f),
     TREE("Tree", 0f),
-    GRASS("Grass", 0f);
+    GRASS("Grass", 0f),
+    FIRE("Fire", 0f),
+    SMOKE("Smoke", 0f);
 
     val isScreen: Boolean get() = this == JOYSTICK || this == BUTTON
     val isLight: Boolean get() = this == LIGHT || this == SUN
+    val isEmitter: Boolean get() = this == FIRE || this == SMOKE
 }
 
 /** Imported mesh (x y z nx ny nz per vertex), fitted to a unit box. [key] = file name in app storage. */
@@ -144,6 +147,30 @@ class Scene {
                 color = floatArrayOf(1f, 0.95f, 0.8f))
         objects.add(o)
         selected = o
+        return o
+    }
+
+    /** Flames with sparks of light. Size = sx (width), sy = flame height, Glow/emit = how strongly it lights its surroundings. */
+    fun addFire(): SceneObject {
+        val o = add(Shape.FIRE)
+        o.name = "Fire " + counter
+        o.y = 0f
+        o.sx = 1f; o.sy = 1.5f
+        o.color = floatArrayOf(1f, 1f, 1f)
+        o.emit = 1f
+        o.shadow = false
+        return o
+    }
+
+    /** Rising smoke. sx = puff size, sy = how high it climbs, rx = wind push, opacity = how thick. */
+    fun addSmoke(): SceneObject {
+        val o = add(Shape.SMOKE)
+        o.name = "Smoke " + counter
+        o.y = 0f
+        o.sx = 1f; o.sy = 4f; o.rx = 0.5f
+        o.color = floatArrayOf(1f, 1f, 1f)
+        o.opacity = 0.5f
+        o.shadow = false
         return o
     }
 

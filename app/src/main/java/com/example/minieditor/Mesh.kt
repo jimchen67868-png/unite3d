@@ -118,7 +118,7 @@ object Meshes {
         Shape.CUBE -> cubeData()
         Shape.PYRAMID -> pyramidData()
         Shape.SPHERE -> sphereData()
-        Shape.MODEL, Shape.JOYSTICK, Shape.BUTTON, Shape.LIGHT, Shape.SUN, Shape.SETTINGS, Shape.CAMERA, Shape.TERRAIN, Shape.BONE, Shape.WATER, Shape.TREE, Shape.GRASS -> null
+        Shape.MODEL, Shape.JOYSTICK, Shape.BUTTON, Shape.LIGHT, Shape.SUN, Shape.SETTINGS, Shape.CAMERA, Shape.TERRAIN, Shape.BONE, Shape.WATER, Shape.TREE, Shape.GRASS, Shape.FIRE, Shape.SMOKE -> null
     }
 
     /** Grid lines first; the last 4 vertices are the X axis and Z axis. */
@@ -165,6 +165,25 @@ object Meshes {
             for (i in 0 until n) {
                 v(i, j); v(i + 1, j); v(i + 1, j + 1)
                 v(i, j); v(i + 1, j + 1); v(i, j + 1)
+            }
+        }
+        return Mesh(o.toFloatArray(), GLES20.GL_TRIANGLES)
+    }
+
+    /** Particle quads for the fire / smoke shader: aPos = corner x, corner y, seed. aNorm = three random numbers. */
+    fun particles(n: Int): Mesh {
+        val rnd = kotlin.random.Random(1234 + n)
+        val o = ArrayList<Float>()
+        val cx = floatArrayOf(-0.5f, 0.5f, 0.5f, -0.5f, 0.5f, -0.5f)
+        val cy = floatArrayOf(-0.5f, -0.5f, 0.5f, -0.5f, 0.5f, 0.5f)
+        for (i in 0 until n) {
+            val seed = (i + rnd.nextFloat() * 0.9f) / n
+            val r2 = rnd.nextFloat()
+            val r3 = rnd.nextFloat()
+            val r4 = rnd.nextFloat()
+            for (k in 0 until 6) {
+                o.add(cx[k]); o.add(cy[k]); o.add(seed)
+                o.add(r2); o.add(r3); o.add(r4)
             }
         }
         return Mesh(o.toFloatArray(), GLES20.GL_TRIANGLES)

@@ -148,6 +148,43 @@ end
         return o
     }
 
+    /** A night camp: the fire lights the logs and trees, and smoke rises from it. */
+    fun campfire(scene: Scene) {
+        scene.objects.clear()
+        scene.selected = null
+        scene.addSettings()?.let {
+            it.y = 45f; it.z = 0.1f; it.ry = 0f
+            it.color = floatArrayOf(0.02f, 0.03f, 0.08f)
+        }
+        scene.addLight(Shape.SUN)?.let { it.sx = 0.15f; it.sy = 0.1f; it.color = floatArrayOf(0.6f, 0.7f, 1f) }
+        mk(scene, Shape.CUBE, "Ground", 0f, -0.1f, 0f, 30f, 0.2f, 30f, floatArrayOf(0.2f, 0.34f, 0.18f))
+        for (k in 0 until 4) {
+            val a = k * 90f + 20f
+            val rad = Math.toRadians(a.toDouble())
+            val log = mk(scene, Shape.CUBE, "Log " + (k + 1), (Math.cos(rad) * 0.7).toFloat(), 0.12f, (Math.sin(rad) * 0.7).toFloat(),
+                1.1f, 0.2f, 0.2f, floatArrayOf(0.35f, 0.22f, 0.12f))
+            log.ry = -a + 90f
+        }
+        val fire = scene.addFire()
+        fire.x = 0f; fire.z = 0f; fire.y = 0.1f; fire.sx = 1.1f; fire.sy = 1.6f
+        val smoke = scene.addSmoke()
+        smoke.x = 0f; smoke.z = 0f; smoke.y = 1.0f; smoke.sy = 6f; smoke.rx = 0.7f
+        val rnd = kotlin.random.Random(5)
+        for (k in 0 until 14) {
+            val a = rnd.nextFloat() * 6.2831853f
+            val d = 5f + rnd.nextFloat() * 7f
+            val tr = scene.addTree(1)
+            val s = 0.8f + rnd.nextFloat() * 0.6f
+            tr.x = Math.cos(a.toDouble()).toFloat() * d
+            tr.z = Math.sin(a.toDouble()).toFloat() * d
+            tr.y = 0f
+            tr.sx = 2f * s; tr.sy = 3.4f * s; tr.sz = 2f * s
+            tr.ry = rnd.nextFloat() * 360f
+            tr.shadow = false
+        }
+        scene.selected = null
+    }
+
     /** Hills with a lake: floating crates ride the real wave height through waterHeight(). */
     fun lake(scene: Scene) {
         scene.objects.clear()

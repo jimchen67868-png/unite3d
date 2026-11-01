@@ -55,6 +55,10 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
     private lateinit var quad: Mesh
     private lateinit var waterMesh: Mesh
     private var uWater = 0; private var uTime = 0; private var uWave = 0; private var uGrass = 0
+    private var uParticle = 0; private var uCamRight = 0; private var uCamUp = 0
+    private var uPSize = 0; private var uPHeight = 0; private var uPWind = 0
+    private lateinit var fireMesh: Mesh
+    private lateinit var smokeMesh: Mesh
     private val treeTrunk = arrayOfNulls<Mesh>(2)
     private val treeCrown = arrayOfNulls<Mesh>(2)
     private val treeAll = arrayOfNulls<Mesh>(2)
@@ -73,6 +77,12 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         uniform float uTime;
         uniform vec3 uWave;
         uniform float uGrass;
+        uniform float uParticle;
+        uniform vec3 uCamRight;
+        uniform vec3 uCamUp;
+        uniform float uPSize;
+        uniform float uPHeight;
+        uniform float uPWind;
         attribute vec3 aPos;
         attribute vec3 aNorm;
         varying vec3 vN;
@@ -82,6 +92,8 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         varying float vIsWater;
         varying float vIsGrass;
         varying float vTip;
+        varying float vIsPart;
+        varying float vPLife;
         vec3 waveSum(vec2 p) {
             float t = uTime * uWave.y;
             float c = cos(uWave.z);
@@ -109,6 +121,32 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
                 vN = nrm;
             } else {
                 vN = (uModel * vec4(nrm, 0.0)).xyz;
+            }
+            vIsPart = uParticle;
+            vPLife = 0.0;
+            if (uParticle > 0.5) {
+                float r2 = aNorm.x;
+                float r3 = aNorm.y;
+                float r4 = aNorm.z;
+                float rate = 0.9;
+                if (uParticle > 1.5) rate = 0.3;
+                float life = fract(uTime * rate + aPos.z);
+                vec3 c = vec3(0.0);
+                float size = uPSize;
+                if (uParticle < 1.5) {
+                    c.x = (r2 - 0.5) * uPSize * (1.0 - life) * 1.2 + sin(uTime * 3.0 + r3 * 20.0) * 0.08 * uPSize * life;
+                    c.z = (r3 - 0.5) * uPSize * (1.0 - life) * 1.2 + cos(uTime * 2.7 + r2 * 20.0) * 0.08 * uPSize * life;
+                    c.y = life * uPHeight * (0.6 + 0.6 * r4);
+                    size = uPSize * (0.55 + 0.35 * r4) * (1.0 - life * 0.75);
+                } else {
+                    c.x = (r2 - 0.5) * uPSize * 0.6 * life + uPWind * life * life * 2.0 + sin(uTime * 1.3 + r3 * 20.0) * 0.1 * life;
+                    c.z = (r3 - 0.5) * uPSize * 0.6 * life + cos(uTime * 1.1 + r2 * 20.0) * 0.1 * life;
+                    c.y = life * uPHeight * (0.7 + 0.3 * r4);
+                    size = uPSize * (0.5 + life * 1.6);
+                }
+                pos = c + (uCamRight * aPos.x + uCamUp * aPos.y) * size;
+                vPLife = life;
+                vN = vec3(0.0, 1.0, 0.0);
             }
             vIsGrass = uGrass;
             vTip = aNorm.x;
@@ -153,6 +191,8 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         varying float vIsWater;
         varying float vIsGrass;
         varying float vTip;
+        varying float vIsPart;
+        varying float vPLife;
         uniform sampler2D uTex;
         uniform float uUseTex;
         uniform float uMapMode;
@@ -176,6 +216,23 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
             return vec2(0.5 - p.x, 0.5 - p.y);
         }
         void main() {
+            if (vIsPart > 0.5) {
+                float d = length(vL.xy) * 2.0;
+                float a = clamp(1.0 - d, 0.0, 1.0);
+                a = a * a * (3.0 - 2.0 * a);
+                float l = vPLife;
+                if (vIsPart < 1.5) {
+                    vec3 fc = mix(vec3(1.0, 0.95, 0.6), vec3(1.0, 0.45, 0.08), smoothstep(0.0, 0.45, l));
+                    fc = mix(fc, vec3(0.5, 0.05, 0.0), smoothstep(0.45, 1.0, l));
+                    float fade = (1.0 - l) * smoothstep(0.0, 0.08, l);
+                    gl_FragColor = vec4(fc * uColor.rgb, a * fade);
+                } else {
+                    vec3 sc = mix(vec3(0.30), vec3(0.62), l) * uColor.rgb;
+                    float fade = smoothstep(0.0, 0.15, l) * (1.0 - l);
+                    gl_FragColor = vec4(sc, a * fade * uColor.a);
+                }
+                return;
+            }
             if (uLit > 2.5) {
                 vec2 q = vec2(vL.x * 0.5 + 0.5, 0.5 - vL.y * 0.5);
                 vec2 uv = vec2(0.5 + (q.x - 0.5) * uObjScale.x + uObjScale.z, 0.5 + (q.y - 0.5) * uObjScale.y);
@@ -295,12 +352,20 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         uTime = GLES20.glGetUniformLocation(prog, "uTime")
         uWave = GLES20.glGetUniformLocation(prog, "uWave")
         uGrass = GLES20.glGetUniformLocation(prog, "uGrass")
+        uParticle = GLES20.glGetUniformLocation(prog, "uParticle")
+        uCamRight = GLES20.glGetUniformLocation(prog, "uCamRight")
+        uCamUp = GLES20.glGetUniformLocation(prog, "uCamUp")
+        uPSize = GLES20.glGetUniformLocation(prog, "uPSize")
+        uPHeight = GLES20.glGetUniformLocation(prog, "uPHeight")
+        uPWind = GLES20.glGetUniformLocation(prog, "uPWind")
         meshes = mapOf(Shape.CUBE to Meshes.cube(), Shape.PYRAMID to Meshes.pyramid(), Shape.SPHERE to Meshes.sphere())
         grid = Meshes.grid()
         gizmo = Meshes.gizmo()
         circle = Meshes.circle()
         quad = Meshes.quad()
         waterMesh = Meshes.waterGrid()
+        fireMesh = Meshes.particles(70)
+        smokeMesh = Meshes.particles(48)
     }
 
     override fun onSurfaceChanged(gl: GL10?, width: Int, height: Int) {
@@ -411,15 +476,21 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         GLES20.glUniform3f(uSunDir, sd[0] / l, sd[1] / l, sd[2] / l)
         GLES20.glUniform3f(uSunCol, sc[0], sc[1], sc[2])
         GLES20.glUniform3f(uAmbient, amb, amb, amb)
-        val pts = scene.objects.filter { it.shape == Shape.LIGHT }.take(4)
+        // point lights, plus every fire (a flickering orange light; Glow = its strength)
+        val pts = scene.objects.filter { it.shape == Shape.LIGHT || (it.shape == Shape.FIRE && it.emit > 0.01f) }.take(4)
         val pos = FloatArray(12)
         val col = FloatArray(16)
+        val tt = Water.time()
         for ((i, o) in pts.withIndex()) {
-            pos[i * 3] = o.x; pos[i * 3 + 1] = o.y; pos[i * 3 + 2] = o.z
-            col[i * 4] = o.color[0] * o.sx
-            col[i * 4 + 1] = o.color[1] * o.sx
-            col[i * 4 + 2] = o.color[2] * o.sx
-            col[i * 4 + 3] = o.sy
+            val fireL = o.shape == Shape.FIRE
+            pos[i * 3] = o.x
+            pos[i * 3 + 1] = if (fireL) o.y + o.sy * 0.25f else o.y
+            pos[i * 3 + 2] = o.z
+            val k = if (fireL) o.emit * 1.8f * (0.85f + 0.15f * sin(tt * 17f + i) + 0.07f * sin(tt * 41f)) else o.sx
+            col[i * 4] = (if (fireL) 1.0f else 1f) * o.color[0] * k
+            col[i * 4 + 1] = (if (fireL) 0.55f else 1f) * o.color[1] * k
+            col[i * 4 + 2] = (if (fireL) 0.2f else 1f) * o.color[2] * k
+            col[i * 4 + 3] = if (fireL) 4f + o.sx * 3f else o.sy
         }
         GLES20.glUniform3fv(uLPos, 4, pos, 0)
         GLES20.glUniform4fv(uLCol, 4, col, 0)
@@ -622,6 +693,26 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         GLES20.glUniform1f(uGrass, 0f)
     }
 
+    /** Fire and smoke are made of camera-facing soft sprites that the vertex shader moves along each particle's life. */
+    private fun drawEmitter(o: SceneObject, vpc: FloatArray, camAxes: FloatArray) {
+        val fire = o.shape == Shape.FIRE
+        Matrix.setIdentityM(model, 0)
+        Matrix.translateM(model, 0, o.x, o.y, o.z)
+        setPlain(0f, 0.1f)
+        GLES20.glUniform1f(uParticle, if (fire) 1f else 2f)
+        GLES20.glUniform1f(uTime, Water.time())
+        GLES20.glUniform3f(uCamRight, camAxes[0], camAxes[1], camAxes[2])
+        GLES20.glUniform3f(uCamUp, camAxes[3], camAxes[4], camAxes[5])
+        GLES20.glUniform1f(uPSize, o.sx)
+        GLES20.glUniform1f(uPHeight, o.sy)
+        GLES20.glUniform1f(uPWind, o.rx)
+        // fire adds light (glows), smoke blends normally
+        GLES20.glBlendFunc(GLES20.GL_SRC_ALPHA, if (fire) GLES20.GL_ONE else GLES20.GL_ONE_MINUS_SRC_ALPHA)
+        val mesh = if (fire) fireMesh else smokeMesh
+        drawMesh(mesh, vpc, model, o.color, true, 0, mesh.count, if (fire) 1f else o.opacity.coerceIn(0.02f, 1f))
+        GLES20.glUniform1f(uParticle, 0f)
+    }
+
     private fun drawWater(o: SceneObject, vpc: FloatArray, sel: SceneObject?, alpha: Float) {
         Matrix.setIdentityM(model, 0)
         Matrix.translateM(model, 0, o.x, o.y, o.z)
@@ -724,7 +815,7 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         val soft = (st?.soft ?: 0.4f).coerceIn(0f, 1f)
         val tint = st?.tint ?: floatArrayOf(0f, 0f, 0f)
         val casters = scene.objects.filter { o ->
-            o.shadow && !o.shape.isScreen && !o.shape.isLight && o.shape != Shape.SETTINGS && o.shape != Shape.CAMERA && o.shape != Shape.TERRAIN && o.shape != Shape.BONE && o.shape != Shape.WATER && o.shape != Shape.GRASS &&
+            o.shadow && !o.shape.isScreen && !o.shape.isLight && o.shape != Shape.SETTINGS && o.shape != Shape.CAMERA && o.shape != Shape.TERRAIN && o.shape != Shape.BONE && o.shape != Shape.WATER && o.shape != Shape.GRASS && !o.shape.isEmitter &&
                 o.y + 0.5f * o.sy > gh + 0.04f
         }
         if (casters.isEmpty()) return
@@ -805,7 +896,14 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
     override fun onDrawFrame(gl: GL10?) {
         onFrame?.invoke()
         val eyeC = FloatArray(3)
-        val vpc = synchronized(lock) { updateMatrices(); System.arraycopy(eye, 0, eyeC, 0, 3); vp.copyOf() }
+        val camAxes = FloatArray(6)
+        val vpc = synchronized(lock) {
+            updateMatrices()
+            System.arraycopy(eye, 0, eyeC, 0, 3)
+            camAxes[0] = view[0]; camAxes[1] = view[4]; camAxes[2] = view[8]
+            camAxes[3] = view[1]; camAxes[4] = view[5]; camAxes[5] = view[9]
+            vp.copyOf()
+        }
         val settings = scene.objects.firstOrNull { it.shape == Shape.SETTINGS }
         if (settings != null) GLES20.glClearColor(settings.color[0], settings.color[1], settings.color[2], 1f)
         else GLES20.glClearColor(0.15f, 0.16f, 0.19f, 1f)
@@ -815,6 +913,7 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         setLights(eyeC)
         GLES20.glUniform1f(uWater, 0f)
         GLES20.glUniform1f(uGrass, 0f)
+        GLES20.glUniform1f(uParticle, 0f)
 
         // Sky photo (Settings): panorama wraps all the way round the camera; backdrop is a fixed picture behind the scene
         val skyKey = settings?.photo ?: ""
@@ -865,9 +964,11 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         // Objects: solid ones first, then see-through ones (far to near) so they blend correctly
         val sel = scene.selected
         val seeThrough = ArrayList<SceneObject>()
+        val emitters = ArrayList<SceneObject>()
         for (o in scene.objects) {
             if (o.shape.isLight || o.shape == Shape.CAMERA || o.shape == Shape.BONE) continue
             if (o.shape.isScreen || o.shape == Shape.SETTINGS || o === fpHide) continue
+            if (o.shape.isEmitter) { emitters.add(o); continue }
             if (o.shape == Shape.WATER || o.opacity < 0.99f) { seeThrough.add(o); continue }
             drawObject(o, vpc, sel, 1f)
         }
@@ -879,6 +980,17 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
             GLES20.glBlendFunc(GLES20.GL_SRC_ALPHA, GLES20.GL_ONE_MINUS_SRC_ALPHA)
             GLES20.glDepthMask(false)
             for (o in seeThrough) drawObject(o, vpc, sel, o.opacity.coerceIn(0.02f, 1f))
+            GLES20.glDepthMask(true)
+            GLES20.glDisable(GLES20.GL_BLEND)
+        }
+
+        if (emitters.isNotEmpty()) {
+            emitters.sortByDescending { o ->
+                (o.x - eyeC[0]) * (o.x - eyeC[0]) + (o.y - eyeC[1]) * (o.y - eyeC[1]) + (o.z - eyeC[2]) * (o.z - eyeC[2])
+            }
+            GLES20.glEnable(GLES20.GL_BLEND)
+            GLES20.glDepthMask(false)
+            for (o in emitters) drawEmitter(o, vpc, camAxes)
             GLES20.glDepthMask(true)
             GLES20.glDisable(GLES20.GL_BLEND)
         }

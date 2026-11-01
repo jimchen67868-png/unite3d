@@ -364,6 +364,7 @@ end
         pm.menu.add(0, 11, 10, "Tilt control: " + (if (tiltOn) "on" else "off"))
         pm.menu.add(0, 12, 11, "Load sample: robot arm (bones)")
         pm.menu.add(0, 13, 12, "Load sample: lake (water)")
+        pm.menu.add(0, 14, 13, "Load sample: campfire (fire and smoke)")
         pm.menu.add(0, 7, 6, "Load sample game (Coin Rush)")
         pm.menu.add(0, 8, 7, "Editor lighting: " + (if (editor.renderer.editorBright) "Bright (tap for Scene)" else "Scene (tap for Bright)"))
         pm.setOnMenuItemClickListener { item ->
@@ -383,6 +384,7 @@ end
                     11 -> { tiltOn = !tiltOn; toast("Tilt control " + (if (tiltOn) "on" else "off")) }
                     12 -> loadRigSample()
                     13 -> loadLakeSample()
+                    14 -> loadCampfireSample()
                     10 -> {
                         val s = scene.objects.firstOrNull { it.shape == Shape.SETTINGS } ?: scene.addSettings()
                         scene.selected = s
@@ -394,6 +396,27 @@ end
             true
         }
         pm.show()
+    }
+
+    private fun loadCampfireSample() {
+        val go = {
+            Samples.campfire(scene)
+            editor.renderer.dist = 11f
+            editor.renderer.pitch = 22f
+            editor.renderer.target[0] = 0f; editor.renderer.target[1] = 1f; editor.renderer.target[2] = 0f
+            editor.refresh()
+            toast("Campfire loaded - the fire lights the trees around it")
+        }
+        if (scene.objects.isEmpty()) {
+            go()
+        } else {
+            AlertDialog.Builder(this)
+                .setTitle("Load campfire sample?")
+                .setMessage("This replaces the current scene. Use File > Export scene zip first if you want to keep it.")
+                .setPositiveButton("Load") { _, _ -> go() }
+                .setNegativeButton("Cancel", null)
+                .show()
+        }
     }
 
     private fun loadLakeSample() {
@@ -420,7 +443,7 @@ end
     // Water waves move all the time, so keep drawing while there is water in the scene.
     private val waterCb = object : Choreographer.FrameCallback {
         override fun doFrame(frameTimeNanos: Long) {
-            if (scene.objects.any { it.shape == Shape.WATER }) {
+            if (scene.objects.any { it.shape == Shape.WATER || it.shape.isEmitter || it.shape == Shape.GRASS }) {
                 editor.requestRender()
                 Choreographer.getInstance().postFrameCallback(this)
             } else {
@@ -430,7 +453,7 @@ end
     }
 
     private fun ensureWaterLoop() {
-        if (!waterLoop && scene.objects.any { it.shape == Shape.WATER }) {
+        if (!waterLoop && scene.objects.any { it.shape == Shape.WATER || it.shape.isEmitter || it.shape == Shape.GRASS }) {
             waterLoop = true
             Choreographer.getInstance().postFrameCallback(waterCb)
         }
@@ -866,7 +889,9 @@ end
             addView(row(
                 btn("+Tree", true) { scene.addTree(0); editor.refresh() },
                 btn("+Pine", true) { scene.addTree(1); editor.refresh() },
-                btn("+Grass", true) { scene.addGrass(); editor.refresh() }
+                btn("+Grass", true) { scene.addGrass(); editor.refresh() },
+                btn("+Fire", true) { scene.addFire(); editor.refresh() },
+                btn("+Smoke", true) { scene.addSmoke(); editor.refresh() }
             ))
             addView(scroll)
         }
@@ -895,7 +920,8 @@ end
                     (if (o.shape == Shape.BONE) "  [bone]" else "") +
                     (if (o.shape == Shape.WATER) "  [water]" else "") +
                     (if (o.shape == Shape.TREE) "  [tree]" else "") +
-                    (if (o.shape == Shape.GRASS) "  [grass]" else "")
+                    (if (o.shape == Shape.GRASS) "  [grass]" else "") +
+                    (if (o.shape.isEmitter) "  [" + o.shape.label.lowercase() + "]" else "")
                 textSize = 14f
                 setTextColor(if (sel) 0xFF7FB0FF.toInt() else Color.WHITE)
                 setPadding(dp(10), dp(8), dp(10), dp(8))
@@ -1382,11 +1408,13 @@ end
         val water = o?.shape == Shape.WATER
         val tree = o?.shape == Shape.TREE
         val grass = o?.shape == Shape.GRASS
+        val emitter = o?.shape?.isEmitter == true
+        val smokeSel = o?.shape == Shape.SMOKE
         skyRow.visibility = if (st) View.VISIBLE else View.GONE
         skyPanel.visibility = if (st) View.VISIBLE else View.GONE
         objSwatches.visibility = if (st) View.GONE else View.VISIBLE
         settingsHint.visibility = if (st) View.VISIBLE else View.GONE
-        colliderBtn.visibility = if (o != null && !joy && !light && !st && !cam && !bone && !water && !grass) View.VISIBLE else View.GONE
+        colliderBtn.visibility = if (o != null && !joy && !light && !st && !cam && !bone && !water && !grass && !emitter) View.VISIBLE else View.GONE
         lightPanel.visibility = if (light) View.VISIBLE else View.GONE
         shadowPanel.visibility = if (st) View.VISIBLE else View.GONE
         terrainPanel.visibility = if (ter) View.VISIBLE else View.GONE
@@ -1404,14 +1432,15 @@ end
                 water -> i in 0..4 || i in 6..8
                 tree -> i in 0..2 || i == 4 || i in 6..8
                 grass -> i in 0..3 || i in 6..8
+                emitter -> i in 0..2 || i == 6 || i == 7 || (smokeSel && i == 3)
                 joy -> i == 0 || i == 1 || i == 6
                 light -> i in 0..2 || i == 6 || i == 7 || (sun && (i == 3 || i == 4))
                 else -> true
             }
         }
         rowLabels[0].text = if (joy) "Screen %" else if (st) "World" else "Pos"
-        rowLabels[1].text = if (st) "Snap/Shd/Gnd" else if (cam) "Pitch/Yaw" else if (water) "Speed/Dir" else if (grass) "Density" else "Rot"
-        rowLabels[2].text = if (joy) "Size" else if (st) "Time/Grid/Col" else if (cam) "FOV" else if (ter) "Size W/H/D" else if (bone) "Bone length" else if (water) "Size/Wave H" else if (grass) "Size/Blade H" else if (sun) "Power/Amb" else if (light) "Power/Rng" else "Scale"
+        rowLabels[1].text = if (st) "Snap/Shd/Gnd" else if (cam) "Pitch/Yaw" else if (water) "Speed/Dir" else if (grass) "Density" else if (smokeSel) "Wind" else "Rot"
+        rowLabels[2].text = if (joy) "Size" else if (st) "Time/Grid/Col" else if (cam) "FOV" else if (ter) "Size W/H/D" else if (bone) "Bone length" else if (water) "Size/Wave H" else if (grass) "Size/Blade H" else if (emitter) "Size/Height" else if (sun) "Power/Amb" else if (light) "Power/Rng" else "Scale"
         if (o == null) {
             if (!nameField.hasFocus()) nameField.setText("")
             for (f in fields) if (!f.hasFocus()) f.setText("")
