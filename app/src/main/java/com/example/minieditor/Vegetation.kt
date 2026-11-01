@@ -162,30 +162,51 @@ object Veg {
 
     fun both(type: Int): FloatArray = trunk(type) + crown(type)
 
-    /** Grass blades over the patch. [groundAt] returns the ground height at (x, z), e.g. the terrain surface. */
-    fun grass(o: SceneObject, groundAt: (Float, Float) -> Float): FloatArray {
-        val n = (o.sx * o.sz * 8f * o.rx).toInt().coerceIn(0, 9000)
+    /**
+     * Grass in small clumps of thin, slightly bent blades (short, like ground cover in a shooter).
+     * [groundAt] returns the ground height at (x, z), or null where no grass should grow (e.g. under water).
+     * Density rx: 1 = about 1.6 clumps per square unit, 4 blades per clump.
+     */
+    fun grass(o: SceneObject, groundAt: (Float, Float) -> Float?): FloatArray {
+        val clumps = (o.sx * o.sz * 1.6f * o.rx).toInt().coerceIn(0, 3000)
         val rnd = Random(o.hVersion * 7919 + 17)
-        val out = FloatArray(n * 18)
+        val out = FloatArray(clumps * 4 * 9 * 6)
         var p = 0
-        fun put(x: Float, y: Float, z: Float, tip: Float) {
+        fun put(x: Float, y: Float, z: Float, tip: Float, rv: Float) {
             out[p++] = x; out[p++] = y; out[p++] = z
-            out[p++] = tip; out[p++] = 1f; out[p++] = 0f
+            out[p++] = tip; out[p++] = 1f; out[p++] = rv
         }
-        for (k in 0 until n) {
-            val x = o.x + (rnd.nextFloat() - 0.5f) * o.sx
-            val z = o.z + (rnd.nextFloat() - 0.5f) * o.sz
-            val y = groundAt(x, z)
-            val h = o.sy * (0.6f + rnd.nextFloat() * 0.7f)
-            val a = rnd.nextFloat() * 6.2831853f
-            val w = 0.08f + rnd.nextFloat() * 0.05f
-            val dx = cos(a) * w
-            val dz = sin(a) * w
-            val lean = (rnd.nextFloat() - 0.5f) * 0.3f * h
-            put(x - dx, y, z - dz, 0f)
-            put(x + dx, y, z + dz, 0f)
-            put(x + dz * 2f * lean, y + h, z - dx * 2f * lean, 1f)
+        for (k in 0 until clumps) {
+            val cx = o.x + (rnd.nextFloat() - 0.5f) * o.sx
+            val cz = o.z + (rnd.nextFloat() - 0.5f) * o.sz
+            val y = groundAt(cx, cz) ?: continue
+            val clumpH = o.sy * (0.55f + rnd.nextFloat() * 0.6f)
+            val rv = rnd.nextFloat()
+            for (b in 0 until 4) {
+                val ang = rnd.nextFloat() * 6.2831853f
+                val off = 0.03f + rnd.nextFloat() * 0.05f
+                val bx = cx + cos(ang) * off
+                val bz = cz + sin(ang) * off
+                val h = clumpH * (0.7f + rnd.nextFloat() * 0.5f)
+                val face = rnd.nextFloat() * 6.2831853f
+                val hw = 0.016f + rnd.nextFloat() * 0.012f      // half width: very thin
+                val dx = cos(face) * hw
+                val dz = sin(face) * hw
+                val lean = h * (0.25f + rnd.nextFloat() * 0.25f)  // blades lean outward from the clump
+                val lx = cos(ang) * lean
+                val lz = sin(ang) * lean
+                val my = y + h * 0.5f
+                val mx = bx + lx * 0.35f
+                val mz = bz + lz * 0.35f
+                val tx = bx + lx
+                val tz = bz + lz
+                val ty = y + h * 0.95f
+                // lower half: a narrow quad, upper half: a pointed tip
+                put(bx - dx, y, bz - dz, 0f, rv); put(bx + dx, y, bz + dz, 0f, rv); put(mx - dx * 0.7f, my, mz - dz * 0.7f, 0.5f, rv)
+                put(bx + dx, y, bz + dz, 0f, rv); put(mx + dx * 0.7f, my, mz + dz * 0.7f, 0.5f, rv); put(mx - dx * 0.7f, my, mz - dz * 0.7f, 0.5f, rv)
+                put(mx - dx * 0.7f, my, mz - dz * 0.7f, 0.5f, rv); put(mx + dx * 0.7f, my, mz + dz * 0.7f, 0.5f, rv); put(tx, ty, tz, 1f, rv)
+            }
         }
-        return out
+        return out.copyOf(p)
     }
 }

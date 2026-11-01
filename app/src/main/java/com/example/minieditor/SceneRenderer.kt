@@ -152,8 +152,8 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
             vIsGrass = uGrass;
             vTip = aNorm.x;
             if (uGrass > 0.5) {
-                pos.x += sin(uTime * 2.0 + aPos.x * 1.7 + aPos.z * 1.3) * 0.12 * aNorm.x;
-                pos.z += cos(uTime * 1.6 + aPos.x * 1.1 - aPos.z * 1.9) * 0.08 * aNorm.x;
+                pos.x += sin(uTime * 2.0 + aPos.x * 1.7 + aPos.z * 1.3) * 0.05 * aNorm.x;
+                pos.z += cos(uTime * 1.6 + aPos.x * 1.1 - aPos.z * 1.9) * 0.035 * aNorm.x;
                 vN = vec3(0.0, 1.0, 0.0);
             }
             vLN = aNorm;
@@ -324,7 +324,9 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
                 base = g * uColor.rgb;
             }
             if (vIsGrass > 0.5) {
-                base = mix(vec3(0.08, 0.25, 0.05), vec3(0.50, 0.80, 0.25), vTip) * uColor.rgb;
+                float rv = vLN.z;
+                base = mix(vec3(0.06, 0.20, 0.04), vec3(0.45, 0.72, 0.22), vTip) * (0.75 + 0.5 * rv) * uColor.rgb;
+                base = mix(base, base * vec3(1.25, 1.1, 0.55), rv * 0.4 * vTip);
             }
             if (uUseTex > 0.5) {
                 base = texture2D(uTex, photoUV(vL, normalize(vLN))).rgb * uColor.rgb;
@@ -731,12 +733,16 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
     /** Grass blades sit on the terrain surface when there is terrain under them; they sway in the wind. */
     private fun drawGrass(o: SceneObject, vpc: FloatArray, sel: SceneObject?) {
         val terrains = scene.objects.filter { it.shape == Shape.TERRAIN }
+        val waters = scene.objects.filter { it.shape == Shape.WATER }
         val sig = StringBuilder()
         sig.append(o.x).append('|').append(o.y).append('|').append(o.z).append('|')
             .append(o.sx).append('|').append(o.sy).append('|').append(o.sz).append('|').append(o.rx).append('|').append(o.hVersion)
         for (t in terrains) {
             sig.append('#').append(t.hVersion).append(',').append(t.x).append(',').append(t.y).append(',').append(t.z)
                 .append(',').append(t.sx).append(',').append(t.sy).append(',').append(t.sz)
+        }
+        for (w in waters) {
+            sig.append('~').append(w.x).append(',').append(w.y).append(',').append(w.z).append(',').append(w.sx).append(',').append(w.sz)
         }
         val key = sig.toString()
         var entry = grassCache[o]
@@ -747,7 +753,12 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
                     val h = TerrainGen.heightAt(t, x, z)
                     if (h != null) best = h
                 }
-                best
+                // no grass under (or right at the edge of) water
+                var wet = false
+                for (w in waters) {
+                    if (Math.abs(x - w.x) <= w.sx / 2f && Math.abs(z - w.z) <= w.sz / 2f && best < w.y + 0.08f) wet = true
+                }
+                if (wet) null else best
             }
             if (data.isEmpty()) return
             entry = Pair(key, Mesh(data, GLES20.GL_TRIANGLES))

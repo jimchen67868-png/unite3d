@@ -190,7 +190,7 @@ class Scene {
         val o = add(Shape.GRASS)
         o.name = "Grass " + counter
         o.x = 0f; o.y = 0f; o.z = 0f
-        o.sx = 8f; o.sy = 0.45f; o.sz = 8f
+        o.sx = 8f; o.sy = 0.3f; o.sz = 8f
         o.rx = 1f
         o.color = floatArrayOf(1f, 1f, 1f)
         o.shadow = false
