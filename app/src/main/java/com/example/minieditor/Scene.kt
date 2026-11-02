@@ -45,6 +45,8 @@ class SceneObject(
     var opacity = 1f      // 1 = solid, lower = see-through
     var pattern = 0       // 0 none, 1 checker, 2 stripes
     var soft = 0.4f       // Settings: shadow softness 0-1
+    var wind = 0f         // Settings: wind strength 0-1 (trees and grass sway, smoke and flames lean)
+    var windDir = 0f      // Settings: direction the wind blows toward, degrees (0 = +X, 90 = +Z)
     var tint = floatArrayOf(0f, 0f, 0f)   // Settings: shadow colour
     var photo: String = ""   // key of an imported photo used as the surface picture
     var heights: FloatArray? = null   // Terrain: 49 x 49 heights, 0..1
@@ -346,6 +348,7 @@ class Scene {
                 put("parent", o.parentId)
                 o.rel?.let { r -> put("rel", JSONArray().also { a -> for (v in r) a.put(v.toDouble()) }) }
             }
+            put("wind", o.wind.toDouble()); put("windDir", o.windDir.toDouble())
             put("photo", o.photo); put("soft", o.soft.toDouble()); put("tintR", o.tint[0].toDouble()); put("tintG", o.tint[1].toDouble()); put("tintB", o.tint[2].toDouble())
             o.model?.let { put("model", it.key) }
             put("x", o.x.toDouble()); put("y", o.y.toDouble()); put("z", o.z.toDouble())
@@ -380,6 +383,8 @@ class Scene {
                 it.emit = j.optDouble("emit", 0.0).toFloat(); it.opacity = j.optDouble("opacity", 1.0).toFloat()
                 it.pattern = j.optInt("pattern", 0)
                 it.soft = j.optDouble("soft", 0.4).toFloat()
+                it.wind = j.optDouble("wind", 0.0).toFloat()
+                it.windDir = j.optDouble("windDir", 0.0).toFloat()
                 it.photo = j.optString("photo", "")
                 it.heights = if (j.has("heights")) TerrainGen.decode(j.getString("heights")) else null
                 it.hVersion = j.optInt("hv", 1)

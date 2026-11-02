@@ -60,6 +60,7 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
     private var uPSize = 0; private var uPHeight = 0; private var uPWind = 0
     private var uGlass = 0; private var uVeg = 0; private var uEnv = 0; private var uHasEnv = 0
     private var uShadow = 0; private var uShadowOn = 0
+    private var uWind = 0; private var uSwayLocal = 0; private var uTree = 0
     private val SH = 96   // terrain shadow map resolution
     private var shTex = 0
     private var shKey = ""
@@ -76,6 +77,9 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
     private val grassCache = HashMap<SceneObject, Pair<String, Mesh>>()
     private val photoAspect = HashMap<String, Float>()
     private var skyLit = 0f
+    private var windX = 1f
+    private var windZ = 0f
+    private var windStr = 0f
     private val modelMeshes = HashMap<String, Mesh>()
     private val photoTex = HashMap<String, Int>()
     private val terrainCache = HashMap<SceneObject, Pair<String, Mesh>>()
@@ -94,6 +98,9 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         uniform float uPSize;
         uniform float uPHeight;
         uniform float uPWind;
+        uniform vec3 uWind;
+        uniform vec3 uSwayLocal;
+        uniform float uTree;
         attribute vec3 aPos;
         attribute vec3 aNorm;
         varying vec3 vN;
@@ -148,22 +155,36 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
                     c.x = (r2 - 0.5) * uPSize * (1.0 - life) * 1.2 + sin(uTime * 3.0 + r3 * 20.0) * 0.08 * uPSize * life;
                     c.z = (r3 - 0.5) * uPSize * (1.0 - life) * 1.2 + cos(uTime * 2.7 + r2 * 20.0) * 0.08 * uPSize * life;
                     c.y = life * uPHeight * (0.6 + 0.6 * r4);
+                    c.x += uWind.x * uWind.z * life * life * 0.9;
+                    c.z += uWind.y * uWind.z * life * life * 0.9;
                     size = uPSize * (0.55 + 0.35 * r4) * (1.0 - life * 0.75);
                 } else {
                     c.x = (r2 - 0.5) * uPSize * 0.6 * life + uPWind * life * life * 2.0 + sin(uTime * 1.3 + r3 * 20.0) * 0.1 * life;
                     c.z = (r3 - 0.5) * uPSize * 0.6 * life + cos(uTime * 1.1 + r2 * 20.0) * 0.1 * life;
                     c.y = life * uPHeight * (0.7 + 0.3 * r4);
+                    c.x += uWind.x * uWind.z * life * life * 3.0;
+                    c.z += uWind.y * uWind.z * life * life * 3.0;
                     size = uPSize * (0.5 + life * 1.6);
                 }
                 pos = c + (uCamRight * aPos.x + uCamUp * aPos.y) * size;
                 vPLife = life;
                 vN = vec3(0.0, 1.0, 0.0);
             }
+            if (uTree > 0.5) {
+                float ph = uModel[3].x * 0.7 + uModel[3].z * 0.5;
+                float hh = max(aPos.y, 0.0);
+                float g = 0.65 + 0.35 * sin(uTime * 0.8 + ph);
+                float fl = 0.12 * sin(uTime * 2.6 + ph * 1.9 + hh * 5.0);
+                pos += uSwayLocal * (hh * hh) * (g + fl);
+            }
             vIsGrass = uGrass;
             vTip = aNorm.x;
             if (uGrass > 0.5) {
                 pos.x += sin(uTime * 2.0 + aPos.x * 1.7 + aPos.z * 1.3) * 0.05 * aNorm.x;
                 pos.z += cos(uTime * 1.6 + aPos.x * 1.1 - aPos.z * 1.9) * 0.035 * aNorm.x;
+                float gu = 0.7 + 0.3 * sin(uTime * 0.9 + aPos.x * 0.35 + aPos.z * 0.3);
+                pos.x += uWind.x * uWind.z * 0.22 * aNorm.x * gu;
+                pos.z += uWind.y * uWind.z * 0.22 * aNorm.x * gu;
                 vN = vec3(0.0, 1.0, 0.0);
             }
             vLN = aNorm;
@@ -448,6 +469,9 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         uVeg = GLES20.glGetUniformLocation(prog, "uVeg")
         uEnv = GLES20.glGetUniformLocation(prog, "uEnv")
         uHasEnv = GLES20.glGetUniformLocation(prog, "uHasEnv")
+        uWind = GLES20.glGetUniformLocation(prog, "uWind")
+        uSwayLocal = GLES20.glGetUniformLocation(prog, "uSwayLocal")
+        uTree = GLES20.glGetUniformLocation(prog, "uTree")
         uShadow = GLES20.glGetUniformLocation(prog, "uShadow")
         uShadowOn = GLES20.glGetUniformLocation(prog, "uShadowOn")
         meshes = mapOf(Shape.CUBE to Meshes.cube(), Shape.PYRAMID to Meshes.pyramid(), Shape.SPHERE to Meshes.sphere())
@@ -593,6 +617,12 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         GLES20.glUniform3f(uFogColor, sky[0], sky[1], sky[2])
         GLES20.glUniform1f(uFogEnd, if (st != null && !bright) st.y.coerceAtLeast(0f) else 0f)
         GLES20.glUniform3f(uEye, eyeP[0], eyeP[1], eyeP[2])
+        val wr = Math.toRadians((st?.windDir ?: 0f).toDouble())
+        windX = cos(wr).toFloat()
+        windZ = sin(wr).toFloat()
+        windStr = (st?.wind ?: 0f).coerceIn(0f, 1f)
+        GLES20.glUniform3f(uWind, windX, windZ, windStr)
+        GLES20.glUniform1f(uTree, 0f)
     }
 
     /** Editor-only marker: a glowing ball whose on-screen size stays about the same at any zoom. */
@@ -746,6 +776,16 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         Matrix.rotateM(model, 0, o.ry, 0f, 1f, 0f)
         Matrix.scaleM(model, 0, o.sx, o.sy, o.sz)
         setPlain(0.1f, 0.2f)
+        if (windStr > 0.001f) {
+            // wind pushes the top of the tree; worked out in the tree's own (rotated, scaled) space
+            val ry = Math.toRadians(o.ry.toDouble())
+            val lx = (windX * cos(ry) - windZ * sin(ry)).toFloat()
+            val lz = (windX * sin(ry) + windZ * cos(ry)).toFloat()
+            val amp = windStr * 0.25f * o.sy
+            GLES20.glUniform3f(uSwayLocal, lx * amp / max(o.sx, 0.01f), 0f, lz * amp / max(o.sz, 0.01f))
+            GLES20.glUniform1f(uTime, Water.time())
+            GLES20.glUniform1f(uTree, 1f)
+        }
         GLES20.glUniform1f(uVeg, 2f)
         drawMesh(trunkMesh(t), vpc, model, floatArrayOf(0.38f, 0.26f, 0.15f), true)
         val c = if (o === sel)
@@ -754,6 +794,7 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         GLES20.glUniform1f(uVeg, 1f)
         drawMesh(crownMesh(t), vpc, model, c, true)
         GLES20.glUniform1f(uVeg, 0f)
+        GLES20.glUniform1f(uTree, 0f)
     }
 
     /** Grass blades sit on the terrain surface when there is terrain under them; they sway in the wind. */

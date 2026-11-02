@@ -90,6 +90,9 @@ class MainActivity : Activity(), SensorEventListener {
     private lateinit var skyPreview: View
     private lateinit var shLabels: Array<TextView>
     private lateinit var shSliders: Array<SeekBar>
+    private lateinit var windPanel: LinearLayout
+    private lateinit var windLabels: Array<TextView>
+    private lateinit var windSliders: Array<SeekBar>
     private lateinit var materialView: LinearLayout
     private lateinit var matLabels: Array<TextView>
     private lateinit var matSliders: Array<SeekBar>
@@ -517,7 +520,7 @@ end
     // Water waves move all the time, so keep drawing while there is water in the scene.
     private val waterCb = object : Choreographer.FrameCallback {
         override fun doFrame(frameTimeNanos: Long) {
-            if (scene.objects.any { it.shape == Shape.WATER || it.shape.isEmitter || it.shape == Shape.GRASS }) {
+            if (scene.objects.any { it.shape == Shape.WATER || it.shape.isEmitter || it.shape == Shape.GRASS || (it.shape == Shape.SETTINGS && it.wind > 0.01f) }) {
                 editor.requestRender()
                 Choreographer.getInstance().postFrameCallback(this)
             } else {
@@ -527,7 +530,7 @@ end
     }
 
     private fun ensureWaterLoop() {
-        if (!waterLoop && scene.objects.any { it.shape == Shape.WATER || it.shape.isEmitter || it.shape == Shape.GRASS }) {
+        if (!waterLoop && scene.objects.any { it.shape == Shape.WATER || it.shape.isEmitter || it.shape == Shape.GRASS || (it.shape == Shape.SETTINGS && it.wind > 0.01f) }) {
             waterLoop = true
             Choreographer.getInstance().postFrameCallback(waterCb)
         }
@@ -1260,6 +1263,30 @@ end
                 })
             }
             addView(shadowPanel)
+            windLabels = Array(2) {
+                TextView(this@MainActivity).apply {
+                    textSize = 12f; setTextColor(0xFFDDDDDD.toInt()); setPadding(dp(4), dp(6), dp(4), 0)
+                }
+            }
+            windSliders = Array(2) { i ->
+                SeekBar(this@MainActivity).apply {
+                    max = 100
+                    setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                        override fun onProgressChanged(sb: SeekBar?, p: Int, fromUser: Boolean) {
+                            if (fromUser) applyWind(i, p)
+                        }
+                        override fun onStartTrackingTouch(sb: SeekBar?) {}
+                        override fun onStopTrackingTouch(sb: SeekBar?) {}
+                    })
+                }
+            }
+            windPanel = LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.VERTICAL
+                visibility = View.GONE
+                addView(windLabels[0]); addView(windSliders[0])
+                addView(windLabels[1]); addView(windSliders[1])
+            }
+            addView(windPanel)
             sculptBtn = btn("Sculpt: Off") { editor.sculpt = (editor.sculpt + 1) % 5; editor.refresh() }
             brushLabels = Array(2) {
                 TextView(this@MainActivity).apply {
@@ -1325,6 +1352,14 @@ end
     }
 
     /** Settings shadow sliders: 0 = strength, 1 = softness, 2 = ground height (-5 to 10). */
+    private fun applyWind(i: Int, p: Int) {
+        val o = scene.selected ?: return
+        if (o.shape != Shape.SETTINGS) return
+        if (i == 0) o.wind = p / 100f else o.windDir = p * 3.6f
+        editor.refresh()
+        ensureWaterLoop()
+    }
+
     private fun applyShadow(i: Int, p: Int) {
         val o = scene.selected ?: return
         if (o.shape != Shape.SETTINGS) return
@@ -1491,6 +1526,7 @@ end
         colliderBtn.visibility = if (o != null && !joy && !light && !st && !cam && !bone && !water && !grass && !emitter) View.VISIBLE else View.GONE
         lightPanel.visibility = if (light) View.VISIBLE else View.GONE
         shadowPanel.visibility = if (st) View.VISIBLE else View.GONE
+        windPanel.visibility = if (st) View.VISIBLE else View.GONE
         terrainPanel.visibility = if (ter) View.VISIBLE else View.GONE
         shadowBtn.visibility = colliderBtn.visibility
         attachBtn.visibility = if (o != null && !joy && !st && !ter) View.VISIBLE else View.GONE
@@ -1548,6 +1584,10 @@ end
             if (!shSliders[0].isPressed) shSliders[0].progress = (o.ry * 100f).toInt().coerceIn(0, 100)
             if (!shSliders[1].isPressed) shSliders[1].progress = (o.soft * 100f).toInt().coerceIn(0, 100)
             if (!shSliders[2].isPressed) shSliders[2].progress = ((o.rz + 5f) / 0.15f).toInt().coerceIn(0, 100)
+            windLabels[0].text = String.format(Locale.US, "Wind strength   %.2f  (0 = calm)", o.wind)
+            windLabels[1].text = String.format(Locale.US, "Wind direction   %.0f deg  (0 = +X, 90 = +Z)", o.windDir)
+            if (!windSliders[0].isPressed) windSliders[0].progress = (o.wind * 100f).toInt().coerceIn(0, 100)
+            if (!windSliders[1].isPressed) windSliders[1].progress = (((o.windDir % 360f) + 360f) % 360f / 3.6f).toInt().coerceIn(0, 100)
             skyPhotoBtn.text = "Sky photo: " + (if (o.photo.isEmpty()) "none" else "on")
             skyModeBtn.text = "Mapping: " + (if (o.pattern == 1) "Backdrop" else "Panorama")
             val names = arrayOf("Red", "Green", "Blue")
