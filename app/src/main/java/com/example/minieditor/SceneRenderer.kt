@@ -10,6 +10,7 @@ import javax.microedition.khronos.opengles.GL10
 import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.max
+import kotlin.math.min
 import kotlin.math.sin
 import kotlin.math.sqrt
 
@@ -45,7 +46,16 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
     private var aPos = 0; private var aNorm = 0
     private var uMVP = 0; private var uModel = 0; private var uColor = 0; private var uLit = 0
     private var uSunDir = 0; private var uSunCol = 0; private var uAmbient = 0
-    private var uLPos = 0; private var uLCol = 0; private var uLCount = 0
+    private var uLPos = 0; private var uLCol = 0; private var uLCount = 0; private var uLVis = 0
+    private val litPos = FloatArray(12)
+    private var litCount = 0
+    private val lightVis = floatArrayOf(1f, 1f, 1f, 1f)
+    private val visOnes = floatArrayOf(1f, 1f, 1f, 1f)
+    private val visDepth = FloatArray(4 * 6 * 128 * 128)
+    private var visKey = ""
+    private var visTime = 0L
+    private var visReady = false
+    private var visActive = false
     private var uEye = 0; private var uFogColor = 0; private var uFogEnd = 0
     private var uSpec = 0; private var uGloss = 0; private var uEmit = 0; private var uPattern = 0; private var uObjScale = 0
     private var uTex = 0; private var uUseTex = 0; private var uMapMode = 0; private var uTerrain = 0
@@ -207,6 +217,7 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         uniform vec3 uAmbient;
         uniform vec3 uLPos[4];
         uniform vec4 uLCol[4];
+        uniform float uLVis[4];
         uniform int uLCount;
         uniform vec3 uEye;
         uniform vec3 uFogColor;
@@ -339,7 +350,7 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
                 float dist = max(length(d), 0.001);
                 vec3 l = d / dist;
                 float att = clamp(1.0 - dist / uLCol[i].w, 0.0, 1.0);
-                att = att * att;
+                att = att * att * uLVis[i];
                 float nl = max(dot(n, l), 0.0);
                 light += uLCol[i].rgb * nl * att * shPt;
                 if (nl > 0.0) {
@@ -442,6 +453,7 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         uAmbient = GLES20.glGetUniformLocation(prog, "uAmbient")
         uLPos = GLES20.glGetUniformLocation(prog, "uLPos[0]")
         uLCol = GLES20.glGetUniformLocation(prog, "uLCol[0]")
+        uLVis = GLES20.glGetUniformLocation(prog, "uLVis[0]")
         uLCount = GLES20.glGetUniformLocation(prog, "uLCount")
         uEye = GLES20.glGetUniformLocation(prog, "uEye")
         uFogColor = GLES20.glGetUniformLocation(prog, "uFogColor")
@@ -610,6 +622,10 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
             col[i * 4 + 2] = (if (fireL) 0.2f else 1f) * o.color[2] * k
             col[i * 4 + 3] = if (fireL) 4f + o.sx * 3f else o.sy
         }
+        System.arraycopy(pos, 0, litPos, 0, 12)
+        litCount = pts.size
+        updateLightVisibility()
+        GLES20.glUniform1fv(uLVis, 4, visOnes, 0)
         GLES20.glUniform3fv(uLPos, 4, pos, 0)
         GLES20.glUniform4fv(uLCol, 4, col, 0)
         GLES20.glUniform1i(uLCount, pts.size)
@@ -882,6 +898,7 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
     }
 
     private fun drawObject(o: SceneObject, vpc: FloatArray, sel: SceneObject?, alpha: Float) {
+        setLightVis(o)
         if (o.shape == Shape.WATER) { drawWater(o, vpc, sel, alpha); return }
         if (o.shape == Shape.TREE) { drawTree(o, vpc, sel); return }
         if (o.shape == Shape.GRASS) { drawGrass(o, vpc, sel); return }
@@ -1223,19 +1240,84 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         return all
     }
 
-    private fun buildCube(li: Int, l: SceneObject, tris: FloatArray, nTri: Int) {
+    /**
+     * Objects block point lights (and fires) for everything behind them: each light gets a cube depth map of the
+     * real shapes of all shadow casters, and every object is lit only by the lights it can "see".
+     */
+    private fun updateLightVisibility() {
+        visActive = false
+        if (litCount == 0) return
+        val casters = scene.objects.filter { o ->
+            o.shadow && !o.shape.isScreen && !o.shape.isLight && o.shape != Shape.SETTINGS && o.shape != Shape.CAMERA &&
+                o.shape != Shape.TERRAIN && o.shape != Shape.BONE && o.shape != Shape.WATER && o.shape != Shape.GRASS && !o.shape.isEmitter
+        }
+        if (casters.isEmpty()) return
+        val sb = StringBuilder()
+        sb.append(litCount).append('|')
+        for (i in 0 until litCount * 3) sb.append(litPos[i]).append(',')
+        sb.append('|')
+        for (o in casters) {
+            sb.append(o.shape.ordinal).append(',').append(o.x).append(',').append(o.y).append(',').append(o.z).append(',')
+                .append(o.rx).append(',').append(o.ry).append(',').append(o.rz).append(',')
+                .append(o.sx).append(',').append(o.sy).append(',').append(o.sz).append(';')
+        }
+        val key = sb.toString()
+        val now = System.currentTimeMillis()
+        if (key != visKey && !(visReady && playing && now - visTime < 100)) {
+            val tris = casterTriangles(casters)
+            val nTri = tris.size / 9
+            for (i in 0 until litCount) buildCube(visDepth, i, litPos[i * 3], litPos[i * 3 + 1], litPos[i * 3 + 2], tris, nTri)
+            visKey = key
+            visTime = now
+            visReady = true
+        }
+        visActive = visReady
+    }
+
+    /** How much of each light reaches this object: measured at the point of its bounding sphere that faces the light. */
+    private fun setLightVis(o: SceneObject) {
+        var shaded = false
+        if (visActive && o.shape != Shape.TERRAIN && o.shape != Shape.WATER && !o.shape.isEmitter) {
+            val cx = o.x
+            val cy = if (o.shape == Shape.TREE) o.y + o.sy * 0.5f else o.y
+            val cz = o.z
+            val r = 0.5f * sqrt(o.sx * o.sx + o.sy * o.sy + o.sz * o.sz)
+            for (i in 0 until 4) {
+                lightVis[i] = 1f
+                if (i >= litCount) continue
+                val lx = litPos[i * 3]
+                val ly = litPos[i * 3 + 1]
+                val lz = litPos[i * 3 + 2]
+                val dx = lx - cx
+                val dy = ly - cy
+                val dz = lz - cz
+                val dist = sqrt(dx * dx + dy * dy + dz * dz)
+                if (dist < 0.15f) continue
+                val m = max(0f, min(r, dist - 0.15f))
+                val px = cx + dx / dist * m
+                val py = cy + dy / dist * m
+                val pz = cz + dz / dist * m
+                val frac = lightShadowFrac(visDepth, i, lx, ly, lz, px, py, pz)
+                lightVis[i] = 1f - frac
+                if (frac > 0f) shaded = true
+            }
+        }
+        GLES20.glUniform1fv(uLVis, 4, if (shaded) lightVis else visOnes, 0)
+    }
+
+    private fun buildCube(buf: FloatArray, li: Int, lx: Float, ly: Float, lz: Float, tris: FloatArray, nTri: Int) {
         val base = li * 6 * CS * CS
-        java.util.Arrays.fill(cubeDepth, base, base + 6 * CS * CS, 0f)
+        java.util.Arrays.fill(buf, base, base + 6 * CS * CS, 0f)
         for (f in 0 until 6) {
             val fr = faceR[f]; val fu = faceU[f]; val ff = faceF[f]
             val off = base + f * CS * CS
             for (t in 0 until nTri) {
                 val o = t * 9
-                val ax = tris[o] - l.x; val ay = tris[o + 1] - l.y; val az = tris[o + 2] - l.z
-                val bx = tris[o + 3] - l.x; val by = tris[o + 4] - l.y; val bz = tris[o + 5] - l.z
-                val cx = tris[o + 6] - l.x; val cy = tris[o + 7] - l.y; val cz = tris[o + 8] - l.z
+                val ax = tris[o] - lx; val ay = tris[o + 1] - ly; val az = tris[o + 2] - lz
+                val bx = tris[o + 3] - lx; val by = tris[o + 4] - ly; val bz = tris[o + 5] - lz
+                val cx = tris[o + 6] - lx; val cy = tris[o + 7] - ly; val cz = tris[o + 8] - lz
                 fillPersp(
-                    cubeDepth, off, CS,
+                    buf, off, CS,
                     ax * fr[0] + ay * fr[1] + az * fr[2], ax * fu[0] + ay * fu[1] + az * fu[2], ax * ff[0] + ay * ff[1] + az * ff[2],
                     bx * fr[0] + by * fr[1] + bz * fr[2], bx * fu[0] + by * fu[1] + bz * fu[2], bx * ff[0] + by * ff[1] + bz * ff[2],
                     cx * fr[0] + cy * fr[1] + cz * fr[2], cx * fu[0] + cy * fu[1] + cz * fu[2], cx * ff[0] + cy * ff[1] + cz * ff[2]
@@ -1245,10 +1327,10 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
     }
 
     /** 0..1: how much of the point light's view of (px,py,pz) is blocked by a caster's real shape. */
-    private fun lightShadowFrac(li: Int, l: SceneObject, px: Float, py: Float, pz: Float): Float {
-        val qx = px - l.x
-        val qy = py - l.y
-        val qz = pz - l.z
+    private fun lightShadowFrac(buf: FloatArray, li: Int, lx: Float, ly: Float, lz: Float, px: Float, py: Float, pz: Float): Float {
+        val qx = px - lx
+        val qy = py - ly
+        val qz = pz - lz
         val ax = abs(qx); val ay = abs(qy); val az = abs(qz)
         val f = if (ax >= ay && ax >= az) (if (qx >= 0f) 0 else 1)
         else if (ay >= az) (if (qy >= 0f) 2 else 3)
@@ -1269,7 +1351,7 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
             val iy = cy + dy
             if (ix < 0 || iy < 0 || ix >= CS || iy >= CS) continue
             tot++
-            if (cubeDepth[off + iy * CS + ix] > invZ * 1.04f) cnt++
+            if (buf[off + iy * CS + ix] > invZ * 1.04f) cnt++
         }
         return if (tot == 0) 0f else cnt.toFloat() / tot
     }
@@ -1333,7 +1415,7 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
 
         // ---- one texel at a time ----
         // each light gets a cube depth map made of its real-shape casters
-        if (nTri > 0) for ((li, l) in lights.withIndex()) buildCube(li, l, tris, nTri)
+        if (nTri > 0) for ((li, l) in lights.withIndex()) buildCube(cubeDepth, li, l.x, l.y, l.z, tris, nTri)
         for (j in 0 until SH) {
             for (i in 0 until SH) {
                 val wx = terrain.x + ((i + 0.5f) / SH - 0.5f) * terrain.sx
@@ -1388,7 +1470,7 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
                         if (h > wy + dy * t) { hit = true; break }
                         t += cell
                     }
-                    val frac = if (hit) 1f else if (nTri > 0) lightShadowFrac(li, l, wx, wy, wz) else 0f
+                    val frac = if (hit) 1f else if (nTri > 0) lightShadowFrac(cubeDepth, li, l.x, l.y, l.z, wx, wy, wz) else 0f
                     pw += att * frac
                 }
                 shSunMap[j * SH + i] = sunS * strength
@@ -1559,6 +1641,7 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
             GLES20.glDisable(GLES20.GL_BLEND)
         }
 
+        GLES20.glUniform1fv(uLVis, 4, visOnes, 0)
         drawShadows(vpc)
 
         // Light markers: drawn on top of everything, kept a constant size on screen so they stay visible when zoomed out
