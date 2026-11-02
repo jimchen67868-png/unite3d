@@ -17,6 +17,7 @@ class EditorView(ctx: Context, val scene: Scene) : GLSurfaceView(ctx) {
     var mode = Mode.MOVE
     var axis = 0   // 0 = free, 1 = X, 2 = Y, 3 = Z
         set(v) { field = v; renderer.axisMode = v }
+    var locked = false   // locked: the selected object is held; one-finger drag anywhere moves/rotates/scales it and taps never select another object. Unlocked: drag looks around, tap selects.
     var onChange: (() -> Unit)? = null
     var onTouchStart: (() -> Unit)? = null
     var sculpt = 0   // 0 off, 1 raise, 2 lower, 3 smooth, 4 flatten
@@ -34,6 +35,9 @@ class EditorView(ctx: Context, val scene: Scene) : GLSurfaceView(ctx) {
     private var moved = false
     private var dragging = false
     private var multi = false
+    private var panValid = false
+    private var panX = 0f
+    private var panY = 0f
     private var offX = 0f; private var offZ = 0f
     private var axT0 = 0f
     private val axStart = FloatArray(3)
@@ -262,8 +266,28 @@ class EditorView(ctx: Context, val scene: Scene) : GLSurfaceView(ctx) {
             if (!multi) cancelGesture(e.eventTime)
             multi = true
             touching = false
+            if (e.pointerCount == 2 && !renderer.fpMode && !playing && e.actionMasked != MotionEvent.ACTION_POINTER_UP) {
+                val mx = (e.getX(0) + e.getX(1)) / 2f
+                val my = (e.getY(0) + e.getY(1)) / 2f
+                if (panValid && e.actionMasked == MotionEvent.ACTION_MOVE) {
+                    val k = renderer.dist * 0.0015f
+                    val yawR = Math.toRadians(renderer.yaw.toDouble())
+                    val s = Math.sin(yawR).toFloat()
+                    val c = Math.cos(yawR).toFloat()
+                    val ddx = mx - panX
+                    val ddy = my - panY
+                    // right = (cos, 0, -sin), forward = (-sin, 0, -cos)
+                    renderer.target[0] += -c * ddx * k + -s * ddy * k
+                    renderer.target[2] += s * ddx * k + -c * ddy * k
+                    requestRender()
+                }
+                panX = mx; panY = my; panValid = true
+            } else {
+                panValid = false
+            }
             return true
         }
+        panValid = false
         touchX = e.x; touchY = e.y
         touching = e.actionMasked != MotionEvent.ACTION_UP && e.actionMasked != MotionEvent.ACTION_CANCEL
         when (e.actionMasked) {
@@ -282,8 +306,9 @@ class EditorView(ctx: Context, val scene: Scene) : GLSurfaceView(ctx) {
                 }
                 // Only remember what is under the finger. Selecting or moving waits until
                 // the finger moves or lifts, so a pinch that starts on an object does nothing to it.
-                pendingList = if (playing) emptyList() else pickAll(e.x, e.y)
-                val hit = pendingList.firstOrNull()
+                val held = if (locked && !playing) scene.selected else null
+                pendingList = if (playing || held != null) emptyList() else pickAll(e.x, e.y)
+                val hit = held   // only a locked object can be dragged; unlocked drags just look around
                 pending = hit
                 if (hit != null) {
                     groundPoint(e.x, e.y, hit.y)?.let { offX = it[0] - hit.x; offZ = it[1] - hit.z }
@@ -321,7 +346,7 @@ class EditorView(ctx: Context, val scene: Scene) : GLSurfaceView(ctx) {
                 }
             }
             MotionEvent.ACTION_UP -> {
-                if (!moved && !multi && !playing) {
+                if (!moved && !multi && !playing && !(locked && scene.selected != null)) {
                     // tap: select the front-most object under the finger, or deselect on empty space.
                     // Tapping the same spot again steps to the next object underneath (floor, walls, hidden blocks...).
                     val list = pendingList

@@ -7,6 +7,7 @@ import android.opengl.GLSurfaceView
 import android.opengl.Matrix
 import javax.microedition.khronos.egl.EGLConfig
 import javax.microedition.khronos.opengles.GL10
+import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.max
 import kotlin.math.sin
@@ -58,6 +59,15 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
     private var uParticle = 0; private var uCamRight = 0; private var uCamUp = 0
     private var uPSize = 0; private var uPHeight = 0; private var uPWind = 0
     private var uGlass = 0; private var uVeg = 0; private var uEnv = 0; private var uHasEnv = 0
+    private var uShadow = 0; private var uShadowOn = 0
+    private val SH = 96   // terrain shadow map resolution
+    private var shTex = 0
+    private var shKey = ""
+    private var shTime = 0L
+    private val shBuf: java.nio.ByteBuffer = java.nio.ByteBuffer.allocateDirect(SH * SH * 4)
+    private val shSunMap = FloatArray(SH * SH)
+    private val shPtMap = FloatArray(SH * SH)
+    private val shTmpMap = FloatArray(SH * SH)
     private lateinit var fireMesh: Mesh
     private lateinit var smokeMesh: Mesh
     private val treeTrunk = arrayOfNulls<Mesh>(2)
@@ -202,6 +212,8 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         uniform float uVeg;
         uniform sampler2D uEnv;
         uniform float uHasEnv;
+        uniform sampler2D uShadow;
+        uniform float uShadowOn;
         vec2 photoUV(vec3 p, vec3 n) {
             vec3 a = abs(n);
             if (uMapMode > 0.5) {
@@ -286,11 +298,19 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
             float shin = 4.0 + uGloss * 120.0;
             vec3 light = uAmbient;
             vec3 spec = vec3(0.0);
+            float shSun = 1.0;
+            float shPt = 1.0;
+            if (uTerrain > 0.5 && uShadowOn > 0.5) {
+                vec2 shUV = vec2(vL.x / max(uObjScale.x, 0.001) + 0.5, vL.z / max(uObjScale.z, 0.001) + 0.5);
+                vec2 shM = texture2D(uShadow, shUV).rg;
+                shSun = 1.0 - shM.r;
+                shPt = 1.0 - shM.g;
+            }
             float sd = max(dot(n, uSunDir), 0.0);
-            light += uSunCol * sd;
+            light += uSunCol * sd * shSun;
             if (sd > 0.0) {
                 vec3 h = normalize(uSunDir + v);
-                spec += uSunCol * pow(max(dot(n, h), 0.0), shin);
+                spec += uSunCol * pow(max(dot(n, h), 0.0), shin) * shSun;
             }
             for (int i = 0; i < 4; i++) {
                 if (i >= uLCount) break;
@@ -300,10 +320,10 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
                 float att = clamp(1.0 - dist / uLCol[i].w, 0.0, 1.0);
                 att = att * att;
                 float nl = max(dot(n, l), 0.0);
-                light += uLCol[i].rgb * nl * att;
+                light += uLCol[i].rgb * nl * att * shPt;
                 if (nl > 0.0) {
                     vec3 h = normalize(l + v);
-                    spec += uLCol[i].rgb * att * pow(max(dot(n, h), 0.0), shin);
+                    spec += uLCol[i].rgb * att * pow(max(dot(n, h), 0.0), shin) * shPt;
                 }
             }
             vec3 base = uColor.rgb;
@@ -384,6 +404,8 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         GLES20.glClearColor(0.15f, 0.16f, 0.19f, 1f)
         GLES20.glEnable(GLES20.GL_DEPTH_TEST)
         photoTex.clear()   // textures are lost with the GL context
+        shTex = 0
+        shKey = ""
         prog = GLES20.glCreateProgram()
         GLES20.glAttachShader(prog, compile(GLES20.GL_VERTEX_SHADER, vertexSrc))
         GLES20.glAttachShader(prog, compile(GLES20.GL_FRAGMENT_SHADER, fragmentSrc))
@@ -426,6 +448,8 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         uVeg = GLES20.glGetUniformLocation(prog, "uVeg")
         uEnv = GLES20.glGetUniformLocation(prog, "uEnv")
         uHasEnv = GLES20.glGetUniformLocation(prog, "uHasEnv")
+        uShadow = GLES20.glGetUniformLocation(prog, "uShadow")
+        uShadowOn = GLES20.glGetUniformLocation(prog, "uShadowOn")
         meshes = mapOf(Shape.CUBE to Meshes.cube(), Shape.PYRAMID to Meshes.pyramid(), Shape.SPHERE to Meshes.sphere())
         grid = Meshes.grid()
         gizmo = Meshes.gizmo()
@@ -896,8 +920,10 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         val gh = (if (st != null) st.rz else 0f) + 0.01f
         val soft = (st?.soft ?: 0.4f).coerceIn(0f, 1f)
         val tint = st?.tint ?: floatArrayOf(0f, 0f, 0f)
+        val terrains = scene.objects.filter { it.shape == Shape.TERRAIN && it.heights != null }
         val casters = scene.objects.filter { o ->
-            o.shadow && !o.shape.isScreen && !o.shape.isLight && o.shape != Shape.SETTINGS && o.shape != Shape.CAMERA && o.shape != Shape.TERRAIN && o.shape != Shape.BONE && o.shape != Shape.WATER && o.shape != Shape.GRASS && !o.shape.isEmitter &&
+            terrains.none { t -> TerrainGen.heightAt(t, o.x, o.z) != null } &&
+                o.shadow && !o.shape.isScreen && !o.shape.isLight && o.shape != Shape.SETTINGS && o.shape != Shape.CAMERA && o.shape != Shape.TERRAIN && o.shape != Shape.BONE && o.shape != Shape.WATER && o.shape != Shape.GRASS && !o.shape.isEmitter &&
                 o.y + 0.5f * o.sy > gh + 0.04f
         }
         if (casters.isEmpty()) return
@@ -952,6 +978,404 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         GLES20.glDisable(GLES20.GL_BLEND)
     }
 
+
+    private fun blurMap(a: FloatArray, r: Int) {
+        if (r <= 0) return
+        val t = shTmpMap
+        val inv = 1f / (2 * r + 1)
+        for (j in 0 until SH) for (i in 0 until SH) {
+            var sum = 0f
+            for (k in -r..r) sum += a[j * SH + (i + k).coerceIn(0, SH - 1)]
+            t[j * SH + i] = sum * inv
+        }
+        for (j in 0 until SH) for (i in 0 until SH) {
+            var sum = 0f
+            for (k in -r..r) sum += t[(j + k).coerceIn(0, SH - 1) * SH + i]
+            a[j * SH + i] = sum * inv
+        }
+    }
+
+    /**
+     * Terrain shadows: a small shadow map is worked out on the CPU for the first terrain (hills shade each other,
+     * and every shadow-casting object blocks the sun and point lights) and the terrain shader reads it.
+     * It is only redone when the terrain, the lights or a caster changes.
+     */
+    private fun bakeTerrainShadows() {
+        val terrain = scene.objects.firstOrNull { it.shape == Shape.TERRAIN && it.heights != null }
+        val st = scene.objects.firstOrNull { it.shape == Shape.SETTINGS }
+        val strength = if (st != null) st.ry.coerceIn(0f, 1f) else 0.5f
+        if (terrain == null || strength <= 0.01f) { GLES20.glUniform1f(uShadowOn, 0f); return }
+        val soft = (st?.soft ?: 0.4f).coerceIn(0f, 1f)
+        val sun = scene.objects.firstOrNull { it.shape == Shape.SUN }
+        var lx = 0.4f
+        var ly = 1f
+        var lz = 0.6f
+        var sunPower = 1f
+        if (sun != null) {
+            val t = Math.toRadians(sun.rx.toDouble())
+            val p = Math.toRadians(sun.ry.toDouble())
+            lx = (sin(t) * sin(p)).toFloat()
+            ly = cos(t).toFloat()
+            lz = (sin(t) * cos(p)).toFloat()
+            sunPower = sun.sx
+        }
+        val ll = sqrt(lx * lx + ly * ly + lz * lz)
+        val sunOk = ll > 0f && ly / ll > 0.08f && sunPower > 0.05f
+        val lights = scene.objects.filter { it.shape == Shape.LIGHT }.take(4).filter { it.sx >= 0.05f }
+        val casters = scene.objects.filter { o ->
+            o.shadow && !o.shape.isScreen && !o.shape.isLight && o.shape != Shape.SETTINGS && o.shape != Shape.CAMERA &&
+                o.shape != Shape.TERRAIN && o.shape != Shape.BONE && o.shape != Shape.WATER && o.shape != Shape.GRASS && !o.shape.isEmitter
+        }
+
+        val sb = StringBuilder()
+        fun f(v: Float) { sb.append(v).append(',') }
+        sb.append(terrain.hVersion).append(',')
+        f(terrain.x); f(terrain.y); f(terrain.z); f(terrain.sx); f(terrain.sy); f(terrain.sz)
+        f(strength); f(soft); f(lx); f(ly); f(lz); f(sunPower)
+        for (l in lights) { f(l.x); f(l.y); f(l.z); f(l.sx); f(l.sy) }
+        sb.append('|')
+        for (o in casters) {
+            sb.append(o.shape.ordinal).append(',')
+            f(o.x); f(o.y); f(o.z); f(o.rx); f(o.ry); f(o.rz); f(o.sx); f(o.sy); f(o.sz)
+        }
+        val key = sb.toString()
+        val now = System.currentTimeMillis()
+        if (key != shKey && !(shTex != 0 && playing && now - shTime < 100)) {
+            bakeShadowMap(terrain, strength, soft, sunOk, lx / ll, ly / ll, lz / ll, lights, casters)
+            shKey = key
+            shTime = now
+        }
+        if (shTex == 0) { GLES20.glUniform1f(uShadowOn, 0f); return }
+        GLES20.glActiveTexture(GLES20.GL_TEXTURE2)
+        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, shTex)
+        GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
+        GLES20.glUniform1f(uShadowOn, 1f)
+    }
+
+    // depth buffers for the real-shape shadows
+    private val SM = 512      // sun depth map size
+    private val CS = 128      // size of each face of a point-light cube map
+    private val sunDepth = FloatArray(SM * SM)
+    private val cubeDepth = FloatArray(4 * 6 * CS * CS)
+    private val shShapeData = HashMap<Shape, FloatArray>()
+    private val shTreeData = HashMap<Int, FloatArray>()
+    private val faceF = arrayOf(floatArrayOf(1f, 0f, 0f), floatArrayOf(-1f, 0f, 0f), floatArrayOf(0f, 1f, 0f), floatArrayOf(0f, -1f, 0f), floatArrayOf(0f, 0f, 1f), floatArrayOf(0f, 0f, -1f))
+    private val faceR = arrayOf(floatArrayOf(0f, 0f, -1f), floatArrayOf(0f, 0f, 1f), floatArrayOf(1f, 0f, 0f), floatArrayOf(1f, 0f, 0f), floatArrayOf(1f, 0f, 0f), floatArrayOf(-1f, 0f, 0f))
+    private val faceU = arrayOf(floatArrayOf(0f, 1f, 0f), floatArrayOf(0f, 1f, 0f), floatArrayOf(0f, 0f, -1f), floatArrayOf(0f, 0f, 1f), floatArrayOf(0f, 1f, 0f), floatArrayOf(0f, 1f, 0f))
+    private val clipPoly = FloatArray(5 * 3)
+    private val clipVx = FloatArray(3)
+    private val clipVy = FloatArray(3)
+    private val clipVz = FloatArray(3)
+
+    /** Fills a screen-space triangle, keeping the largest value per pixel (the occluder nearest the light). */
+    private fun fillTri(buf: FloatArray, off: Int, size: Int, x0: Float, y0: Float, z0: Float, x1: Float, y1: Float, z1: Float, x2: Float, y2: Float, z2: Float) {
+        val minx = kotlin.math.floor(minOf(x0, x1, x2) - 0.5f).toInt().coerceAtLeast(0)
+        val maxx = kotlin.math.ceil(maxOf(x0, x1, x2) - 0.5f).toInt().coerceAtMost(size - 1)
+        val miny = kotlin.math.floor(minOf(y0, y1, y2) - 0.5f).toInt().coerceAtLeast(0)
+        val maxy = kotlin.math.ceil(maxOf(y0, y1, y2) - 0.5f).toInt().coerceAtMost(size - 1)
+        if (maxx < minx || maxy < miny) return
+        val den = (y1 - y2) * (x0 - x2) + (x2 - x1) * (y0 - y2)
+        if (abs(den) < 1e-9f) return
+        val inv = 1f / den
+        val eps = -0.04f
+        for (y in miny..maxy) {
+            val py = y + 0.5f
+            for (x in minx..maxx) {
+                val px = x + 0.5f
+                val w0 = ((y1 - y2) * (px - x2) + (x2 - x1) * (py - y2)) * inv
+                val w1 = ((y2 - y0) * (px - x2) + (x0 - x2) * (py - y2)) * inv
+                val w2 = 1f - w0 - w1
+                if (w0 < eps || w1 < eps || w2 < eps) continue
+                val z = w0 * z0 + w1 * z1 + w2 * z2
+                val k = off + y * size + x
+                if (z > buf[k]) buf[k] = z
+            }
+        }
+    }
+
+    /** A triangle in a cube face's camera space (x right, y up, z forward): clipped to z >= near, projected at 90 degrees, stores 1/z. */
+    private fun fillPersp(buf: FloatArray, off: Int, size: Int, ax: Float, ay: Float, az: Float, bx: Float, by: Float, bz: Float, cx: Float, cy: Float, cz: Float) {
+        val near = 0.05f
+        if (az < near && bz < near && cz < near) return
+        if (ax > az && bx > bz && cx > cz) return
+        if (-ax > az && -bx > bz && -cx > cz) return
+        if (ay > az && by > bz && cy > cz) return
+        if (-ay > az && -by > bz && -cy > cz) return
+        val vx = clipVx
+        val vy = clipVy
+        val vz = clipVz
+        vx[0] = ax; vx[1] = bx; vx[2] = cx
+        vy[0] = ay; vy[1] = by; vy[2] = cy
+        vz[0] = az; vz[1] = bz; vz[2] = cz
+        var n = 0
+        for (i in 0..2) {
+            val j = (i + 1) % 3
+            val d1 = vz[i] - near
+            val d2 = vz[j] - near
+            if (d1 >= 0f) { clipPoly[n * 3] = vx[i]; clipPoly[n * 3 + 1] = vy[i]; clipPoly[n * 3 + 2] = vz[i]; n++ }
+            if (d1 * d2 < 0f) {
+                val t = d1 / (d1 - d2)
+                clipPoly[n * 3] = vx[i] + (vx[j] - vx[i]) * t
+                clipPoly[n * 3 + 1] = vy[i] + (vy[j] - vy[i]) * t
+                clipPoly[n * 3 + 2] = near
+                n++
+            }
+        }
+        if (n < 3) return
+        val h = size * 0.5f
+        for (i in 1 until n - 1) {
+            val z0 = clipPoly[2]
+            val z1 = clipPoly[i * 3 + 2]
+            val z2 = clipPoly[(i + 1) * 3 + 2]
+            fillTri(
+                buf, off, size,
+                (clipPoly[0] / z0 + 1f) * h, (clipPoly[1] / z0 + 1f) * h, 1f / z0,
+                (clipPoly[i * 3] / z1 + 1f) * h, (clipPoly[i * 3 + 1] / z1 + 1f) * h, 1f / z1,
+                (clipPoly[(i + 1) * 3] / z2 + 1f) * h, (clipPoly[(i + 1) * 3 + 1] / z2 + 1f) * h, 1f / z2
+            )
+        }
+    }
+
+    /** World-space triangle corners (x, y, z per vertex) of every caster, using the real mesh of each object. */
+    private fun casterTriangles(casters: List<SceneObject>): FloatArray {
+        val parts = ArrayList<FloatArray>()
+        var total = 0
+        val m = FloatArray(16)
+        for (o in casters) {
+            val md = o.model
+            val data: FloatArray = when {
+                o.shape == Shape.TREE -> shTreeData.getOrPut(o.pattern.coerceIn(0, 1)) { Veg.both(o.pattern.coerceIn(0, 1)) }
+                md != null -> md.data
+                else -> shShapeData.getOrPut(o.shape) { Meshes.dataFor(o.shape) ?: FloatArray(0) }
+            }
+            val nv = data.size / 6 / 3 * 3
+            if (nv == 0) continue
+            Matrix.setIdentityM(m, 0)
+            Matrix.translateM(m, 0, o.x, o.y, o.z)
+            Matrix.rotateM(m, 0, o.ry, 0f, 1f, 0f)
+            if (o.shape != Shape.TREE) {
+                Matrix.rotateM(m, 0, o.rx, 1f, 0f, 0f)
+                Matrix.rotateM(m, 0, o.rz, 0f, 0f, 1f)
+            }
+            Matrix.scaleM(m, 0, o.sx, o.sy, o.sz)
+            val out = FloatArray(nv * 3)
+            for (v in 0 until nv) {
+                val x = data[v * 6]
+                val y = data[v * 6 + 1]
+                val z = data[v * 6 + 2]
+                out[v * 3] = m[0] * x + m[4] * y + m[8] * z + m[12]
+                out[v * 3 + 1] = m[1] * x + m[5] * y + m[9] * z + m[13]
+                out[v * 3 + 2] = m[2] * x + m[6] * y + m[10] * z + m[14]
+            }
+            parts.add(out)
+            total += out.size
+        }
+        val all = FloatArray(total)
+        var p = 0
+        for (a in parts) { System.arraycopy(a, 0, all, p, a.size); p += a.size }
+        return all
+    }
+
+    private fun buildCube(li: Int, l: SceneObject, tris: FloatArray, nTri: Int) {
+        val base = li * 6 * CS * CS
+        java.util.Arrays.fill(cubeDepth, base, base + 6 * CS * CS, 0f)
+        for (f in 0 until 6) {
+            val fr = faceR[f]; val fu = faceU[f]; val ff = faceF[f]
+            val off = base + f * CS * CS
+            for (t in 0 until nTri) {
+                val o = t * 9
+                val ax = tris[o] - l.x; val ay = tris[o + 1] - l.y; val az = tris[o + 2] - l.z
+                val bx = tris[o + 3] - l.x; val by = tris[o + 4] - l.y; val bz = tris[o + 5] - l.z
+                val cx = tris[o + 6] - l.x; val cy = tris[o + 7] - l.y; val cz = tris[o + 8] - l.z
+                fillPersp(
+                    cubeDepth, off, CS,
+                    ax * fr[0] + ay * fr[1] + az * fr[2], ax * fu[0] + ay * fu[1] + az * fu[2], ax * ff[0] + ay * ff[1] + az * ff[2],
+                    bx * fr[0] + by * fr[1] + bz * fr[2], bx * fu[0] + by * fu[1] + bz * fu[2], bx * ff[0] + by * ff[1] + bz * ff[2],
+                    cx * fr[0] + cy * fr[1] + cz * fr[2], cx * fu[0] + cy * fu[1] + cz * fu[2], cx * ff[0] + cy * ff[1] + cz * ff[2]
+                )
+            }
+        }
+    }
+
+    /** 0..1: how much of the point light's view of (px,py,pz) is blocked by a caster's real shape. */
+    private fun lightShadowFrac(li: Int, l: SceneObject, px: Float, py: Float, pz: Float): Float {
+        val qx = px - l.x
+        val qy = py - l.y
+        val qz = pz - l.z
+        val ax = abs(qx); val ay = abs(qy); val az = abs(qz)
+        val f = if (ax >= ay && ax >= az) (if (qx >= 0f) 0 else 1)
+        else if (ay >= az) (if (qy >= 0f) 2 else 3)
+        else (if (qz >= 0f) 4 else 5)
+        val fr = faceR[f]; val fu = faceU[f]; val ff = faceF[f]
+        val z = qx * ff[0] + qy * ff[1] + qz * ff[2]
+        if (z < 0.05f) return 0f
+        val x = qx * fr[0] + qy * fr[1] + qz * fr[2]
+        val y = qx * fu[0] + qy * fu[1] + qz * fu[2]
+        val cx = ((x / z + 1f) * 0.5f * CS).toInt()
+        val cy = ((y / z + 1f) * 0.5f * CS).toInt()
+        val off = (li * 6 + f) * CS * CS
+        val invZ = 1f / z
+        var cnt = 0
+        var tot = 0
+        for (dy in -1..1) for (dx in -1..1) {
+            val ix = cx + dx
+            val iy = cy + dy
+            if (ix < 0 || iy < 0 || ix >= CS || iy >= CS) continue
+            tot++
+            if (cubeDepth[off + iy * CS + ix] > invZ * 1.04f) cnt++
+        }
+        return if (tot == 0) 0f else cnt.toFloat() / tot
+    }
+
+    private fun bakeShadowMap(
+        terrain: SceneObject, strength: Float, soft: Float, sunOk: Boolean,
+        dx0: Float, dy0: Float, dz0: Float, lights: List<SceneObject>, casters: List<SceneObject>
+    ) {
+        val tris = casterTriangles(casters)
+        val nTri = tris.size / 9
+
+        // ---- sun: orthographic depth map looking down the sun's direction over the terrain ----
+        var rx = 0f; var ry = 0f; var rz = 0f
+        var ux = 0f; var uy = 0f; var uz = 0f
+        var aMin = 0f; var bMin = 0f; var sA = 1f; var sB = 1f
+        val sunMap = sunOk && nTri > 0
+        if (sunMap) {
+            // right = up x dir
+            rx = dz0; ry = 0f; rz = -dx0
+            var rl = sqrt(rx * rx + rz * rz)
+            if (rl < 0.01f) { rx = 1f; rz = 0f; rl = 1f }
+            rx /= rl; rz /= rl
+            // up = dir x right
+            ux = dy0 * rz - dz0 * ry
+            uy = dz0 * rx - dx0 * rz
+            uz = dx0 * ry - dy0 * rx
+            var aLo = Float.MAX_VALUE; var aHi = -Float.MAX_VALUE
+            var bLo = Float.MAX_VALUE; var bHi = -Float.MAX_VALUE
+            for (cxI in 0..1) for (cyI in 0..1) for (czI in 0..1) {
+                val px = terrain.x + (cxI - 0.5f) * terrain.sx
+                val py = terrain.y + cyI * terrain.sy
+                val pz = terrain.z + (czI - 0.5f) * terrain.sz
+                val a = px * rx + py * ry + pz * rz
+                val b = px * ux + py * uy + pz * uz
+                aLo = minOf(aLo, a); aHi = maxOf(aHi, a)
+                bLo = minOf(bLo, b); bHi = maxOf(bHi, b)
+            }
+            aMin = aLo; bMin = bLo
+            sA = SM / max(aHi - aLo, 0.01f)
+            sB = SM / max(bHi - bLo, 0.01f)
+            java.util.Arrays.fill(sunDepth, -1e30f)
+            for (t in 0 until nTri) {
+                val o = t * 9
+                val x0 = tris[o]; val y0 = tris[o + 1]; val z0 = tris[o + 2]
+                val x1 = tris[o + 3]; val y1 = tris[o + 4]; val z1 = tris[o + 5]
+                val x2 = tris[o + 6]; val y2 = tris[o + 7]; val z2 = tris[o + 8]
+                fillTri(
+                    sunDepth, 0, SM,
+                    (x0 * rx + y0 * ry + z0 * rz - aMin) * sA, (x0 * ux + y0 * uy + z0 * uz - bMin) * sB, x0 * dx0 + y0 * dy0 + z0 * dz0,
+                    (x1 * rx + y1 * ry + z1 * rz - aMin) * sA, (x1 * ux + y1 * uy + z1 * uz - bMin) * sB, x1 * dx0 + y1 * dy0 + z1 * dz0,
+                    (x2 * rx + y2 * ry + z2 * rz - aMin) * sA, (x2 * ux + y2 * uy + z2 * uz - bMin) * sB, x2 * dx0 + y2 * dy0 + z2 * dz0
+                )
+            }
+        }
+
+        val cell = max(terrain.sx, terrain.sz) / TerrainGen.N
+        val top = terrain.y + terrain.sy
+        // sample spacing in sun-map pixels (about a third of one shadow-map texel)
+        val spA = terrain.sx / SH * sA / 3f
+        val spB = terrain.sz / SH * sB / 3f
+
+        // ---- one texel at a time ----
+        // each light gets a cube depth map made of its real-shape casters
+        if (nTri > 0) for ((li, l) in lights.withIndex()) buildCube(li, l, tris, nTri)
+        for (j in 0 until SH) {
+            for (i in 0 until SH) {
+                val wx = terrain.x + ((i + 0.5f) / SH - 0.5f) * terrain.sx
+                val wz = terrain.z + ((j + 0.5f) / SH - 0.5f) * terrain.sz
+                val wy = (TerrainGen.heightAt(terrain, wx, wz) ?: terrain.y) + 0.06f
+                var sunS = 0f
+                if (sunOk) {
+                    var hit = false
+                    var t = cell
+                    while (t < 400f) {
+                        val py = wy + dy0 * t
+                        if (py > top) break
+                        val h = TerrainGen.heightAt(terrain, wx + dx0 * t, wz + dz0 * t) ?: break
+                        if (h > py) { hit = true; break }
+                        t += cell
+                    }
+                    if (hit) {
+                        sunS = 1f
+                    } else if (sunMap) {
+                        val depth = wx * dx0 + wy * dy0 + wz * dz0
+                        val pa = (wx * rx + wy * ry + wz * rz - aMin) * sA
+                        val pb = (wx * ux + wy * uy + wz * uz - bMin) * sB
+                        var cnt = 0
+                        for (qy in -1..1) for (qx in -1..1) {
+                            val ix = (pa + qx * spA).toInt()
+                            val iy = (pb + qy * spB).toInt()
+                            if (ix < 0 || iy < 0 || ix >= SM || iy >= SM) continue
+                            if (sunDepth[iy * SM + ix] > depth + 0.1f) cnt++
+                        }
+                        sunS = cnt / 9f
+                    }
+                }
+                var pw = 0f
+                var tw = 0f
+                for ((li, l) in lights.withIndex()) {
+                    val ex = l.x - wx
+                    val ey = l.y - wy
+                    val ez = l.z - wz
+                    val dist = sqrt(ex * ex + ey * ey + ez * ez)
+                    val range = max(l.sy, 0.1f)
+                    if (dist >= range || dist < 0.05f) continue
+                    val k = 1f - dist / range
+                    val att = k * k * kotlin.math.min(1f, l.sx / 1.5f)
+                    tw += att
+                    val dx = ex / dist
+                    val dy = ey / dist
+                    val dz = ez / dist
+                    var hit = false
+                    var t = cell
+                    while (t < dist) {
+                        val h = TerrainGen.heightAt(terrain, wx + dx * t, wz + dz * t) ?: break
+                        if (h > wy + dy * t) { hit = true; break }
+                        t += cell
+                    }
+                    val frac = if (hit) 1f else if (nTri > 0) lightShadowFrac(li, l, wx, wy, wz) else 0f
+                    pw += att * frac
+                }
+                shSunMap[j * SH + i] = sunS * strength
+                shPtMap[j * SH + i] = (if (tw > 0f) pw / tw else 0f) * strength
+            }
+        }
+        val br = (soft * 3f + 0.5f).toInt()
+        blurMap(shSunMap, br)
+        blurMap(shPtMap, br)
+        shBuf.clear()
+        for (k in 0 until SH * SH) {
+            shBuf.put((shSunMap[k].coerceIn(0f, 1f) * 255f).toInt().toByte())
+            shBuf.put((shPtMap[k].coerceIn(0f, 1f) * 255f).toInt().toByte())
+            shBuf.put(0.toByte())
+            shBuf.put(255.toByte())
+        }
+        shBuf.position(0)
+        GLES20.glActiveTexture(GLES20.GL_TEXTURE2)
+        if (shTex == 0) {
+            val ids = IntArray(1)
+            GLES20.glGenTextures(1, ids, 0)
+            shTex = ids[0]
+            GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, shTex)
+            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR)
+            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_LINEAR)
+            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE)
+            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE)
+        } else {
+            GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, shTex)
+        }
+        GLES20.glTexImage2D(GLES20.GL_TEXTURE_2D, 0, GLES20.GL_RGBA, SH, SH, 0, GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, shBuf)
+        GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
+    }
+
     private fun terrainMeshFor(o: SceneObject): Mesh {
         val key = "" + o.hVersion + "|" + o.sx + "|" + o.sy + "|" + o.sz
         val e = terrainCache[o]
@@ -1000,6 +1424,8 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         GLES20.glUniform1f(uVeg, 0f)
         GLES20.glUniform1f(uHasEnv, 0f)
         GLES20.glUniform1i(uEnv, 1)
+        GLES20.glUniform1i(uShadow, 2)
+        bakeTerrainShadows()
 
         // Sky photo (Settings): panorama wraps all the way round the camera; backdrop is a fixed picture behind the scene
         val skyKey = settings?.photo ?: ""

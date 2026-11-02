@@ -58,6 +58,7 @@ class MainActivity : Activity(), SensorEventListener {
     private lateinit var consoleView: TextView
     private val modeButtons = HashMap<Mode, Button>()
     private lateinit var yButton: Button
+    private lateinit var lockButton: Button
     private lateinit var playButton: Button
     private lateinit var joystick: JoystickView
     private lateinit var coordLabel: TextView
@@ -261,6 +262,10 @@ end
         modeButtons[Mode.ROTATE] = btn("Rotate") { setMode(Mode.ROTATE) }
         modeButtons[Mode.SCALE] = btn("Scale") { setMode(Mode.SCALE) }
         yButton = btn("Axis: Free") { editor.axis = (editor.axis + 1) % 4; refreshButtons() }
+        lockButton = btn("Lock") {
+            if (!editor.locked && scene.selected == null) toast("Select an object first")
+            else { editor.locked = !editor.locked; refreshButtons() }
+        }
         fileButton = btn("File") { showFileMenu() }
         playButton = btn("Play") { togglePlay() }
         playButton.setBackgroundColor(0xFF2E8B57.toInt())
@@ -279,7 +284,7 @@ end
                 btn("+Sphere", true) { scene.add(Shape.SPHERE); editor.refresh() },
                 importButton
             ))
-            addView(row(modeButtons[Mode.MOVE]!!, modeButtons[Mode.ROTATE]!!, modeButtons[Mode.SCALE]!!, yButton))
+            addView(row(lockButton, modeButtons[Mode.MOVE]!!, modeButtons[Mode.ROTATE]!!, modeButtons[Mode.SCALE]!!, yButton))
             addView(row(
                 btn("Hierarchy") { setPanel(Panel.HIER) },
                 btn("Inspector") { setPanel(Panel.INSPECT) },
@@ -1520,6 +1525,8 @@ end
 
     private fun refreshButtons() {
         for ((m, b) in modeButtons) b.setBackgroundColor(if (editor.mode == m) 0xFF3D7BFF.toInt() else 0xFF444444.toInt())
+        lockButton.text = if (editor.locked) "Locked" else "Lock"
+        lockButton.setBackgroundColor(if (editor.locked) 0xFFE67E22.toInt() else 0xFF444444.toInt())
         yButton.text = "Axis: " + arrayOf("Free", "X", "Y", "Z")[editor.axis]
         yButton.setBackgroundColor(arrayOf(0xFF444444.toInt(), 0xFFC0392B.toInt(), 0xFF27AE60.toInt(), 0xFF3D7BFF.toInt())[editor.axis])
         updateInfo()
@@ -1549,7 +1556,7 @@ end
         val o = scene.selected
         info.text = (if (playing) "PLAYING  |  " else "") + (o?.name ?: "Nothing selected") +
             (if (o != null && !o.shape.isScreen && o.shape != Shape.SETTINGS) String.format(Locale.US, " (%.2f, %.2f, %.2f)", o.x, o.y, o.z) else "") +
-            "  |  " + scene.objects.size + " objects" + (if (playing) "" else "  |  drag: " + editor.mode.name.lowercase() + (if (editor.axis > 0) " " + arrayOf("", "X", "Y", "Z")[editor.axis] else ""))
+            "  |  " + scene.objects.size + " objects" + (if (playing) "" else if (editor.locked) "  |  LOCKED: drag moves it" else "  |  drag: " + editor.mode.name.lowercase() + (if (editor.axis > 0) " " + arrayOf("", "X", "Y", "Z")[editor.axis] else ""))
         if (scene.selected?.shape != Shape.TERRAIN && editor.sculpt != 0) editor.sculpt = 0
         if (panel == Panel.HIER && (scene.objects.size != lastCount || scene.selected !== lastSel)) rebuildHierarchy()
         if (panel == Panel.INSPECT) refreshInspector()
