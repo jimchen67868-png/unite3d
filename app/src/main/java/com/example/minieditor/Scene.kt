@@ -263,11 +263,11 @@ class Scene {
         return o
     }
 
-    fun duplicate(): SceneObject? {
-        val s = selected ?: return null
-        if (s.shape.isScreen || s.shape == Shape.SETTINGS || s.shape == Shape.CAMERA) return null
-        if (s.shape.isLight && !canAddLight(s.shape)) return null
-        val o = SceneObject(s.shape, s.name + " copy", s.x + 1f, s.y, s.z, s.rx, s.ry, s.rz,
+    private fun canCopy(s: SceneObject): Boolean =
+        !(s.shape.isScreen || s.shape == Shape.SETTINGS || s.shape == Shape.CAMERA)
+
+    private fun cloneOf(s: SceneObject, name: String, dx: Float): SceneObject {
+        val o = SceneObject(s.shape, name, s.x + dx, s.y, s.z, s.rx, s.ry, s.rz,
             s.sx, s.sy, s.sz, s.color.copyOf(), s.model)
         o.script = s.script
         o.collider = s.collider
@@ -277,10 +277,52 @@ class Scene {
         o.parentId = s.parentId
         o.rel = s.rel?.copyOf()
         o.spec = s.spec; o.gloss = s.gloss; o.emit = s.emit; o.opacity = s.opacity; o.pattern = s.pattern
+        o.soft = s.soft; o.tint = s.tint.copyOf()
+        return o
+    }
+
+    fun duplicate(): SceneObject? {
+        val s = selected ?: return null
+        if (!canCopy(s)) return null
+        if (s.shape.isLight && !canAddLight(s.shape)) return null
+        val o = cloneOf(s, s.name + " copy", 1f)
         objects.add(o)
         selected = o
         return o
     }
+
+    // ---------- clipboard ----------
+    private var clipboard: SceneObject? = null
+    private var pasteCount = 0
+
+    /** Remembers a copy of the selected object. False if nothing copyable is selected. */
+    fun copySelected(): Boolean {
+        val s = selected ?: return false
+        if (!canCopy(s)) return false
+        clipboard = cloneOf(s, s.name, 0f)
+        pasteCount = 0
+        return true
+    }
+
+    /** Copy, then remove. */
+    fun cutSelected(): Boolean {
+        if (!copySelected()) return false
+        removeSelected()
+        return true
+    }
+
+    /** Adds the remembered object, a little further over each time. Null if the clipboard is empty or a light limit is reached. */
+    fun paste(): SceneObject? {
+        val c = clipboard ?: return null
+        if (c.shape.isLight && !canAddLight(c.shape)) return null
+        pasteCount++
+        val o = cloneOf(c, c.name, pasteCount.toFloat())
+        objects.add(o)
+        selected = o
+        return o
+    }
+
+    fun hasClipboard(): Boolean = clipboard != null
 
     fun removeSelected() {
         selected?.let { objects.remove(it) }

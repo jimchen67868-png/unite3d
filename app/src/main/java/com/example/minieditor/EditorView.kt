@@ -18,8 +18,10 @@ class EditorView(ctx: Context, val scene: Scene) : GLSurfaceView(ctx) {
     var axis = 0   // 0 = free, 1 = X, 2 = Y, 3 = Z
         set(v) { field = v; renderer.axisMode = v }
     var locked = false   // locked: the selected object is held; one-finger drag anywhere moves/rotates/scales it and taps never select another object. Unlocked: drag looks around, tap selects.
+    var selectEnabled = true   // off: taps never select anything, so you can just move around
     var onChange: (() -> Unit)? = null
     var onTouchStart: (() -> Unit)? = null
+    var onTouchEnd: (() -> Unit)? = null
     var sculpt = 0   // 0 off, 1 raise, 2 lower, 3 smooth, 4 flatten
     var brushRadius = 3f
     var brushStrength = 0.5f
@@ -346,7 +348,7 @@ class EditorView(ctx: Context, val scene: Scene) : GLSurfaceView(ctx) {
                 }
             }
             MotionEvent.ACTION_UP -> {
-                if (!moved && !multi && !playing && !(locked && scene.selected != null)) {
+                if (!moved && !multi && !playing && selectEnabled && !(locked && scene.selected != null)) {
                     // tap: select the front-most object under the finger, or deselect on empty space.
                     // Tapping the same spot again steps to the next object underneath (floor, walls, hidden blocks...).
                     val list = pendingList
@@ -367,10 +369,12 @@ class EditorView(ctx: Context, val scene: Scene) : GLSurfaceView(ctx) {
                 dragTarget?.let { Rig.rebind(scene, it) }
                 Rig.editing = null
                 dragging = false; dragTarget = null; pending = null; sculpting = false
+                onTouchEnd?.invoke()
             }
             MotionEvent.ACTION_CANCEL -> {
                 Rig.editing = null
                 dragging = false; dragTarget = null; pending = null; sculpting = false
+                onTouchEnd?.invoke()
             }
         }
         return true

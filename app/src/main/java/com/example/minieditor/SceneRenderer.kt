@@ -555,6 +555,8 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
             amb = sun.sy
         }
         val st = scene.objects.firstOrNull { it.shape == Shape.SETTINGS }
+        // a scene with Settings but no Sun has no sun light (the built-in sun is only for plain scenes)
+        if (sun == null && st != null) sc = floatArrayOf(0f, 0f, 0f)
         if (st != null) amb = st.z.coerceIn(0f, 1f)
         // Editor-only "Bright" mode: ignore the scene's dark ambient/sun/fog so you can see what you are editing.
         val bright = editorBright && !playing
@@ -940,6 +942,8 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
             ly = cos(t).toFloat()
             lz = (sin(t) * cos(p)).toFloat()
             sunPower = sun.sx
+        } else if (st != null) {
+            sunPower = 0f
         }
         val ll = sqrt(lx * lx + ly * ly + lz * lz)
         val sunOk = ll > 0f && ly / ll > 0.08f && sunPower > 0.05f
@@ -1018,6 +1022,8 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
             ly = cos(t).toFloat()
             lz = (sin(t) * cos(p)).toFloat()
             sunPower = sun.sx
+        } else if (st != null) {
+            sunPower = 0f
         }
         val ll = sqrt(lx * lx + ly * ly + lz * lz)
         val sunOk = ll > 0f && ly / ll > 0.08f && sunPower > 0.05f

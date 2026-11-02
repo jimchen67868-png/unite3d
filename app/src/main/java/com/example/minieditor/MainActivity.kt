@@ -59,6 +59,7 @@ class MainActivity : Activity(), SensorEventListener {
     private val modeButtons = HashMap<Mode, Button>()
     private lateinit var yButton: Button
     private lateinit var lockButton: Button
+    private lateinit var selectButton: Button
     private lateinit var playButton: Button
     private lateinit var joystick: JoystickView
     private lateinit var coordLabel: TextView
@@ -224,6 +225,48 @@ end
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
     private fun toast(s: String) = Toast.makeText(this, s, Toast.LENGTH_SHORT).show()
 
+    // ---------- Undo / redo ----------
+
+    private val history = ArrayList<String>()
+    private val histSel = ArrayList<Int>()
+    private var hIdx = -1
+
+    /** Remembers the scene as one undo step if it differs from the current step. */
+    private fun record() {
+        if (playing) return
+        val cur = scene.toJson()
+        val sel = scene.objects.indexOf(scene.selected)
+        if (hIdx >= 0 && history[hIdx] == cur) { histSel[hIdx] = sel; return }
+        while (history.size > hIdx + 1) { history.removeAt(history.size - 1); histSel.removeAt(histSel.size - 1) }
+        history.add(cur); histSel.add(sel)
+        if (history.size > 60) { history.removeAt(0); histSel.removeAt(0) }
+        hIdx = history.size - 1
+    }
+
+    private fun restoreStep(i: Int) {
+        try {
+            scene.load(history[i]) { loadModel(it) }
+            scene.selected = scene.objects.getOrNull(histSel[i])
+            hIdx = i
+            lastCount = -1
+            editor.refresh()
+        } catch (e: Throwable) {
+            toast("Undo failed: " + e.message)
+        }
+    }
+
+    private fun undo() {
+        if (playing) { toast("Stop play mode first"); return }
+        record()
+        if (hIdx > 0) restoreStep(hIdx - 1) else toast("Nothing to undo")
+    }
+
+    private fun redo() {
+        if (playing) { toast("Stop play mode first"); return }
+        record()
+        if (hIdx < history.size - 1) restoreStep(hIdx + 1) else toast("Nothing to redo")
+    }
+
     // ---------- UI helpers ----------
 
     private fun btn(text: String, structural: Boolean = false, onClick: () -> Unit) = Button(this).apply {
@@ -234,7 +277,7 @@ end
         minWidth = 0; minHeight = 0
         setPadding(dp(4), dp(8), dp(4), dp(8))
         layoutParams = LinearLayout.LayoutParams(0, -2, 1f).also { it.setMargins(dp(2), dp(2), dp(2), dp(2)) }
-        setOnClickListener { if (structural && playing) toast("Stop play mode first") else onClick() }
+        setOnClickListener { if (structural && playing) toast("Stop play mode first") else { record(); onClick(); record() } }
     }
 
     private fun row(vararg views: View) = LinearLayout(this).apply {
@@ -246,7 +289,8 @@ end
         super.onCreate(savedInstanceState)
         window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING)
         editor = EditorView(this, scene)
-        editor.onTouchStart = { clearFieldFocus() }
+        editor.onTouchStart = { clearFieldFocus(); record() }
+        editor.onTouchEnd = { record() }
 
         info = TextView(this).apply {
             setTextColor(Color.WHITE); textSize = 12f
@@ -263,8 +307,13 @@ end
         modeButtons[Mode.SCALE] = btn("Scale") { setMode(Mode.SCALE) }
         yButton = btn("Axis: Free") { editor.axis = (editor.axis + 1) % 4; refreshButtons() }
         lockButton = btn("Lock") {
-            if (!editor.locked && scene.selected == null) toast("Select an object first")
+            if (!editor.locked && scene.selected == null) toast(if (editor.selectEnabled) "Select an object first" else "Turn Select on first")
             else { editor.locked = !editor.locked; refreshButtons() }
+        }
+        selectButton = btn("Select: On") {
+            editor.selectEnabled = !editor.selectEnabled
+            if (!editor.selectEnabled) { editor.locked = false; scene.selected = null; editor.refresh() }
+            refreshButtons()
         }
         fileButton = btn("File") { showFileMenu() }
         playButton = btn("Play") { togglePlay() }
@@ -286,6 +335,14 @@ end
             ))
             addView(row(lockButton, modeButtons[Mode.MOVE]!!, modeButtons[Mode.ROTATE]!!, modeButtons[Mode.SCALE]!!, yButton))
             addView(row(
+                btn("Cut", true) { if (scene.cutSelected()) editor.refresh() else toast("Select an object first") },
+                btn("Copy", true) { if (scene.copySelected()) toast("Copied") else toast("Select an object first") },
+                btn("Paste", true) { if (scene.paste() != null) editor.refresh() else toast("Nothing to paste") },
+                btn("Delete", true) { if (scene.selected != null) { scene.removeSelected(); editor.refresh() } else toast("Select an object first") },
+                btn("Undo") { }.also { b -> b.setOnClickListener { undo() } },
+                btn("Redo") { }.also { b -> b.setOnClickListener { redo() } }
+            ))
+            addView(row(
                 btn("Hierarchy") { setPanel(Panel.HIER) },
                 btn("Inspector") { setPanel(Panel.INSPECT) },
                 btn("Material") { setPanel(Panel.MATERIAL) },
@@ -296,6 +353,7 @@ end
                 playButton,
                 viewButton,
                 cameraButton,
+                selectButton,
                 btn("Clear log") { logLines.clear(); showLog() }
             ))
         }
@@ -1525,6 +1583,8 @@ end
 
     private fun refreshButtons() {
         for ((m, b) in modeButtons) b.setBackgroundColor(if (editor.mode == m) 0xFF3D7BFF.toInt() else 0xFF444444.toInt())
+        selectButton.text = if (editor.selectEnabled) "Select: On" else "Select: Off"
+        selectButton.setBackgroundColor(if (editor.selectEnabled) 0xFF444444.toInt() else 0xFFE67E22.toInt())
         lockButton.text = if (editor.locked) "Locked" else "Lock"
         lockButton.setBackgroundColor(if (editor.locked) 0xFFE67E22.toInt() else 0xFF444444.toInt())
         yButton.text = "Axis: " + arrayOf("Free", "X", "Y", "Z")[editor.axis]
