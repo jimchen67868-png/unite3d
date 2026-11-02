@@ -60,6 +60,8 @@ class MainActivity : Activity(), SensorEventListener {
     private lateinit var yButton: Button
     private lateinit var lockButton: Button
     private lateinit var selectButton: Button
+    private lateinit var toolsButton: Button
+    private lateinit var transformRow: LinearLayout
     private lateinit var playButton: Button
     private lateinit var joystick: JoystickView
     private lateinit var coordLabel: TextView
@@ -315,6 +317,12 @@ end
             if (!editor.selectEnabled) { editor.locked = false; scene.selected = null; editor.refresh() }
             refreshButtons()
         }
+        toolsButton = btn("Tools") {
+            val show = transformRow.visibility != View.VISIBLE
+            transformRow.visibility = if (show) View.VISIBLE else View.GONE
+            if (!show) { editor.locked = false; refreshButtons() }
+            toolsButton.setBackgroundColor(if (show) 0xFF3D7BFF.toInt() else 0xFF444444.toInt())
+        }
         fileButton = btn("File") { showFileMenu() }
         playButton = btn("Play") { togglePlay() }
         playButton.setBackgroundColor(0xFF2E8B57.toInt())
@@ -333,7 +341,9 @@ end
                 btn("+Sphere", true) { scene.add(Shape.SPHERE); editor.refresh() },
                 importButton
             ))
-            addView(row(lockButton, modeButtons[Mode.MOVE]!!, modeButtons[Mode.ROTATE]!!, modeButtons[Mode.SCALE]!!, yButton))
+            transformRow = row(lockButton, modeButtons[Mode.MOVE]!!, modeButtons[Mode.ROTATE]!!, modeButtons[Mode.SCALE]!!, yButton)
+            transformRow.visibility = View.GONE   // select-only by default; Tools shows Lock / Move / Rotate / Scale / Axis
+            addView(transformRow)
             addView(row(
                 btn("Cut", true) { if (scene.cutSelected()) editor.refresh() else toast("Select an object first") },
                 btn("Copy", true) { if (scene.copySelected()) toast("Copied") else toast("Select an object first") },
@@ -354,6 +364,7 @@ end
                 viewButton,
                 cameraButton,
                 selectButton,
+                toolsButton,
                 btn("Clear log") { logLines.clear(); showLog() }
             ))
         }
@@ -1616,7 +1627,7 @@ end
         val o = scene.selected
         info.text = (if (playing) "PLAYING  |  " else "") + (o?.name ?: "Nothing selected") +
             (if (o != null && !o.shape.isScreen && o.shape != Shape.SETTINGS) String.format(Locale.US, " (%.2f, %.2f, %.2f)", o.x, o.y, o.z) else "") +
-            "  |  " + scene.objects.size + " objects" + (if (playing) "" else if (editor.locked) "  |  LOCKED: drag moves it" else "  |  drag: " + editor.mode.name.lowercase() + (if (editor.axis > 0) " " + arrayOf("", "X", "Y", "Z")[editor.axis] else ""))
+            "  |  " + scene.objects.size + " objects" + (if (playing) "" else if (editor.locked) "  |  LOCKED: drag " + editor.mode.name.lowercase() + (if (editor.axis > 0) " " + arrayOf("", "X", "Y", "Z")[editor.axis] else "") else if (editor.selectEnabled) "  |  tap to select" else "  |  select off")
         if (scene.selected?.shape != Shape.TERRAIN && editor.sculpt != 0) editor.sculpt = 0
         if (panel == Panel.HIER && (scene.objects.size != lastCount || scene.selected !== lastSel)) rebuildHierarchy()
         if (panel == Panel.INSPECT) refreshInspector()

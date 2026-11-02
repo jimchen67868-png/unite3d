@@ -190,7 +190,7 @@ end
         scene.objects.clear()
         scene.selected = null
         scene.addSettings()?.let {
-            it.y = 70f; it.z = 0.4f; it.ry = 0f
+            it.y = 70f; it.z = 0.4f; it.ry = 0.6f
             it.color = floatArrayOf(0.55f, 0.75f, 0.92f)
         }
         scene.addLight(Shape.SUN)?.let { it.sx = 1.1f; it.sy = 0.35f }
