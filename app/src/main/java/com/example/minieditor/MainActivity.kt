@@ -445,6 +445,7 @@ end
         pm.menu.add(0, 12, 11, "Load sample: robot arm (bones)")
         pm.menu.add(0, 13, 12, "Load sample: lake (water)")
         pm.menu.add(0, 14, 13, "Load sample: campfire (fire and smoke)")
+        pm.menu.add(0, 15, 14, "Load sample game: Battle Royale (shooter)")
         pm.menu.add(0, 7, 6, "Load sample game (Coin Rush)")
         pm.menu.add(0, 8, 7, "Editor lighting: " + (if (editor.renderer.editorBright) "Bright (tap for Scene)" else "Scene (tap for Bright)"))
         pm.setOnMenuItemClickListener { item ->
@@ -465,6 +466,7 @@ end
                     12 -> loadRigSample()
                     13 -> loadLakeSample()
                     14 -> loadCampfireSample()
+                    15 -> loadBattleSample()
                     10 -> {
                         val s = scene.objects.firstOrNull { it.shape == Shape.SETTINGS } ?: scene.addSettings()
                         scene.selected = s
@@ -476,6 +478,30 @@ end
             true
         }
         pm.show()
+    }
+
+    private fun loadBattleSample() {
+        val go = {
+            Samples.battleRoyale(scene)
+            val pl = scene.objects.firstOrNull { it.name == "Player" }
+            editor.renderer.dist = 7f
+            editor.renderer.pitch = 20f
+            if (pl != null) {
+                editor.renderer.target[0] = pl.x; editor.renderer.target[1] = pl.y; editor.renderer.target[2] = pl.z
+            }
+            editor.refresh()
+            toast("Battle Royale loaded - tap Play. Joystick moves, drag the screen to look, hold Fire to shoot.")
+        }
+        if (scene.objects.isEmpty()) {
+            go()
+        } else {
+            AlertDialog.Builder(this)
+                .setTitle("Load Battle Royale?")
+                .setMessage("This replaces the current scene. Use File > Export scene zip first if you want to keep it.")
+                .setPositiveButton("Load") { _, _ -> go() }
+                .setNegativeButton("Cancel", null)
+                .show()
+        }
     }
 
     private fun loadCampfireSample() {

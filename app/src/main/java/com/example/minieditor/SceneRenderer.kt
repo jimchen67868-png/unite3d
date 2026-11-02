@@ -1026,7 +1026,7 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         val terrains = scene.objects.filter { it.shape == Shape.TERRAIN && it.heights != null }
         val casters = scene.objects.filter { o ->
             terrains.none { t -> TerrainGen.heightAt(t, o.x, o.z) != null } &&
-                o.shadow && !o.shape.isScreen && !o.shape.isLight && o.shape != Shape.SETTINGS && o.shape != Shape.CAMERA && o.shape != Shape.TERRAIN && o.shape != Shape.BONE && o.shape != Shape.WATER && o.shape != Shape.GRASS && !o.shape.isEmitter &&
+                o.shadow && !o.shape.isScreen && !o.shape.isLight && o.shape != Shape.SETTINGS && o.shape != Shape.CAMERA && o.shape != Shape.TERRAIN && o.shape != Shape.BONE && o.shape != Shape.WATER && o.shape != Shape.GRASS && !o.shape.isEmitter && max(o.sx, max(o.sy, o.sz)) >= 0.35f &&
                 o.y + 0.5f * o.sy > gh + 0.04f
         }
         if (casters.isEmpty()) return
@@ -1131,7 +1131,7 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         val lights = scene.objects.filter { it.shape == Shape.LIGHT }.take(4).filter { it.sx >= 0.05f }
         val casters = scene.objects.filter { o ->
             o.shadow && !o.shape.isScreen && !o.shape.isLight && o.shape != Shape.SETTINGS && o.shape != Shape.CAMERA &&
-                o.shape != Shape.TERRAIN && o.shape != Shape.BONE && o.shape != Shape.WATER && o.shape != Shape.GRASS && !o.shape.isEmitter
+                o.shape != Shape.TERRAIN && o.shape != Shape.BONE && o.shape != Shape.WATER && o.shape != Shape.GRASS && !o.shape.isEmitter && max(o.sx, max(o.sy, o.sz)) >= 0.35f
         }
 
         val sb = StringBuilder()
@@ -1292,7 +1292,7 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         if (litCount == 0) return
         val casters = scene.objects.filter { o ->
             o.shadow && !o.shape.isScreen && !o.shape.isLight && o.shape != Shape.SETTINGS && o.shape != Shape.CAMERA &&
-                o.shape != Shape.TERRAIN && o.shape != Shape.BONE && o.shape != Shape.WATER && o.shape != Shape.GRASS && !o.shape.isEmitter
+                o.shape != Shape.TERRAIN && o.shape != Shape.BONE && o.shape != Shape.WATER && o.shape != Shape.GRASS && !o.shape.isEmitter && max(o.sx, max(o.sy, o.sz)) >= 0.35f
         }
         if (casters.isEmpty()) return
         val sb = StringBuilder()

@@ -2,6 +2,522 @@ package com.example.minieditor
 
 /** Built-in sample scenes with Lua scripts attached. */
 object Samples {
+
+    private val BR_PLAYER = """-- BATTLE ROYALE player.
+-- Joystick = move, drag the screen = look, hold FIRE = shoot, RELOAD, JUMP, VIEW = 1st / 3rd person.
+local NBOTS = 8
+
+function start()
+  self.hp = 100
+  self.dead = false
+  self.vy = 0
+  self.reserveAdd = 0
+  mag = 30
+  reserve = 90
+  reloadT = 0
+  fireT = 0
+  bullets = {}
+  walls = {}
+  local i = 1
+  while true do
+    local w = find("Wall " .. i)
+    if w == nil then break end
+    walls[i] = w
+    i = i + 1
+  end
+  bots = {}
+  for k = 1, NBOTS do bots[k] = find("Bot " .. k) end
+  zone = find("Zone")
+  home = { x = self.x, z = self.z }
+  lastHp = 100
+  statT = 8
+  over = false
+end
+
+function countAlive()
+  local n = 0
+  for k = 1, NBOTS do
+    local e = bots[k]
+    if e ~= nil and not e.dead and e.hp > 0 then n = n + 1 end
+  end
+  return n
+end
+
+function hitWall(b)
+  for i = 1, #walls do
+    local w = walls[i]
+    if math.abs(b.x - w.x) < w.sx / 2 and math.abs(b.y - w.y) < w.sy / 2 and math.abs(b.z - w.z) < w.sz / 2 then
+      return true
+    end
+  end
+  return false
+end
+
+-- where the crosshair points, with a gentle snap onto an enemy that is almost in line
+function aimDir()
+  local yaw = math.rad(input.yaw)
+  local p = 0
+  if camera.firstPerson then p = math.rad(camera.pitch) end
+  local fx = -math.cos(p) * math.sin(yaw)
+  local fy = -math.sin(p)
+  local fz = -math.cos(p) * math.cos(yaw)
+  local best = nil
+  local bd = 0.97
+  for k = 1, NBOTS do
+    local e = bots[k]
+    if e ~= nil and not e.dead and e.hp > 0 then
+      local dx, dy, dz = e.x - self.x, e.y - self.y, e.z - self.z
+      local d = math.sqrt(dx * dx + dy * dy + dz * dz)
+      if d > 0.5 and d < 60 then
+        local dot = (dx * fx + dy * fy + dz * fz) / d
+        if dot > bd then
+          bd = dot
+          best = e
+        end
+      end
+    end
+  end
+  if best ~= nil then
+    local dx, dy, dz = best.x - self.x, best.y - self.y, best.z - self.z
+    local d = math.sqrt(dx * dx + dy * dy + dz * dz)
+    return dx / d, dy / d, dz / d
+  end
+  return fx, fy, fz
+end
+
+function shoot()
+  mag = mag - 1
+  fireT = 0.12
+  local fx, fy, fz = aimDir()
+  local ok, b = pcall(spawn, "sphere", self.x + fx * 1.2, self.y + 0.5 + fy * 1.2, self.z + fz * 1.2)
+  if not ok then return end
+  b.sx = 0.2
+  b.sy = 0.2
+  b.sz = 0.2
+  b.r = 1
+  b.g = 0.85
+  b.b = 0.2
+  b.emit = 1
+  b.vx = fx * 80
+  b.vy = fy * 80
+  b.vz = fz * 80
+  b.life = 1.4
+  bullets[#bullets + 1] = b
+end
+
+function updateBullets(dt)
+  for i = #bullets, 1, -1 do
+    local b = bullets[i]
+    b.x = b.x + b.vx * dt
+    b.y = b.y + b.vy * dt
+    b.z = b.z + b.vz * dt
+    b.life = b.life - dt
+    local gone = b.life <= 0 or b.y < groundHeight(b.x, b.z) - 0.1 or hitWall(b)
+    if not gone then
+      for k = 1, NBOTS do
+        local e = bots[k]
+        if e ~= nil and not e.dead and e.hp > 0 then
+          local dx, dy, dz = e.x - b.x, e.y - b.y, e.z - b.z
+          if dx * dx + dz * dz < 0.9 and math.abs(dy) < 1.1 then
+            e.hp = e.hp - 25
+            gone = true
+            if e.hp <= 0 then log("Enemy down!  " .. countAlive() .. " left") end
+            break
+          end
+        end
+      end
+    end
+    if gone then
+      destroy(b)
+      table.remove(bullets, i)
+    end
+  end
+end
+
+function update(dt)
+  if input.joyTap or input.buttonsPressed["View"] then
+    camera.firstPerson = not camera.firstPerson
+  end
+  updateBullets(dt)
+  if self.dead then return end
+
+  -- move
+  local mx, mz = 0, 0
+  if input.joyActive then mx, mz = input.joyMoveX, input.joyMoveZ end
+  local len = math.sqrt(mx * mx + mz * mz)
+  if len > 1 then
+    mx = mx / len
+    mz = mz / len
+  end
+  local sp = 6
+  if self.inWater then sp = 3 end
+  self.x = self.x + mx * sp * dt
+  self.z = self.z + mz * sp * dt
+  self.ry = input.yaw
+
+  -- gravity and jumping
+  if self.grounded then
+    if self.vy < 0 then self.vy = 0 end
+    if input.jumpPressed then self.vy = 7 end
+  end
+  self.vy = self.vy - world.gravity * dt
+  self.y = self.y + self.vy * dt
+  if self.y < -8 then
+    self.x = home.x
+    self.z = home.z
+    self.y = groundHeight(home.x, home.z) + 2
+    self.vy = 0
+  end
+
+  -- pickups
+  if self.reserveAdd > 0 then
+    reserve = reserve + self.reserveAdd
+    self.reserveAdd = 0
+    log("Ammo picked up  (" .. reserve .. " spare)")
+  end
+
+  -- shooting
+  fireT = fireT - dt
+  if reloadT > 0 then
+    reloadT = reloadT - dt
+    if reloadT <= 0 then
+      local take = math.min(30 - mag, reserve)
+      mag = mag + take
+      reserve = reserve - take
+      log("Reloaded  " .. mag .. " / " .. reserve)
+    end
+  elseif input.buttonsPressed["Reload"] and mag < 30 and reserve > 0 then
+    reloadT = 1.4
+    log("Reloading...")
+  elseif input.buttons["Fire"] and fireT <= 0 then
+    if mag > 0 then
+      shoot()
+    elseif reserve > 0 then
+      reloadT = 1.4
+      log("Reloading...")
+    else
+      fireT = 1
+      log("Out of ammo! Find an ammo box.")
+    end
+  end
+
+  -- health
+  if self.hp < lastHp and math.floor(self.hp / 10) < math.floor(lastHp / 10) then
+    log("HP " .. math.max(0, math.floor(self.hp)))
+  end
+  lastHp = self.hp
+  if self.hp <= 0 then
+    self.dead = true
+    log("YOU DIED.  Enemies left: " .. countAlive())
+    return
+  end
+  if not over and countAlive() == 0 then
+    over = true
+    log("WINNER WINNER CHICKEN DINNER!")
+  end
+  statT = statT - dt
+  if statT <= 0 and not over then
+    statT = 8
+    log("HP " .. math.floor(self.hp) .. "   Ammo " .. mag .. "/" .. reserve .. "   Enemies " .. countAlive() .. "   Zone " .. math.floor(zone.radius or 0))
+  end
+end
+"""
+
+    private val BR_BOT = """-- Enemy soldier: wanders, hunts the player, strafes and shoots, runs from the storm.
+local DMG = 8
+
+function start()
+  self.hp = 60
+  self.dead = false
+  self.vy = 0
+  spd = 3.0 + math.random() * 1.2
+  tx = self.x
+  tz = self.z
+  wanderT = 0
+  fireT = 1 + math.random() * 2
+  strafe = 1
+  strafeT = 0
+  bullets = {}
+  walls = {}
+  local i = 1
+  while true do
+    local w = find("Wall " .. i)
+    if w == nil then break end
+    walls[i] = w
+    i = i + 1
+  end
+  player = find("Player")
+  zone = find("Zone")
+  home = { x = self.x, z = self.z }
+end
+
+function hitWall(b)
+  for i = 1, #walls do
+    local w = walls[i]
+    if math.abs(b.x - w.x) < w.sx / 2 and math.abs(b.y - w.y) < w.sy / 2 and math.abs(b.z - w.z) < w.sz / 2 then
+      return true
+    end
+  end
+  return false
+end
+
+function pickTarget()
+  local a = math.random() * 6.28
+  local d = 6 + math.random() * 12
+  tx = self.x + math.cos(a) * d
+  tz = self.z + math.sin(a) * d
+  local zx, zz = tx - zone.x, tz - zone.z
+  local zd = math.sqrt(zx * zx + zz * zz) + 0.001
+  local zr = (zone.radius or 30) - 3
+  if zd > zr then
+    tx = zone.x + zx / zd * zr
+    tz = zone.z + zz / zd * zr
+  end
+  wanderT = 4 + math.random() * 4
+end
+
+function botShoot(dx, dz, d)
+  local ex = (math.random() - 0.5) * d * 0.12
+  local ez = (math.random() - 0.5) * d * 0.12
+  local ddx, ddy, ddz = dx + ex, (player.y - self.y), dz + ez
+  local l = math.sqrt(ddx * ddx + ddy * ddy + ddz * ddz) + 0.001
+  local ok, b = pcall(spawn, "sphere", self.x + ddx / l * 1.2, self.y + 0.4 + ddy / l * 1.2, self.z + ddz / l * 1.2)
+  if not ok then return end
+  b.sx = 0.2
+  b.sy = 0.2
+  b.sz = 0.2
+  b.r = 1
+  b.g = 0.35
+  b.b = 0.15
+  b.emit = 1
+  b.vx = ddx / l * 45
+  b.vy = ddy / l * 45
+  b.vz = ddz / l * 45
+  b.life = 1.6
+  bullets[#bullets + 1] = b
+end
+
+function updateBullets(dt)
+  for i = #bullets, 1, -1 do
+    local b = bullets[i]
+    b.x = b.x + b.vx * dt
+    b.y = b.y + b.vy * dt
+    b.z = b.z + b.vz * dt
+    b.life = b.life - dt
+    local gone = b.life <= 0 or b.y < groundHeight(b.x, b.z) - 0.1 or hitWall(b)
+    if not gone and not player.dead then
+      local dx, dy, dz = player.x - b.x, player.y - b.y, player.z - b.z
+      if dx * dx + dz * dz < 0.8 and math.abs(dy) < 1.1 then
+        player.hp = player.hp - DMG
+        gone = true
+      end
+    end
+    if gone then
+      destroy(b)
+      table.remove(bullets, i)
+    end
+  end
+end
+
+function update(dt)
+  if self.hp <= 0 then
+    for i = 1, #bullets do destroy(bullets[i]) end
+    bullets = {}
+    self.dead = true
+    destroy(self)
+    return
+  end
+
+  local dx, dz = player.x - self.x, player.z - self.z
+  local d = math.sqrt(dx * dx + dz * dz) + 0.001
+  local mx, mz = 0, 0
+  local zx, zz = self.x - zone.x, self.z - zone.z
+  local zd = math.sqrt(zx * zx + zz * zz) + 0.001
+  local zr = zone.radius or 40
+
+  if zd > zr then
+    -- caught in the storm: run for the middle
+    self.hp = self.hp - 2 * dt
+    mx, mz = -zx / zd, -zz / zd
+  elseif (not player.dead) and d < 30 then
+    -- fight: keep a medium distance, strafe, shoot
+    self.ry = math.deg(math.atan2(-dx, -dz))
+    if d > 16 then
+      mx, mz = dx / d, dz / d
+    elseif d < 8 then
+      mx, mz = -dx / d, -dz / d
+    else
+      strafeT = strafeT - dt
+      if strafeT <= 0 then
+        strafe = -strafe
+        strafeT = 1 + math.random() * 2
+      end
+      mx, mz = -dz / d * strafe, dx / d * strafe
+    end
+    fireT = fireT - dt
+    if fireT <= 0 then
+      fireT = 0.7 + math.random() * 0.6
+      botShoot(dx, dz, d)
+    end
+  else
+    -- wander
+    wanderT = wanderT - dt
+    local wx, wz = tx - self.x, tz - self.z
+    local wd = math.sqrt(wx * wx + wz * wz) + 0.001
+    if wanderT <= 0 or wd < 1.5 then pickTarget() end
+    mx, mz = wx / wd * 0.6, wz / wd * 0.6
+  end
+
+  local sp = spd
+  if self.inWater then sp = sp * 0.5 end
+  self.x = self.x + mx * sp * dt
+  self.z = self.z + mz * sp * dt
+
+  if self.grounded and self.vy < 0 then self.vy = 0 end
+  self.vy = self.vy - world.gravity * dt
+  self.y = self.y + self.vy * dt
+  if self.y < -8 then
+    self.x = home.x
+    self.z = home.z
+    self.y = groundHeight(home.x, home.z) + 2
+    self.vy = 0
+  end
+  updateBullets(dt)
+end
+"""
+
+    private val BR_ZONE = """-- The storm: a ring of blue posts that closes in. Standing outside it hurts.
+local NPOSTS = 40
+local stages = { { 35, 25, 22 }, { 30, 20, 12 }, { 25, 20, 5 } }
+
+function start()
+  r = 38
+  self.radius = r
+  stage = 1
+  phase = "wait"
+  pt = stages[1][1]
+  fromR = r
+  hurtT = 0
+  player = find("Player")
+  posts = {}
+  for i = 1, NPOSTS do
+    local ok, p = pcall(spawn, "cube", self.x, 8, self.z)
+    if ok then
+      p.sx = 0.7
+      p.sy = 16
+      p.sz = 0.7
+      p.r = 0.25
+      p.g = 0.55
+      p.b = 1
+      p.emit = 0.8
+      p.opacity = 0.4
+      posts[#posts + 1] = p
+    end
+  end
+  log("BATTLE ROYALE!  8 enemies on the island. Stay inside the blue ring, find medkits and ammo.")
+  log("Joystick = move, drag screen = look, hold FIRE, RELOAD, JUMP, VIEW = 1st/3rd person.")
+end
+
+function update(dt)
+  if stage <= #stages then
+    local st = stages[stage]
+    pt = pt - dt
+    if phase == "wait" then
+      if pt <= 0 then
+        phase = "shrink"
+        pt = st[2]
+        fromR = r
+        log("The storm is closing in!")
+      end
+    else
+      local f = 1 - math.max(pt, 0) / st[2]
+      r = fromR + (st[3] - fromR) * f
+      if pt <= 0 then
+        r = st[3]
+        stage = stage + 1
+        phase = "wait"
+        if stages[stage] ~= nil then
+          pt = stages[stage][1]
+          log("Next storm in " .. pt .. " seconds")
+        end
+      end
+    end
+  end
+  self.radius = r
+
+  local n = #posts
+  for i = 1, n do
+    local a = (i - 1) / n * 6.2832
+    local p = posts[i]
+    p.x = self.x + math.cos(a) * r
+    p.z = self.z + math.sin(a) * r
+  end
+
+  if not player.dead then
+    local dx, dz = player.x - self.x, player.z - self.z
+    if dx * dx + dz * dz > r * r then
+      player.hp = player.hp - 3 * dt
+      hurtT = hurtT - dt
+      if hurtT <= 0 then
+        hurtT = 3
+        log("You are in the storm! Run to the middle!")
+      end
+    end
+  end
+end
+"""
+
+    private val BR_MEDKIT = """-- Medkit: walk over it to heal 40 HP. It comes back after 25 seconds.
+function start()
+  phase = math.random() * 6
+  home = self.y
+  taken = 0
+end
+
+function update(dt)
+  if taken > 0 then
+    taken = taken - dt
+    if taken <= 0 then self.y = home end
+    return
+  end
+  self.ry = self.ry + 120 * dt
+  self.y = home + 0.15 + math.sin(time * 3 + phase) * 0.1
+end
+
+function oncollide(other)
+  if taken > 0 or other.name ~= "Player" or other.dead then return end
+  if other.hp >= 100 then return end
+  other.hp = math.min(100, other.hp + 40)
+  taken = 25
+  self.y = -50
+  log("Medkit +40 HP  (" .. math.floor(other.hp) .. ")")
+end
+"""
+
+    private val BR_AMMO = """-- Ammo box: walk over it for 30 more bullets. It comes back after 25 seconds.
+function start()
+  phase = math.random() * 6
+  home = self.y
+  taken = 0
+end
+
+function update(dt)
+  if taken > 0 then
+    taken = taken - dt
+    if taken <= 0 then self.y = home end
+    return
+  end
+  self.ry = self.ry + 90 * dt
+  self.y = home + 0.15 + math.sin(time * 3 + phase) * 0.1
+end
+
+function oncollide(other)
+  if taken > 0 or other.name ~= "Player" or other.dead then return end
+  other.reserveAdd = (other.reserveAdd or 0) + 30
+  taken = 25
+  self.y = -50
+end
+"""
     private val FLOOR = """-- Game manager: 30 second timer
 function start()
   last = -1
@@ -300,6 +816,177 @@ end
         scene.addJoystick()
         scene.addButton()
         scene.addButton()?.let { it.name = "View"; it.x = 70f; it.y = 56f; it.sx = 0.8f }
+        scene.selected = null
+    }
+
+    /** A PUBG-style island: loot houses, 8 enemy soldiers, a closing storm. Joystick, FIRE, RELOAD, JUMP, VIEW. */
+    fun battleRoyale(scene: Scene) {
+        scene.objects.clear()
+        scene.selected = null
+        scene.addSettings()?.let {
+            it.x = 12f; it.y = 95f; it.z = 0.45f; it.ry = 0.55f; it.wind = 0.3f; it.windDir = 60f
+            it.color = floatArrayOf(0.55f, 0.75f, 0.92f)
+        }
+        scene.addLight(Shape.SUN)?.let { it.sx = 1.1f; it.sy = 0.4f }
+        val land = scene.addTerrain()
+        land.sx = 70f; land.sy = 7f; land.sz = 70f
+        land.heights = TerrainGen.generate(3, 0.6f)
+        land.hVersion++
+        val sea = scene.addWater()
+        sea.sx = 90f; sea.sz = 90f; sea.y = 2.1f; sea.sy = 0.2f
+        val seaY = sea.y
+        val grass = scene.addGrass()
+        grass.x = 0f; grass.z = 0f; grass.y = 0f; grass.sx = 50f; grass.sz = 50f; grass.rx = 0.6f
+
+        val rnd = kotlin.random.Random(21)
+        fun ground(x: Float, z: Float): Float? = TerrainGen.heightAt(land, x, z)
+
+        // ---- storm centre: the highest ground near the middle ----
+        var zcx = 0f
+        var zcz = 0f
+        var zbest = -1f
+        for (k in 0 until 120) {
+            val x = (rnd.nextFloat() - 0.5f) * 28f
+            val z = (rnd.nextFloat() - 0.5f) * 28f
+            val h = ground(x, z) ?: continue
+            if (h > zbest) { zbest = h; zcx = x; zcz = z }
+        }
+
+        // ---- houses ----
+        val houses = ArrayList<FloatArray>()   // centre x, centre z, floor top y
+        var tries = 0
+        while (houses.size < 5 && tries < 800) {
+            tries++
+            val hx = (rnd.nextFloat() - 0.5f) * 52f
+            val hz = (rnd.nextFloat() - 0.5f) * 52f
+            var lo = 1e9f
+            var hi = -1e9f
+            var ok = true
+            for (dx in intArrayOf(-4, 0, 4)) for (dz in intArrayOf(-4, 0, 4)) {
+                val h = ground(hx + dx, hz + dz)
+                if (h == null) ok = false else { lo = minOf(lo, h); hi = maxOf(hi, h) }
+            }
+            val tol = if (tries < 400) 1.0f else 2.2f
+            if (!ok || lo < seaY + 0.6f || hi - lo > tol) continue
+            if (houses.any { Math.hypot((it[0] - hx).toDouble(), (it[1] - hz).toDouble()) < 16.0 }) continue
+            houses.add(floatArrayOf(hx, hz, hi + 0.2f, lo))
+        }
+        var wallN = 0
+        fun wall(x: Float, y: Float, z: Float, sx: Float, sy: Float, sz: Float) {
+            wallN++
+            val o = mk(scene, Shape.CUBE, "Wall " + wallN, x, y, z, sx, sy, sz, floatArrayOf(0.78f, 0.70f, 0.55f))
+            o.collider = 1
+        }
+        var houseN = 0
+        for (h in houses) {
+            houseN++
+            val cx = h[0]
+            val cz = h[1]
+            val top = h[2]
+            val lo = h[3]
+            val slabH = top - lo + 0.5f
+            val slab = mk(scene, Shape.CUBE, "Floor " + houseN, cx, lo - 0.3f + slabH / 2f, cz, 8f, slabH, 8f, floatArrayOf(0.5f, 0.5f, 0.5f))
+            slab.collider = 1
+            val wy = top + 1.5f
+            wall(cx, wy, cz - 3.5f, 7.3f, 3f, 0.3f)
+            wall(cx + 3.5f, wy, cz, 0.3f, 3f, 7f)
+            wall(cx - 3.5f, wy, cz, 0.3f, 3f, 7f)
+            wall(cx - 2.25f, wy, cz + 3.5f, 2.5f, 3f, 0.3f)
+            wall(cx + 2.25f, wy, cz + 3.5f, 2.5f, 3f, 0.3f)
+            val roof = mk(scene, Shape.CUBE, "Roof " + houseN, cx, top + 3.15f, cz, 7.8f, 0.3f, 7.8f, floatArrayOf(0.55f, 0.2f, 0.18f))
+            roof.collider = 1
+        }
+
+        // ---- trees (away from houses and water) ----
+        var trees = 0
+        tries = 0
+        while (trees < 40 && tries < 600) {
+            tries++
+            val tx = (rnd.nextFloat() - 0.5f) * 64f
+            val tz = (rnd.nextFloat() - 0.5f) * 64f
+            val th = ground(tx, tz) ?: continue
+            if (th < seaY + 0.4f || th > land.sy * 0.8f) continue
+            if (houses.any { Math.hypot((it[0] - tx).toDouble(), (it[1] - tz).toDouble()) < 7.0 }) continue
+            val tr = scene.addTree(rnd.nextInt(2))
+            val k = 0.8f + rnd.nextFloat() * 0.6f
+            tr.x = tx; tr.z = tz; tr.y = th - 0.05f
+            tr.sx = 2f * k; tr.sy = 3.4f * k; tr.sz = 2f * k
+            tr.ry = rnd.nextFloat() * 360f
+            trees++
+        }
+
+        // ---- loot: one medkit and one ammo box in every house, plus some outside ----
+        var medN = 0
+        var ammoN = 0
+        fun medkit(x: Float, y: Float, z: Float) {
+            medN++
+            val o = mk(scene, Shape.CUBE, "Medkit " + medN, x, y, z, 0.5f, 0.5f, 0.5f, floatArrayOf(0.9f, 0.15f, 0.15f), BR_MEDKIT)
+            o.collider = 2; o.emit = 0.35f; o.shadow = false
+        }
+        fun ammo(x: Float, y: Float, z: Float) {
+            ammoN++
+            val o = mk(scene, Shape.CUBE, "Ammo " + ammoN, x, y, z, 0.5f, 0.35f, 0.6f, floatArrayOf(0.95f, 0.8f, 0.15f), BR_AMMO)
+            o.collider = 2; o.emit = 0.35f; o.shadow = false
+        }
+        for (h in houses) {
+            medkit(h[0] - 1.8f, h[2] + 0.5f, h[1] - 1.6f)
+            ammo(h[0] + 1.8f, h[2] + 0.5f, h[1] - 1.6f)
+        }
+        var extra = 0
+        tries = 0
+        while (extra < 6 && tries < 300) {
+            tries++
+            val x = (rnd.nextFloat() - 0.5f) * 56f
+            val z = (rnd.nextFloat() - 0.5f) * 56f
+            val h = ground(x, z) ?: continue
+            if (h < seaY + 0.5f) continue
+            if (extra % 2 == 0) medkit(x, h + 0.5f, z) else ammo(x, h + 0.5f, z)
+            extra++
+        }
+
+        // ---- player ----
+        var px = zcx + 18f
+        var pz = zcz
+        var pg = 0f
+        tries = 0
+        while (tries < 400) {
+            tries++
+            val a = rnd.nextFloat() * 6.2832f
+            val d = 20f + rnd.nextFloat() * 10f
+            val x = zcx + Math.cos(a.toDouble()).toFloat() * d
+            val z = zcz + Math.sin(a.toDouble()).toFloat() * d
+            val h = ground(x, z) ?: continue
+            if (h < seaY + 0.8f) continue
+            px = x; pz = z; pg = h
+            break
+        }
+        val player = mk(scene, Shape.SPHERE, "Player", px, pg + 1.2f, pz, 0.8f, 1.7f, 0.8f, floatArrayOf(0.25f, 0.5f, 0.9f), BR_PLAYER)
+        player.collider = 1; player.shadow = false
+
+        // ---- enemy soldiers ----
+        var bots = 0
+        tries = 0
+        while (bots < 8 && tries < 800) {
+            tries++
+            val x = (rnd.nextFloat() - 0.5f) * 56f
+            val z = (rnd.nextFloat() - 0.5f) * 56f
+            val h = ground(x, z) ?: continue
+            if (h < seaY + 0.6f) continue
+            if (Math.hypot((x - px).toDouble(), (z - pz).toDouble()) < 16.0) continue
+            bots++
+            val b = mk(scene, Shape.SPHERE, "Bot " + bots, x, h + 1.2f, z, 0.9f, 1.8f, 0.9f, floatArrayOf(0.85f, 0.2f, 0.2f), BR_BOT)
+            b.collider = 1; b.shadow = false
+        }
+
+        // ---- storm controller (hidden under the ground at the storm centre) ----
+        val zone = mk(scene, Shape.SPHERE, "Zone", zcx, -3f, zcz, 0.3f, 0.3f, 0.3f, floatArrayOf(0.3f, 0.5f, 1f), BR_ZONE)
+        zone.shadow = false
+
+        scene.addJoystick()
+        scene.addButton()?.let { it.name = "Jump"; it.x = 90f; it.y = 48f; it.sx = 0.9f }
+        scene.addButton()?.let { it.name = "Fire"; it.x = 78f; it.y = 66f; it.sx = 1.3f }
+        scene.addButton()?.let { it.name = "Reload"; it.x = 62f; it.y = 70f; it.sx = 0.9f }
+        scene.addButton()?.let { it.name = "View"; it.x = 62f; it.y = 52f; it.sx = 0.8f }
         scene.selected = null
     }
 }
