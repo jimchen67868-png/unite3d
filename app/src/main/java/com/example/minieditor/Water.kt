@@ -12,6 +12,9 @@ import kotlin.math.sin
 object Water {
     fun time(): Float = (SystemClock.uptimeMillis() % 3600000L) / 1000f
 
+    /** Wind makes bigger waves: the renderer sets this from the Settings wind each frame (1 = calm). */
+    @Volatile var boost = 1f
+
     fun height(o: SceneObject, x: Float, z: Float): Float {
         val dir = Math.toRadians(o.ry.toDouble()).toFloat()
         val c = cos(dir)
@@ -22,7 +25,7 @@ object Water {
         val h = 0.5f * sin(qx * 0.9f + t * 1.3f) +
             0.3f * sin(qz * 1.4f + t * 1.0f) +
             0.2f * sin((qx * 0.6f + qz * 0.8f) * 2.1f + t * 1.9f)
-        return o.y + h * o.sy
+        return o.y + h * o.sy * boost
     }
 
     /** Height of the highest water surface over (x, z), or null if there is no water there. */

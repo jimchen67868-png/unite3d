@@ -65,6 +65,16 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
     private lateinit var circle: Mesh
     private lateinit var quad: Mesh
     private lateinit var waterMesh: Mesh
+    private var uFoam = 0
+    private var uMirror = 0; private var uMirrorTex = 0; private var uScreen = 0; private var uClipOn = 0; private var uClipPl = 0
+    private val MAXM = 2
+    private val mirFbo = IntArray(2)
+    private val mirTex = IntArray(2)
+    private val mirDepth = IntArray(2)
+    private var mirW = 0
+    private var mirH = 0
+    private var mirrorOk = false
+    private val mirrorIndex = HashMap<SceneObject, Int>()
     private var uWater = 0; private var uTime = 0; private var uWave = 0; private var uGrass = 0
     private var uParticle = 0; private var uCamRight = 0; private var uCamUp = 0
     private var uPSize = 0; private var uPHeight = 0; private var uPWind = 0
@@ -118,6 +128,7 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         varying vec3 vL;
         varying vec3 vLN;
         varying float vIsWater;
+        varying float vWaveH;
         varying float vIsGrass;
         varying float vTip;
         varying float vIsPart;
@@ -141,10 +152,12 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
             vec3 pos = aPos;
             vec3 nrm = aNorm;
             vIsWater = uWater;
+            vWaveH = 0.0;
             if (uWater > 0.5) {
                 vec2 wxz = (uModel * vec4(aPos, 1.0)).xz;
                 vec3 w = waveSum(wxz);
                 pos.y += w.x;
+                vWaveH = w.x / max(uWave.x, 0.001);
                 nrm = normalize(vec3(-w.y, 1.0, -w.z));
                 vN = nrm;
             } else {
@@ -232,6 +245,13 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         varying vec3 vL;
         varying vec3 vLN;
         varying float vIsWater;
+        varying float vWaveH;
+        uniform float uFoam;
+        uniform float uMirror;
+        uniform sampler2D uMirrorTex;
+        uniform vec2 uScreen;
+        uniform float uClipOn;
+        uniform vec4 uClipPl;
         varying float vIsGrass;
         varying float vTip;
         varying float vIsPart;
@@ -292,6 +312,7 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
             return sky + uSunCol * spot * 3.0;
         }
         void main() {
+            if (uClipOn > 0.5 && dot(vW, uClipPl.xyz) + uClipPl.w < 0.0) discard;
             if (vIsPart > 0.5) {
                 float d = length(vL.xy) * 2.0;
                 float a = clamp(1.0 - d, 0.0, 1.0);
@@ -402,6 +423,10 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
                 float wf = 0.02 + 0.98 * pow(1.0 - nv, 4.0);
                 c = mix(c, env, clamp(wf * 0.9 + 0.06, 0.0, 1.0));
                 alpha = clamp(alpha + wf * 0.6, 0.0, 1.0);
+                // white foam on the wave crests, more of it the bigger the waves
+                float foam = smoothstep(0.5, 0.95, vWaveH) * uFoam;
+                c = mix(c, vec3(0.95, 0.97, 1.0) * (0.55 + 0.45 * max(light.r, 0.3)), foam * 0.85);
+                alpha = clamp(alpha + foam * 0.7, 0.0, 1.0);
             } else {
                 float f0 = 0.03 + 0.55 * uSpec * uGloss;
                 float fresnel = f0 + (1.0 - f0) * pow(1.0 - nv, 5.0);
@@ -415,6 +440,12 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
                 } else {
                     c = mix(c, envT, clamp(fresnel * uSpec * 1.3, 0.0, 1.0));
                 }
+            }
+            if (uMirror > 0.5) {
+                // mirror: the picture of the scene drawn from the mirrored camera, looked up at this pixel
+                vec3 mr = texture2D(uMirrorTex, gl_FragCoord.xy / uScreen).rgb;
+                c = mix(base * 0.35, mr, 0.93) + spec * uSpec * 0.3;
+                alpha = 1.0;
             }
             if (uFogEnd > 0.0) {
                 float fd = length(vW - uEye);
@@ -438,6 +469,8 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         photoTex.clear()   // textures are lost with the GL context
         shTex = 0
         shKey = ""
+        for (i in 0 until 2) { mirFbo[i] = 0; mirTex[i] = 0; mirDepth[i] = 0 }
+        mirW = 0
         prog = GLES20.glCreateProgram()
         GLES20.glAttachShader(prog, compile(GLES20.GL_VERTEX_SHADER, vertexSrc))
         GLES20.glAttachShader(prog, compile(GLES20.GL_FRAGMENT_SHADER, fragmentSrc))
@@ -470,6 +503,12 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         uWater = GLES20.glGetUniformLocation(prog, "uWater")
         uTime = GLES20.glGetUniformLocation(prog, "uTime")
         uWave = GLES20.glGetUniformLocation(prog, "uWave")
+        uFoam = GLES20.glGetUniformLocation(prog, "uFoam")
+        uMirror = GLES20.glGetUniformLocation(prog, "uMirror")
+        uMirrorTex = GLES20.glGetUniformLocation(prog, "uMirrorTex")
+        uScreen = GLES20.glGetUniformLocation(prog, "uScreen")
+        uClipOn = GLES20.glGetUniformLocation(prog, "uClipOn")
+        uClipPl = GLES20.glGetUniformLocation(prog, "uClipPl")
         uGrass = GLES20.glGetUniformLocation(prog, "uGrass")
         uParticle = GLES20.glGetUniformLocation(prog, "uParticle")
         uCamRight = GLES20.glGetUniformLocation(prog, "uCamRight")
@@ -638,6 +677,7 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         windZ = sin(wr).toFloat()
         windStr = (st?.wind ?: 0f).coerceIn(0f, 1f)
         GLES20.glUniform3f(uWind, windX, windZ, windStr)
+        Water.boost = 1f + windStr * 1.2f
         GLES20.glUniform1f(uTree, 0f)
     }
 
@@ -889,7 +929,9 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         GLES20.glUniform1f(uUseTex, 0f)
         GLES20.glUniform1f(uWater, 1f)
         GLES20.glUniform1f(uTime, Water.time())
-        GLES20.glUniform3f(uWave, o.sy, o.rx, Math.toRadians(o.ry.toDouble()).toFloat())
+        val waveH = o.sy * Water.boost
+        GLES20.glUniform3f(uWave, waveH, o.rx, Math.toRadians(o.ry.toDouble()).toFloat())
+        GLES20.glUniform1f(uFoam, ((waveH - 0.06f) * 2.2f).coerceIn(0f, 1f))
         val c = if (o === sel)
             floatArrayOf(minOf(1f, o.color[0] + 0.25f), minOf(1f, o.color[1] + 0.25f), minOf(1f, o.color[2] + 0.25f))
         else o.color
@@ -900,6 +942,7 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
     private fun drawObject(o: SceneObject, vpc: FloatArray, sel: SceneObject?, alpha: Float) {
         setLightVis(o)
         if (o.shape == Shape.WATER) { drawWater(o, vpc, sel, alpha); return }
+        if (o.shape == Shape.MIRROR) { drawMirror(o, vpc, sel); return }
         if (o.shape == Shape.TREE) { drawTree(o, vpc, sel); return }
         if (o.shape == Shape.GRASS) { drawGrass(o, vpc, sel); return }
         Matrix.setIdentityM(model, 0)
@@ -1542,7 +1585,6 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         val settings = scene.objects.firstOrNull { it.shape == Shape.SETTINGS }
         if (settings != null) GLES20.glClearColor(settings.color[0], settings.color[1], settings.color[2], 1f)
         else GLES20.glClearColor(0.15f, 0.16f, 0.19f, 1f)
-        GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT or GLES20.GL_DEPTH_BUFFER_BIT)
         GLES20.glUseProgram(prog)
         System.arraycopy(eyeC, 0, curEye, 0, 3)
         setLights(eyeC)
@@ -1556,11 +1598,126 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         GLES20.glUniform1i(uShadow, 2)
         bakeTerrainShadows()
 
+        // Mirrors: draw the scene again from the mirrored camera into a texture (up to 2 mirrors)
+        mirrorIndex.clear()
+        mirrorOk = false
+        val mirrors = scene.objects.filter { it.shape == Shape.MIRROR }.take(MAXM)
+        if (mirrors.isNotEmpty() && ensureMirrorTargets()) {
+            mirrorOk = true
+            for ((i, mo) in mirrors.withIndex()) {
+                mirrorIndex[mo] = i
+                renderMirrorPass(i, mo, vpc, eyeC, camAxes, settings)
+            }
+        }
+        renderScene(vpc, eyeC, camAxes, settings, false)
+    }
+
+    private fun ensureMirrorTargets(): Boolean {
+        val fw = max(w / 2, 128)
+        val fh = max(h / 2, 128)
+        if (mirW == fw && mirH == fh && mirFbo[0] != 0) return true
+        for (i in 0 until MAXM) {
+            if (mirTex[i] != 0) GLES20.glDeleteTextures(1, intArrayOf(mirTex[i]), 0)
+            if (mirFbo[i] != 0) GLES20.glDeleteFramebuffers(1, intArrayOf(mirFbo[i]), 0)
+            if (mirDepth[i] != 0) GLES20.glDeleteRenderbuffers(1, intArrayOf(mirDepth[i]), 0)
+        }
+        val tex = IntArray(MAXM)
+        val fbo = IntArray(MAXM)
+        val rb = IntArray(MAXM)
+        GLES20.glGenTextures(MAXM, tex, 0)
+        GLES20.glGenFramebuffers(MAXM, fbo, 0)
+        GLES20.glGenRenderbuffers(MAXM, rb, 0)
+        var ok = true
+        for (i in 0 until MAXM) {
+            GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, tex[i])
+            GLES20.glTexImage2D(GLES20.GL_TEXTURE_2D, 0, GLES20.GL_RGBA, fw, fh, 0, GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, null)
+            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR)
+            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_LINEAR)
+            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE)
+            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE)
+            GLES20.glBindRenderbuffer(GLES20.GL_RENDERBUFFER, rb[i])
+            GLES20.glRenderbufferStorage(GLES20.GL_RENDERBUFFER, GLES20.GL_DEPTH_COMPONENT16, fw, fh)
+            GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, fbo[i])
+            GLES20.glFramebufferTexture2D(GLES20.GL_FRAMEBUFFER, GLES20.GL_COLOR_ATTACHMENT0, GLES20.GL_TEXTURE_2D, tex[i], 0)
+            GLES20.glFramebufferRenderbuffer(GLES20.GL_FRAMEBUFFER, GLES20.GL_DEPTH_ATTACHMENT, GLES20.GL_RENDERBUFFER, rb[i])
+            if (GLES20.glCheckFramebufferStatus(GLES20.GL_FRAMEBUFFER) != GLES20.GL_FRAMEBUFFER_COMPLETE) ok = false
+        }
+        GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0)
+        GLES20.glBindRenderbuffer(GLES20.GL_RENDERBUFFER, 0)
+        for (i in 0 until MAXM) { mirTex[i] = tex[i]; mirFbo[i] = fbo[i]; mirDepth[i] = rb[i] }
+        mirW = fw
+        mirH = fh
+        return ok
+    }
+
+    /** Draws the scene as seen in the mirror: the world is flipped across the mirror plane and anything behind the mirror is cut away. */
+    private fun renderMirrorPass(idx: Int, m: SceneObject, vpc: FloatArray, eyeC: FloatArray, camAxes: FloatArray, settings: SceneObject?) {
+        val rm = FloatArray(16)
+        Matrix.setIdentityM(rm, 0)
+        Matrix.rotateM(rm, 0, m.ry, 0f, 1f, 0f)
+        Matrix.rotateM(rm, 0, m.rx, 1f, 0f, 0f)
+        Matrix.rotateM(rm, 0, m.rz, 0f, 0f, 1f)
+        val nIn = floatArrayOf(0f, 0f, 1f, 0f)
+        val nOut = FloatArray(4)
+        Matrix.multiplyMV(nOut, 0, rm, 0, nIn, 0)
+        var nx = nOut[0]
+        var ny = nOut[1]
+        var nz = nOut[2]
+        val nl = sqrt(nx * nx + ny * ny + nz * nz).coerceAtLeast(0.0001f)
+        nx /= nl; ny /= nl; nz /= nl
+        // the mirror shows whichever side the camera is on
+        if ((eyeC[0] - m.x) * nx + (eyeC[1] - m.y) * ny + (eyeC[2] - m.z) * nz < 0f) { nx = -nx; ny = -ny; nz = -nz }
+        val d = -(nx * m.x + ny * m.y + nz * m.z)
+        val r = FloatArray(16)
+        val nn = floatArrayOf(nx, ny, nz)
+        for (j in 0..2) for (i in 0..2) r[j * 4 + i] = (if (i == j) 1f else 0f) - 2f * nn[i] * nn[j]
+        for (i in 0..2) r[12 + i] = -2f * d * nn[i]
+        r[15] = 1f
+        val vpr = FloatArray(16)
+        Matrix.multiplyMM(vpr, 0, vpc, 0, r, 0)
+        GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, mirFbo[idx])
+        GLES20.glViewport(0, 0, mirW, mirH)
+        GLES20.glUniform1f(uClipOn, 1f)
+        GLES20.glUniform4f(uClipPl, nx, ny, nz, d)
+        renderScene(vpr, eyeC, camAxes, settings, true)
+        GLES20.glUniform1f(uClipOn, 0f)
+        GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0)
+        GLES20.glViewport(0, 0, w, h)
+    }
+
+    private fun drawMirror(o: SceneObject, vpc: FloatArray, sel: SceneObject?) {
+        val idx = mirrorIndex[o] ?: -1
+        Matrix.setIdentityM(model, 0)
+        Matrix.translateM(model, 0, o.x, o.y, o.z)
+        Matrix.rotateM(model, 0, o.ry, 0f, 1f, 0f)
+        Matrix.rotateM(model, 0, o.rx, 1f, 0f, 0f)
+        Matrix.rotateM(model, 0, o.rz, 0f, 0f, 1f)
+        Matrix.scaleM(model, 0, o.sx * 0.5f, o.sy * 0.5f, 1f)
+        setPlain(0.5f, 0.8f)
+        GLES20.glUniform1f(uGlass, 0f)
+        if (idx >= 0 && mirrorOk) {
+            GLES20.glActiveTexture(GLES20.GL_TEXTURE3)
+            GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, mirTex[idx])
+            GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
+            GLES20.glUniform1i(uMirrorTex, 3)
+            GLES20.glUniform2f(uScreen, w.toFloat(), h.toFloat())
+            GLES20.glUniform1f(uMirror, 1f)
+        }
+        val c = if (o === sel) floatArrayOf(minOf(1f, o.color[0] + 0.25f), minOf(1f, o.color[1] + 0.25f), minOf(1f, o.color[2] + 0.25f)) else o.color
+        drawMesh(quad, vpc, model, c, true)
+        GLES20.glUniform1f(uMirror, 0f)
+    }
+
+    /** Sky, grid, all objects, shadows, markers and gizmo. [mirror] = drawing the reflection into the mirror texture. */
+    private fun renderScene(vpc: FloatArray, eyeC: FloatArray, camAxes: FloatArray, settings: SceneObject?, mirror: Boolean) {
+        GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT or GLES20.GL_DEPTH_BUFFER_BIT)
+
         // Sky photo (Settings): panorama wraps all the way round the camera; backdrop is a fixed picture behind the scene
         val skyKey = settings?.photo ?: ""
         if (skyKey.isNotEmpty()) {
             val tex = textureFor(skyKey)
             if (tex > 0) {
+                GLES20.glUniform1f(uClipOn, 0f)
                 // the sky photo is also what shiny things (glass, water, metal) reflect
                 GLES20.glActiveTexture(GLES20.GL_TEXTURE1)
                 GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, tex)
@@ -1595,6 +1752,7 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
                 }
                 skyLit = 0f
                 GLES20.glEnable(GLES20.GL_DEPTH_TEST)
+                if (mirror) GLES20.glUniform1f(uClipOn, 1f)
             }
         }
 
@@ -1602,10 +1760,10 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         Matrix.setIdentityM(model, 0)
         val showGrid = settings == null || settings.sy >= 0.5f
         GLES20.glLineWidth(1f)
-        if (showGrid) drawMesh(grid, vpc, model, floatArrayOf(0.35f, 0.37f, 0.42f), false, 0, grid.count - 4)
+        if (showGrid && !mirror) drawMesh(grid, vpc, model, floatArrayOf(0.35f, 0.37f, 0.42f), false, 0, grid.count - 4)
         GLES20.glLineWidth(2f)
-        if (showGrid) drawMesh(grid, vpc, model, floatArrayOf(0.85f, 0.3f, 0.3f), false, grid.count - 4, 2)
-        if (showGrid) drawMesh(grid, vpc, model, floatArrayOf(0.3f, 0.45f, 0.9f), false, grid.count - 2, 2)
+        if (showGrid && !mirror) drawMesh(grid, vpc, model, floatArrayOf(0.85f, 0.3f, 0.3f), false, grid.count - 4, 2)
+        if (showGrid && !mirror) drawMesh(grid, vpc, model, floatArrayOf(0.3f, 0.45f, 0.9f), false, grid.count - 2, 2)
 
         // Objects: solid ones first, then see-through ones (far to near) so they blend correctly
         val sel = scene.selected
@@ -1613,6 +1771,7 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         val emitters = ArrayList<SceneObject>()
         for (o in scene.objects) {
             if (o.shape.isLight || o.shape == Shape.CAMERA || o.shape == Shape.BONE) continue
+            if (mirror && o.shape == Shape.MIRROR) continue
             if (o.shape.isScreen || o.shape == Shape.SETTINGS || o === fpHide) continue
             if (o.shape.isEmitter) { emitters.add(o); continue }
             if (o.shape == Shape.WATER || o.opacity < 0.99f) { seeThrough.add(o); continue }
@@ -1645,7 +1804,7 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         drawShadows(vpc)
 
         // Light markers: drawn on top of everything, kept a constant size on screen so they stay visible when zoomed out
-        if (!playing) {
+        if (!playing && !mirror) {
             GLES20.glDisable(GLES20.GL_DEPTH_TEST)
             for (o in scene.objects) {
                 if (o.shape.isLight) drawLightMarker(o, vpc)
@@ -1656,7 +1815,7 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         }
 
         // Gizmo on selection
-        if (sel != null && !sel.shape.isScreen && sel.shape != Shape.SETTINGS) {
+        if (!mirror && sel != null && !sel.shape.isScreen && sel.shape != Shape.SETTINGS) {
             GLES20.glDisable(GLES20.GL_DEPTH_TEST)
             GLES20.glLineWidth(4f)
             Matrix.setIdentityM(model, 0)

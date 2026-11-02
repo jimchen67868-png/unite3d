@@ -118,7 +118,7 @@ object Meshes {
         Shape.CUBE -> cubeData()
         Shape.PYRAMID -> pyramidData()
         Shape.SPHERE -> sphereData()
-        Shape.MODEL, Shape.JOYSTICK, Shape.BUTTON, Shape.LIGHT, Shape.SUN, Shape.SETTINGS, Shape.CAMERA, Shape.TERRAIN, Shape.BONE, Shape.WATER, Shape.TREE, Shape.GRASS, Shape.FIRE, Shape.SMOKE -> null
+        Shape.MODEL, Shape.JOYSTICK, Shape.BUTTON, Shape.LIGHT, Shape.SUN, Shape.SETTINGS, Shape.CAMERA, Shape.TERRAIN, Shape.BONE, Shape.WATER, Shape.TREE, Shape.GRASS, Shape.FIRE, Shape.SMOKE, Shape.MIRROR -> null
     }
 
     /** Grid lines first; the last 4 vertices are the X axis and Z axis. */

@@ -16,7 +16,8 @@ enum class Shape(val label: String, val radius: Float) {
     TREE("Tree", 0f),
     GRASS("Grass", 0f),
     FIRE("Fire", 0f),
-    SMOKE("Smoke", 0f);
+    SMOKE("Smoke", 0f),
+    MIRROR("Mirror", 0.87f);
 
     val isScreen: Boolean get() = this == JOYSTICK || this == BUTTON
     val isLight: Boolean get() = this == LIGHT || this == SUN
@@ -184,6 +185,17 @@ class Scene {
         o.y = 0f
         o.sx = 2f; o.sy = 3f; o.sz = 2f
         o.color = floatArrayOf(0.2f, 0.55f, 0.22f)
+        return o
+    }
+
+    /** A flat mirror that shows a real reflection of the scene. Size = width/height (X/Y), it faces its local +Z (use Rotation to turn it). */
+    fun addMirror(): SceneObject {
+        val o = add(Shape.MIRROR)
+        o.name = "Mirror " + counter
+        o.y = 1.5f
+        o.sx = 3f; o.sy = 2.5f; o.sz = 0.05f
+        o.color = floatArrayOf(0.9f, 0.95f, 1f)
+        o.shadow = false
         return o
     }
 

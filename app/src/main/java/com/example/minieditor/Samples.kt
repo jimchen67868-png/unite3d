@@ -199,7 +199,7 @@ end
         land.heights = TerrainGen.generate(7, 0.55f)
         land.hVersion++
         val sea = scene.addWater()
-        sea.sx = 30f; sea.sz = 30f; sea.y = 1.2f
+        sea.sx = 30f; sea.sz = 30f; sea.y = 1.2f; sea.sy = 0.3f; sea.rx = 1.2f; sea.ry = 40f
         val grass = scene.addGrass()
         grass.x = 0f; grass.z = 0f; grass.y = 0f; grass.sx = 30f; grass.sz = 30f
         val rnd = kotlin.random.Random(11)

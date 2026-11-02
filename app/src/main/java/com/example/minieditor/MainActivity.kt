@@ -91,6 +91,9 @@ class MainActivity : Activity(), SensorEventListener {
     private lateinit var shLabels: Array<TextView>
     private lateinit var shSliders: Array<SeekBar>
     private lateinit var windPanel: LinearLayout
+    private lateinit var wavePanel: LinearLayout
+    private lateinit var waveLabels: Array<TextView>
+    private lateinit var waveSliders: Array<SeekBar>
     private lateinit var windLabels: Array<TextView>
     private lateinit var windSliders: Array<SeekBar>
     private lateinit var materialView: LinearLayout
@@ -961,7 +964,8 @@ end
                 btn("+Camera", true) { if (scene.addCamera() == null) toast("Camera already added") else editor.refresh() },
                 btn("+Terrain", true) { scene.addTerrain(); editor.refresh() },
                 btn("+Bone", true) { scene.addBone(); editor.refresh() },
-                btn("+Water", true) { scene.addWater(); editor.refresh() }
+                btn("+Water", true) { scene.addWater(); editor.refresh() },
+                btn("+Mirror", true) { scene.addMirror(); editor.refresh() }
             ))
             addView(row(
                 btn("+Tree", true) { scene.addTree(0); editor.refresh() },
@@ -1287,6 +1291,31 @@ end
                 addView(windLabels[1]); addView(windSliders[1])
             }
             addView(windPanel)
+            waveLabels = Array(3) {
+                TextView(this@MainActivity).apply {
+                    textSize = 12f; setTextColor(0xFFDDDDDD.toInt()); setPadding(dp(4), dp(6), dp(4), 0)
+                }
+            }
+            waveSliders = Array(3) { i ->
+                SeekBar(this@MainActivity).apply {
+                    max = 100
+                    setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                        override fun onProgressChanged(sb: SeekBar?, p: Int, fromUser: Boolean) {
+                            if (fromUser) applyWave(i, p)
+                        }
+                        override fun onStartTrackingTouch(sb: SeekBar?) {}
+                        override fun onStopTrackingTouch(sb: SeekBar?) {}
+                    })
+                }
+            }
+            wavePanel = LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.VERTICAL
+                visibility = View.GONE
+                addView(waveLabels[0]); addView(waveSliders[0])
+                addView(waveLabels[1]); addView(waveSliders[1])
+                addView(waveLabels[2]); addView(waveSliders[2])
+            }
+            addView(wavePanel)
             sculptBtn = btn("Sculpt: Off") { editor.sculpt = (editor.sculpt + 1) % 5; editor.refresh() }
             brushLabels = Array(2) {
                 TextView(this@MainActivity).apply {
@@ -1352,6 +1381,17 @@ end
     }
 
     /** Settings shadow sliders: 0 = strength, 1 = softness, 2 = ground height (-5 to 10). */
+    private fun applyWave(i: Int, p: Int) {
+        val o = scene.selected ?: return
+        if (o.shape != Shape.WATER) return
+        when (i) {
+            0 -> o.sy = p / 100f * 1.5f
+            1 -> o.rx = p / 100f * 4f
+            2 -> o.ry = p * 3.6f
+        }
+        editor.refresh()
+    }
+
     private fun applyWind(i: Int, p: Int) {
         val o = scene.selected ?: return
         if (o.shape != Shape.SETTINGS) return
@@ -1527,6 +1567,7 @@ end
         lightPanel.visibility = if (light) View.VISIBLE else View.GONE
         shadowPanel.visibility = if (st) View.VISIBLE else View.GONE
         windPanel.visibility = if (st) View.VISIBLE else View.GONE
+        wavePanel.visibility = if (water) View.VISIBLE else View.GONE
         terrainPanel.visibility = if (ter) View.VISIBLE else View.GONE
         shadowBtn.visibility = colliderBtn.visibility
         attachBtn.visibility = if (o != null && !joy && !st && !ter) View.VISIBLE else View.GONE
@@ -1576,6 +1617,14 @@ end
             else String.format(Locale.US, "Distance (how far the light reaches)   %.0f", o.sy)
             if (!sliderA.isPressed) sliderA.progress = (o.sx * 20f).toInt().coerceIn(0, 100)
             if (!sliderB.isPressed) sliderB.progress = (if (isSun) o.sy * 100f else o.sy - 1f).toInt().coerceIn(0, 100)
+        }
+        if (o.shape == Shape.WATER) {
+            waveLabels[0].text = String.format(Locale.US, "Wave height   %.2f  (wind makes it bigger)", o.sy)
+            waveLabels[1].text = String.format(Locale.US, "Wave speed   %.2f", o.rx)
+            waveLabels[2].text = String.format(Locale.US, "Wave direction   %.0f deg", o.ry)
+            if (!waveSliders[0].isPressed) waveSliders[0].progress = (o.sy / 1.5f * 100f).toInt().coerceIn(0, 100)
+            if (!waveSliders[1].isPressed) waveSliders[1].progress = (o.rx / 4f * 100f).toInt().coerceIn(0, 100)
+            if (!waveSliders[2].isPressed) waveSliders[2].progress = (((o.ry % 360f) + 360f) % 360f / 3.6f).toInt().coerceIn(0, 100)
         }
         if (o.shape == Shape.SETTINGS) {
             shLabels[0].text = String.format(Locale.US, "Shadow strength   %.2f  (0 = no shadows)", o.ry)
