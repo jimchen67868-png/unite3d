@@ -957,10 +957,11 @@ end
             val z = zcz + Math.sin(a.toDouble()).toFloat() * d
             val h = ground(x, z) ?: continue
             if (h < seaY + 0.8f) continue
+            if (houses.any { Math.hypot((it[0] - x).toDouble(), (it[1] - z).toDouble()) < 9.0 }) continue
             px = x; pz = z; pg = h
             break
         }
-        val player = mk(scene, Shape.SPHERE, "Player", px, pg + 1.2f, pz, 0.8f, 1.7f, 0.8f, floatArrayOf(0.25f, 0.5f, 0.9f), BR_PLAYER)
+        val player = mk(scene, Shape.SPHERE, "Player", px, pg + 1.2f, pz, 1.0f, 1.7f, 1.0f, floatArrayOf(0.25f, 0.5f, 0.9f), BR_PLAYER)
         player.collider = 1; player.shadow = false
 
         // ---- enemy soldiers ----
@@ -973,6 +974,7 @@ end
             val h = ground(x, z) ?: continue
             if (h < seaY + 0.6f) continue
             if (Math.hypot((x - px).toDouble(), (z - pz).toDouble()) < 16.0) continue
+            if (houses.any { Math.hypot((it[0] - x).toDouble(), (it[1] - z).toDouble()) < 9.0 }) continue
             bots++
             val b = mk(scene, Shape.SPHERE, "Bot " + bots, x, h + 1.2f, z, 0.9f, 1.8f, 0.9f, floatArrayOf(0.85f, 0.2f, 0.2f), BR_BOT)
             b.collider = 1; b.shadow = false

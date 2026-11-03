@@ -69,9 +69,15 @@ class ScriptEngine(private val scene: Scene, private val log: (String) -> Unit) 
     var yawOut: Float? = null
     var pitchOut: Float? = null
 
-    private val hookFn: LuaValue = object : ZeroArgFunction() {
-        override fun call(): LuaValue {
-            throw LuaError("script ran too long (infinite loop?)")
+    /** When the current script call began; the hook only stops a script that has really been running for a long time. */
+    private var callStartNs = 0L
+
+    private val hookFn: LuaValue = object : VarArgFunction() {
+        override fun invoke(args: Varargs): Varargs {
+            if (System.nanoTime() - callStartNs > 400_000_000L) {
+                throw LuaError("script ran too long (infinite loop?)")
+            }
+            return LuaValue.NONE
         }
     }
 
@@ -176,7 +182,8 @@ class ScriptEngine(private val scene: Scene, private val log: (String) -> Unit) 
     private fun guard(inst: Inst) {
         val h = inst.sethook ?: return
         try {
-            h.call(hookFn, LuaValue.valueOf(""), LuaValue.valueOf(1000000))
+            callStartNs = System.nanoTime()
+            h.call(hookFn, LuaValue.valueOf(""), LuaValue.valueOf(50000))
         } catch (e: Throwable) {
         }
     }
