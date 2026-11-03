@@ -483,6 +483,126 @@ end
         setMode(Mode.MOVE)
     }
 
+    // ---------- Build game APK (GitHub Actions) ----------
+
+    private fun projectZipBytes(appName: String): ByteArray {
+        val json = scene.toJson()
+        val keys = scene.objects.mapNotNull { it.model?.key }.toSet()
+        val photoKeys = scene.objects.map { it.photo }.filter { it.isNotEmpty() }.toSet()
+        val bos = java.io.ByteArrayOutputStream()
+        ZipOutputStream(bos).use { z ->
+            z.putNextEntry(ZipEntry("scene.json")); z.write(json.toByteArray()); z.closeEntry()
+            z.putNextEntry(ZipEntry("name.txt")); z.write(appName.toByteArray()); z.closeEntry()
+            for (k in keys) {
+                val f = File(modelsDir(), k)
+                if (f.exists()) { z.putNextEntry(ZipEntry("models/" + k)); z.write(f.readBytes()); z.closeEntry() }
+            }
+            for (k in photoKeys) {
+                val f = File(photosDir(), k)
+                if (f.exists()) { z.putNextEntry(ZipEntry("photos/" + k)); z.write(f.readBytes()); z.closeEntry() }
+            }
+        }
+        return bos.toByteArray()
+    }
+
+    private fun buildGameApk() {
+        if (scene.objects.isEmpty()) { toast("The scene is empty"); return }
+        stopPlay()
+        val sp = getSharedPreferences("cloud", MODE_PRIVATE)
+        fun field(hint: String, value: String, secret: Boolean): android.widget.EditText = android.widget.EditText(this).apply {
+            this.hint = hint
+            setText(value)
+            setSingleLine(true)
+            if (secret) inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
+        }
+        val nameBox = field("Game name", sp.getString("name", "My Game") ?: "My Game", false)
+        val repoBox = field("GitHub repo (owner/name)", sp.getString("repo", "jimchen67868-png/unite3d") ?: "", false)
+        val tokenBox = field("GitHub token", sp.getString("token", "") ?: "", true)
+        val form = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(16), dp(8), dp(16), 0)
+            addView(TextView(context).apply {
+                text = "Uploads this scene to your GitHub repo; GitHub Actions builds the APK (about 3-5 minutes). " +
+                    "The token needs: Contents = read and write, Actions = read and write (for this repo only)."
+                textSize = 12f
+            })
+            addView(nameBox); addView(repoBox); addView(tokenBox)
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Build game APK")
+            .setView(form)
+            .setPositiveButton("Build") { _, _ ->
+                val name = nameBox.text.toString().trim().ifEmpty { "My Game" }
+                val repo = repoBox.text.toString().trim()
+                val token = tokenBox.text.toString().trim()
+                if (repo.isEmpty() || token.isEmpty()) { toast("Enter the repo and the token"); return@setPositiveButton }
+                sp.edit().putString("name", name).putString("repo", repo).putString("token", token).apply()
+                runCloudBuild(name, repo, token)
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun runCloudBuild(name: String, repo: String, token: String) {
+        val zip = projectZipBytes(name)
+        val msg = TextView(this).apply { text = "Starting..."; setPadding(dp(20), dp(16), dp(20), dp(8)) }
+        val dlg = AlertDialog.Builder(this)
+            .setTitle("Building \"" + name + "\"")
+            .setView(msg)
+            .setCancelable(false)
+            .setNegativeButton("Cancel", null)
+            .show()
+        val cb = CloudBuild(token, repo) { s -> runOnUiThread { msg.text = s } }
+        dlg.getButton(AlertDialog.BUTTON_NEGATIVE).setOnClickListener { cb.cancelled = true; dlg.dismiss() }
+        Thread {
+            try {
+                val apk = cb.build(zip)
+                val file = name.replace(Regex("[^A-Za-z0-9._-]"), "_") + ".apk"
+                val uri = saveApk(apk, file)
+                runOnUiThread {
+                    if (dlg.isShowing) dlg.dismiss()
+                    if (uri == null) { toast("Could not save the APK"); return@runOnUiThread }
+                    toast("Saved " + file + " in Downloads")
+                    try {
+                        val i = Intent(Intent.ACTION_VIEW).apply {
+                            setDataAndType(uri, "application/vnd.android.package-archive")
+                            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+                        }
+                        startActivity(i)
+                    } catch (e: Throwable) {
+                        toast("Open the APK from your Downloads folder to install it")
+                    }
+                }
+            } catch (e: Throwable) {
+                runOnUiThread {
+                    if (dlg.isShowing) dlg.dismiss()
+                    if (e.message != "Cancelled") {
+                        AlertDialog.Builder(this).setTitle("Build failed").setMessage(e.message ?: e.toString())
+                            .setPositiveButton("OK", null).show()
+                    }
+                }
+            }
+        }.start()
+    }
+
+    /** Saves the APK into the public Downloads folder; returns its Uri. */
+    private fun saveApk(bytes: ByteArray, fileName: String): Uri? {
+        if (android.os.Build.VERSION.SDK_INT >= 29) {
+            val cv = android.content.ContentValues().apply {
+                put(android.provider.MediaStore.Downloads.DISPLAY_NAME, fileName)
+                put(android.provider.MediaStore.Downloads.MIME_TYPE, "application/vnd.android.package-archive")
+                put(android.provider.MediaStore.Downloads.RELATIVE_PATH, android.os.Environment.DIRECTORY_DOWNLOADS)
+            }
+            val uri = contentResolver.insert(android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI, cv) ?: return null
+            contentResolver.openOutputStream(uri)!!.use { it.write(bytes) }
+            return uri
+        }
+        val f = File(getExternalFilesDir(null), fileName)
+        f.writeBytes(bytes)
+        runOnUiThread { toast("Saved to " + f.absolutePath) }
+        return null
+    }
+
     // ---------- Game mode ----------
     // When the app was built with app/src/main/assets/game.zip (see the "Build Game APK" workflow), it starts as that
     // game: no editor panels, the scene is loaded from the zip and Play starts by itself.
@@ -515,7 +635,7 @@ end
             bottomPanel.setBackgroundColor(0)
             for (i in 0 until root.childCount) {
                 val v = root.getChildAt(i)
-                if (v !== editor && v !== bottomPanel && v !== joystick && !buttonViews.contains(v)) v.visibility = View.GONE
+                if (v !== editor && v !== bottomPanel && v !== joystick && buttonViews.none { it === v }) v.visibility = View.GONE
             }
             editor.selectEnabled = false
             scene.selected = null
@@ -546,6 +666,7 @@ end
         pm.menu.add(0, 13, 12, "Load sample: lake (water)")
         pm.menu.add(0, 14, 13, "Load sample: campfire (fire and smoke)")
         pm.menu.add(0, 15, 14, "Load sample game: Battle Royale (shooter)")
+        pm.menu.add(0, 16, 15, "Build game APK (cloud)...")
         pm.menu.add(0, 7, 6, "Load sample game (Coin Rush)")
         pm.menu.add(0, 8, 7, "Editor lighting: " + (if (editor.renderer.editorBright) "Bright (tap for Scene)" else "Scene (tap for Bright)"))
         pm.setOnMenuItemClickListener { item ->
@@ -567,6 +688,7 @@ end
                     13 -> loadLakeSample()
                     14 -> loadCampfireSample()
                     15 -> loadBattleSample()
+                    16 -> buildGameApk()
                     10 -> {
                         val s = scene.objects.firstOrNull { it.shape == Shape.SETTINGS } ?: scene.addSettings()
                         scene.selected = s

@@ -1,0 +1,47 @@
+name: Build Game APK
+# Put your exported game at  game/game.zip  (File > Export scene zip... in the editor) and push.
+# Optional: game/name.txt = the app name shown on the phone (first line).
+# The finished game appears as the "game-apk" download of the run (Actions tab).
+on:
+  push:
+    paths:
+      - 'game/**'
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Look for game/game.zip
+        id: chk
+        run: |
+          if [ -f game/game.zip ]; then echo "has=true" >> "$GITHUB_OUTPUT"; else echo "has=false" >> "$GITHUB_OUTPUT"; echo "No game/game.zip - nothing to build"; fi
+      - uses: actions/setup-java@v4
+        if: steps.chk.outputs.has == 'true'
+        with:
+          distribution: temurin
+          java-version: 17
+      - name: Accept Android licenses
+        if: steps.chk.outputs.has == 'true'
+        run: yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses || true
+      - uses: gradle/actions/setup-gradle@v4
+        if: steps.chk.outputs.has == 'true'
+        with:
+          gradle-version: 8.7
+      - name: Build the game
+        if: steps.chk.outputs.has == 'true'
+        run: |
+          mkdir -p app/src/main/assets
+          cp game/game.zip app/src/main/assets/game.zip
+          NAME="My Game"
+          if unzip -p game/game.zip name.txt > /tmp/n.txt 2>/dev/null && [ -s /tmp/n.txt ]; then NAME="$(head -n1 /tmp/n.txt)";
+          elif [ -f game/name.txt ]; then NAME="$(head -n1 game/name.txt)"; fi
+          SLUG="$(echo "$NAME" | tr 'A-Z' 'a-z' | tr -cd 'a-z0-9')"
+          if [ -z "$SLUG" ]; then SLUG="game"; fi
+          echo "Building '$NAME' as com.example.g$SLUG"
+          gradle assembleDebug -PgameId="com.example.g$SLUG" -PappName="$NAME"
+      - uses: actions/upload-artifact@v4
+        if: steps.chk.outputs.has == 'true'
+        with:
+          name: game-apk
+          path: app/build/outputs/apk/debug/app-debug.apk

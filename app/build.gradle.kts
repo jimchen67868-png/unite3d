@@ -7,7 +7,9 @@ android {
     namespace = "com.example.minieditor"
     compileSdk = 34
     defaultConfig {
-        applicationId = "com.example.minieditor"
+        // the editor keeps these defaults; the "Build Game APK" workflow overrides them (-PgameId=... -PappName=...)
+        applicationId = (project.findProperty("gameId") as String?) ?: "com.example.minieditor"
+        manifestPlaceholders["appLabel"] = (project.findProperty("appName") as String?) ?: "Mini 3D Editor"
         minSdk = 24
         targetSdk = 34
         versionCode = 1
