@@ -79,7 +79,10 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
     private var uParticle = 0; private var uCamRight = 0; private var uCamUp = 0
     private var uPSize = 0; private var uPHeight = 0; private var uPWind = 0
     private var uGlass = 0; private var uVeg = 0; private var uEnv = 0; private var uHasEnv = 0
-    private var uShadow = 0; private var uShadowOn = 0
+    private var uShadow = 0; private var uShadowOn = 0; private var uShadowArea = 0
+    private var uCube = 0; private var uCubeOn = 0
+    private var cubeTex = 0
+    private val cubeAtlas: java.nio.ByteBuffer = java.nio.ByteBuffer.allocateDirect(6 * 128 * 4 * 128 * 4)
     private var uWind = 0; private var uSwayLocal = 0; private var uTree = 0
     private val SH = 96   // terrain shadow map resolution
     private var shTex = 0
@@ -266,6 +269,9 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         uniform float uHasEnv;
         uniform sampler2D uShadow;
         uniform float uShadowOn;
+        uniform vec4 uShadowArea;
+        uniform sampler2D uCube;
+        uniform float uCubeOn;
         vec2 photoUV(vec3 p, vec3 n) {
             vec3 a = abs(n);
             if (uMapMode > 0.5) {
@@ -311,6 +317,33 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
             float spot = pow(max(dot(r, uSunDir), 0.0), 220.0);
             return sky + uSunCol * spot * 3.0;
         }
+        // Is the point light number li blocked from this pixel? Looks up the light's cube depth map
+        // (6 faces side by side, one row per light; depth stored as 1/z packed into 3 bytes).
+        float lightVisAt(int li, vec3 lp) {
+            vec3 q = vW - lp;
+            vec3 a = abs(q);
+            float f = 0.0;
+            float z = 1.0;
+            float x = 0.0;
+            float y = 0.0;
+            if (a.x >= a.y && a.x >= a.z) {
+                if (q.x >= 0.0) { f = 0.0; z = q.x; x = -q.z; } else { f = 1.0; z = -q.x; x = q.z; }
+                y = q.y;
+            } else if (a.y >= a.z) {
+                if (q.y >= 0.0) { f = 2.0; z = q.y; y = -q.z; } else { f = 3.0; z = -q.y; y = q.z; }
+                x = q.x;
+            } else {
+                if (q.z >= 0.0) { f = 4.0; z = q.z; x = q.x; } else { f = 5.0; z = -q.z; x = -q.x; }
+                y = q.y;
+            }
+            if (z < 0.06) return 1.0;
+            float ux = clamp((x / z * 0.5 + 0.5) * 128.0, 0.5, 127.5);
+            float uy = clamp((y / z * 0.5 + 0.5) * 128.0, 0.5, 127.5);
+            vec2 uv = vec2((f * 128.0 + ux) / 768.0, (float(li) * 128.0 + uy) / 512.0);
+            vec3 c = texture2D(uCube, uv).rgb;
+            float stored = dot(c, vec3(1.0, 1.0 / 255.0, 1.0 / 65025.0)) * 20.0;
+            return (stored > (1.0 / z) * 1.06 + 0.002) ? 0.0 : 1.0;
+        }
         void main() {
             if (uClipOn > 0.5 && dot(vW, uClipPl.xyz) + uClipPl.w < 0.0) discard;
             if (vIsPart > 0.5) {
@@ -353,8 +386,9 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
             vec3 spec = vec3(0.0);
             float shSun = 1.0;
             float shPt = 1.0;
-            if (uTerrain > 0.5 && uShadowOn > 0.5) {
-                vec2 shUV = vec2(vL.x / max(uObjScale.x, 0.001) + 0.5, vL.z / max(uObjScale.z, 0.001) + 0.5);
+            if ((uTerrain > 0.5 || vIsGrass > 0.5) && uShadowOn > 0.5) {
+                // the ground shadow map, looked up by world position (so grass is shaded like the ground under it)
+                vec2 shUV = (vW.xz - uShadowArea.xy) / max(uShadowArea.zw, vec2(0.001)) + 0.5;
                 vec2 shM = texture2D(uShadow, shUV).rg;
                 shSun = 1.0 - shM.r;
                 shPt = 1.0 - shM.g;
@@ -372,6 +406,7 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
                 vec3 l = d / dist;
                 float att = clamp(1.0 - dist / uLCol[i].w, 0.0, 1.0);
                 att = att * att * uLVis[i];
+                if (uCubeOn > 0.5 && uTerrain < 0.5 && vIsGrass < 0.5) att *= lightVisAt(i, uLPos[i]);
                 float nl = max(dot(n, l), 0.0);
                 light += uLCol[i].rgb * nl * att * shPt;
                 if (nl > 0.0) {
@@ -469,6 +504,9 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         photoTex.clear()   // textures are lost with the GL context
         shTex = 0
         shKey = ""
+        cubeTex = 0
+        visKey = ""
+        visReady = false
         for (i in 0 until 2) { mirFbo[i] = 0; mirTex[i] = 0; mirDepth[i] = 0 }
         mirW = 0
         prog = GLES20.glCreateProgram()
@@ -525,6 +563,9 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         uTree = GLES20.glGetUniformLocation(prog, "uTree")
         uShadow = GLES20.glGetUniformLocation(prog, "uShadow")
         uShadowOn = GLES20.glGetUniformLocation(prog, "uShadowOn")
+        uShadowArea = GLES20.glGetUniformLocation(prog, "uShadowArea")
+        uCube = GLES20.glGetUniformLocation(prog, "uCube")
+        uCubeOn = GLES20.glGetUniformLocation(prog, "uCubeOn")
         meshes = mapOf(Shape.CUBE to Meshes.cube(), Shape.PYRAMID to Meshes.pyramid(), Shape.SPHERE to Meshes.sphere())
         grid = Meshes.grid()
         gizmo = Meshes.gizmo()
@@ -665,6 +706,13 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         litCount = pts.size
         updateLightVisibility()
         GLES20.glUniform1fv(uLVis, 4, visOnes, 0)
+        if (visActive) {
+            GLES20.glActiveTexture(GLES20.GL_TEXTURE4)
+            GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, cubeTex)
+            GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
+            GLES20.glUniform1i(uCube, 4)
+        }
+        GLES20.glUniform1f(uCubeOn, if (visActive) 1f else 0f)
         GLES20.glUniform3fv(uLPos, 4, pos, 0)
         GLES20.glUniform4fv(uLCol, 4, col, 0)
         GLES20.glUniform1i(uLCount, pts.size)
@@ -1156,6 +1204,7 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         GLES20.glActiveTexture(GLES20.GL_TEXTURE2)
         GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, shTex)
         GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
+        GLES20.glUniform4f(uShadowArea, terrain.x, terrain.z, terrain.sx, terrain.sz)
         GLES20.glUniform1f(uShadowOn, 1f)
     }
 
@@ -1313,14 +1362,54 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
             visKey = key
             visTime = now
             visReady = true
+            uploadCubeAtlas()
         }
-        visActive = visReady
+        visActive = visReady && cubeTex != 0
+    }
+
+    /** Packs the light cube depth maps into one RGBA texture (6 faces across, one row per light) for the shader. */
+    private fun uploadCubeAtlas() {
+        val buf = cubeAtlas
+        buf.clear()
+        val wAtlas = 6 * CS
+        val hAtlas = 4 * CS
+        for (row in 0 until hAtlas) {
+            val li = row / CS
+            val iy = row % CS
+            for (col in 0 until wAtlas) {
+                val f = col / CS
+                val ix = col % CS
+                val inv = if (li < litCount) visDepth[(li * 6 + f) * CS * CS + iy * CS + ix] else 0f
+                val sc = (inv / 20f).coerceIn(0f, 0.99999f) * 255f
+                val r8 = sc.toInt()
+                val rem = (sc - r8) * 255f
+                val g8 = rem.toInt()
+                val b8 = ((rem - g8) * 255f).toInt()
+                buf.put(r8.toByte()); buf.put(g8.toByte()); buf.put(b8.toByte()); buf.put(255.toByte())
+            }
+        }
+        buf.position(0)
+        GLES20.glActiveTexture(GLES20.GL_TEXTURE4)
+        if (cubeTex == 0) {
+            val ids = IntArray(1)
+            GLES20.glGenTextures(1, ids, 0)
+            cubeTex = ids[0]
+            GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, cubeTex)
+            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_NEAREST)
+            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_NEAREST)
+            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE)
+            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE)
+        } else {
+            GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, cubeTex)
+        }
+        GLES20.glTexImage2D(GLES20.GL_TEXTURE_2D, 0, GLES20.GL_RGBA, wAtlas, hAtlas, 0, GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, buf)
+        GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
     }
 
     /** How much of each light reaches this object: measured at the point of its bounding sphere that faces the light. */
     private fun setLightVis(o: SceneObject) {
         var shaded = false
-        if (visActive && o.shape != Shape.TERRAIN && o.shape != Shape.WATER && !o.shape.isEmitter) {
+        if (false && visActive && o.shape != Shape.TERRAIN && o.shape != Shape.WATER && o.shape != Shape.GRASS && !o.shape.isEmitter) {
             val cx = o.x
             val cy = if (o.shape == Shape.TREE) o.y + o.sy * 0.5f else o.y
             val cz = o.z
