@@ -18,6 +18,7 @@ class EditorView(ctx: Context, val scene: Scene) : GLSurfaceView(ctx) {
     var axis = 0   // 0 = free, 1 = X, 2 = Y, 3 = Z
         set(v) { field = v; renderer.axisMode = v }
     var locked = false   // locked: the selected object is held; one-finger drag anywhere moves/rotates/scales it and taps never select another object. Unlocked: drag looks around, tap selects.
+    var multiMode = false   // on: taps add / remove objects from the Multi selection (to group them); dragging only looks around
     var selectEnabled = true   // off: taps never select anything, so you can just move around
     var onChange: (() -> Unit)? = null
     var onTouchStart: (() -> Unit)? = null
@@ -308,7 +309,7 @@ class EditorView(ctx: Context, val scene: Scene) : GLSurfaceView(ctx) {
                 }
                 // Only remember what is under the finger. Selecting or moving waits until
                 // the finger moves or lifts, so a pinch that starts on an object does nothing to it.
-                val held = if (locked && !playing) scene.selected else null
+                val held = if (locked && !playing && !multiMode) scene.selected else null
                 pendingList = if (playing || held != null) emptyList() else pickAll(e.x, e.y)
                 val hit = held   // only a locked object can be dragged; unlocked drags just look around
                 pending = hit
@@ -363,7 +364,20 @@ class EditorView(ctx: Context, val scene: Scene) : GLSurfaceView(ctx) {
                     lastTapX = e.x
                     lastTapY = e.y
                     lastTapTime = e.eventTime
-                    scene.selected = choice
+                    if (multiMode) {
+                        val c = choice
+                        if (c != null && !scene.multi.remove(c)) scene.multi.add(c)
+                        if (c != null) scene.selected = c
+                    } else {
+                        // grouped objects: the first tap picks the whole group; tapping a member of the picked group again picks that member
+                        var pick = choice
+                        val cur = scene.selected
+                        if (pick != null) {
+                            val root = scene.groupRoot(pick)
+                            if (root !== pick && !(cur != null && (cur === root || scene.groupRoot(cur) === root))) pick = root
+                        }
+                        scene.selected = pick
+                    }
                     refresh()
                 }
                 dragTarget?.let { Rig.rebind(scene, it) }

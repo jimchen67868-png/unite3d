@@ -60,6 +60,9 @@ class MainActivity : Activity(), SensorEventListener {
     private lateinit var yButton: Button
     private lateinit var lockButton: Button
     private lateinit var selectButton: Button
+    private lateinit var multiButton: Button
+    private lateinit var bottomPanel: LinearLayout
+    private var gameMode = false
     private lateinit var toolsButton: Button
     private lateinit var transformRow: LinearLayout
     private lateinit var playButton: Button
@@ -233,6 +236,47 @@ end
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
     private fun toast(s: String) = Toast.makeText(this, s, Toast.LENGTH_SHORT).show()
 
+    // ---------- Groups ----------
+
+    private fun toggleMulti() {
+        if (!editor.selectEnabled) { toast("Turn Select on first"); return }
+        editor.multiMode = !editor.multiMode
+        scene.multi.clear()
+        if (editor.multiMode) {
+            editor.locked = false
+            scene.selected?.let { if (!it.shape.isScreen) scene.multi.add(it) }
+            toast("Multi: tap objects to pick them, then tap Group")
+        }
+        refreshButtons()
+        editor.refresh()
+    }
+
+    private fun doGroup() {
+        val members = scene.multi.filter {
+            scene.objects.contains(it) && !it.shape.isScreen && it.shape != Shape.SETTINGS &&
+                it.shape != Shape.CAMERA && it.shape != Shape.TERRAIN
+        }
+        if (members.size < 2) { toast("Tap Multi, then tap 2 or more objects, then Group"); return }
+        val g = scene.makeGroup(members)
+        editor.multiMode = false
+        scene.multi.clear()
+        scene.selected = g
+        lastCount = -1
+        refreshButtons()
+        editor.refresh()
+        toast("Grouped " + members.size + " objects. Tap one to select the group; tap it again to pick a single object.")
+    }
+
+    private fun doUngroup() {
+        val s = scene.selected
+        val g = if (s == null) null else scene.groupRoot(s).takeIf { scene.isGroup(it) }
+        if (g == null) { toast("Select a grouped object first"); return }
+        scene.ungroup(g)
+        lastCount = -1
+        editor.refresh()
+        toast("Ungrouped")
+    }
+
     // ---------- Undo / redo ----------
 
     private val history = ArrayList<String>()
@@ -253,6 +297,7 @@ end
 
     private fun restoreStep(i: Int) {
         try {
+            scene.multi.clear()
             scene.load(history[i]) { loadModel(it) }
             scene.selected = scene.objects.getOrNull(histSel[i])
             hIdx = i
@@ -354,10 +399,16 @@ end
                 btn("Cut", true) { if (scene.cutSelected()) editor.refresh() else toast("Select an object first") },
                 btn("Copy", true) { if (scene.copySelected()) toast("Copied") else toast("Select an object first") },
                 btn("Paste", true) { if (scene.paste() != null) editor.refresh() else toast("Nothing to paste") },
-                btn("Delete", true) { if (scene.selected != null) { scene.removeSelected(); editor.refresh() } else toast("Select an object first") },
+                btn("Delete", true) {
+                    if (editor.multiMode && scene.multi.isNotEmpty()) { scene.removeMulti(); editor.refresh() }
+                    else if (scene.selected != null) { scene.removeSelected(); editor.refresh() }
+                    else toast("Select an object first")
+                },
                 btn("Undo") { }.also { b -> b.setOnClickListener { undo() } },
                 btn("Redo") { }.also { b -> b.setOnClickListener { redo() } }
             ))
+            multiButton = btn("Multi: Off") { toggleMulti() }
+            addView(row(multiButton, btn("Group", true) { doGroup() }, btn("Ungroup", true) { doUngroup() }))
             addView(row(
                 btn("Hierarchy") { setPanel(Panel.HIER) },
                 btn("Inspector") { setPanel(Panel.INSPECT) },
@@ -375,6 +426,7 @@ end
             ))
         }
 
+        bottomPanel = bottom
         buildHierarchy()
         buildInspector()
         buildScript()
@@ -425,8 +477,56 @@ end
                 coordLabel.post { labelPending = false; updateCoordLabel() }
             }
         }
-        if (!autoLoad()) scene.add(Shape.CUBE)
+        if (!(hasGameAsset() && startGameMode())) {
+            if (!autoLoad()) scene.add(Shape.CUBE)
+        }
         setMode(Mode.MOVE)
+    }
+
+    // ---------- Game mode ----------
+    // When the app was built with app/src/main/assets/game.zip (see the "Build Game APK" workflow), it starts as that
+    // game: no editor panels, the scene is loaded from the zip and Play starts by itself.
+
+    private fun hasGameAsset(): Boolean = try { assets.open("game.zip").close(); true } catch (e: Exception) { false }
+
+    private fun startGameMode(): Boolean {
+        return try {
+            var json: String? = null
+            assets.open("game.zip").use { ins ->
+                val z = ZipInputStream(ins)
+                while (true) {
+                    val e = z.nextEntry ?: break
+                    val name = e.name.substringAfterLast('/')
+                    if (e.isDirectory || name.isEmpty() || name == "." || name == "..") continue
+                    val data = z.readBytes()
+                    if (name == "scene.json") json = String(data)
+                    else if (e.name.startsWith("models/")) File(modelsDir(), name).writeBytes(data)
+                    else if (e.name.startsWith("photos/")) File(photosDir(), name).writeBytes(data)
+                }
+            }
+            val text = json ?: return false
+            scene.load(text) { loadModel(it) }
+            gameMode = true
+            // only the game view, joystick, buttons and the message log stay on screen
+            for (i in 0 until bottomPanel.childCount) {
+                val v = bottomPanel.getChildAt(i)
+                if (v !== consoleView) v.visibility = View.GONE
+            }
+            bottomPanel.setBackgroundColor(0)
+            for (i in 0 until root.childCount) {
+                val v = root.getChildAt(i)
+                if (v !== editor && v !== bottomPanel && v !== joystick && !buttonViews.contains(v)) v.visibility = View.GONE
+            }
+            editor.selectEnabled = false
+            scene.selected = null
+            window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            @Suppress("DEPRECATION")
+            window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_FULLSCREEN or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or
+                View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+            true
+        } catch (e: Throwable) {
+            false
+        }
     }
 
     // ---------- File menu ----------
@@ -1709,6 +1809,8 @@ end
 
     private fun refreshButtons() {
         for ((m, b) in modeButtons) b.setBackgroundColor(if (editor.mode == m) 0xFF3D7BFF.toInt() else 0xFF444444.toInt())
+        multiButton.text = if (editor.multiMode) "Multi: On" else "Multi: Off"
+        multiButton.setBackgroundColor(if (editor.multiMode) 0xFFE67E22.toInt() else 0xFF444444.toInt())
         selectButton.text = if (editor.selectEnabled) "Select: On" else "Select: Off"
         selectButton.setBackgroundColor(if (editor.selectEnabled) 0xFF444444.toInt() else 0xFFE67E22.toInt())
         lockButton.text = if (editor.locked) "Locked" else "Lock"
@@ -1742,7 +1844,7 @@ end
         val o = scene.selected
         info.text = (if (playing) "PLAYING  |  " else "") + (o?.name ?: "Nothing selected") +
             (if (o != null && !o.shape.isScreen && o.shape != Shape.SETTINGS) String.format(Locale.US, " (%.2f, %.2f, %.2f)", o.x, o.y, o.z) else "") +
-            "  |  " + scene.objects.size + " objects" + (if (playing) "" else if (editor.locked) "  |  LOCKED: drag " + editor.mode.name.lowercase() + (if (editor.axis > 0) " " + arrayOf("", "X", "Y", "Z")[editor.axis] else "") else if (editor.selectEnabled) "  |  tap to select" else "  |  select off")
+            "  |  " + scene.objects.size + " objects" + (if (playing) "" else if (editor.multiMode) "  |  MULTI: " + scene.multi.size + " picked" else if (editor.locked) "  |  LOCKED: drag " + editor.mode.name.lowercase() + (if (editor.axis > 0) " " + arrayOf("", "X", "Y", "Z")[editor.axis] else "") else if (editor.selectEnabled) "  |  tap to select" else "  |  select off")
         if (scene.selected?.shape != Shape.TERRAIN && editor.sculpt != 0) editor.sculpt = 0
         if (panel == Panel.HIER && (scene.objects.size != lastCount || scene.selected !== lastSel)) rebuildHierarchy()
         if (panel == Panel.INSPECT) refreshInspector()
@@ -2292,10 +2394,16 @@ end
     override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
 
     override fun onPause() {
-        stopPlay(); autoSave()
+        stopPlay()
+        if (!gameMode) autoSave()
         Choreographer.getInstance().removeFrameCallback(waterCb)
         waterLoop = false
         super.onPause(); editor.onPause()
     }
-    override fun onResume() { super.onResume(); editor.onResume(); ensureWaterLoop() }
+    override fun onResume() {
+        super.onResume()
+        editor.onResume()
+        ensureWaterLoop()
+        if (gameMode && !playing) root.post { if (gameMode && !playing) startPlay() }
+    }
 }

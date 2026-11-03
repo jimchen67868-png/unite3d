@@ -358,6 +358,15 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
                     gl_FragColor = vec4(fc * uColor.rgb, a * fade);
                 } else {
                     vec3 sc = mix(vec3(0.30), vec3(0.62), l) * uColor.rgb;
+                    // smoke is lit like everything else: ambient + sun, and nearby lights (a fire lights it orange)
+                    vec3 sl = uAmbient + uSunCol * 0.7;
+                    for (int i = 0; i < 4; i++) {
+                        if (i >= uLCount) break;
+                        float pd = length(uLPos[i] - vW);
+                        float pa = clamp(1.0 - pd / max(uLCol[i].w, 0.001), 0.0, 1.0);
+                        sl += uLCol[i].rgb * pa * pa * 0.9;
+                    }
+                    sc *= clamp(sl * 1.25, 0.0, 1.5);
                     float fade = smoothstep(0.0, 0.15, l) * (1.0 - l);
                     gl_FragColor = vec4(sc, a * fade * uColor.a);
                 }
@@ -892,7 +901,7 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         }
         GLES20.glUniform1f(uVeg, 2f)
         drawMesh(trunkMesh(t), vpc, model, floatArrayOf(0.38f, 0.26f, 0.15f), true)
-        val c = if (o === sel)
+        val c = if (hl(o, sel))
             floatArrayOf(minOf(1f, o.color[0] * 0.6f + 0.4f), minOf(1f, o.color[1] * 0.6f + 0.4f), minOf(1f, o.color[2] * 0.6f + 0.4f))
         else o.color
         GLES20.glUniform1f(uVeg, 1f)
@@ -939,7 +948,7 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         setPlain(0f, 0.1f)
         GLES20.glUniform1f(uGrass, 1f)
         GLES20.glUniform1f(uTime, Water.time())
-        val c = if (o === sel) floatArrayOf(1.4f, 1.4f, 1.4f) else o.color
+        val c = if (hl(o, sel)) floatArrayOf(1.4f, 1.4f, 1.4f) else o.color
         drawMesh(entry.second, vpc, model, c, true)
         GLES20.glUniform1f(uGrass, 0f)
     }
@@ -980,7 +989,7 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         val waveH = o.sy * Water.boost
         GLES20.glUniform3f(uWave, waveH, o.rx, Math.toRadians(o.ry.toDouble()).toFloat())
         GLES20.glUniform1f(uFoam, ((waveH - 0.06f) * 2.2f).coerceIn(0f, 1f))
-        val c = if (o === sel)
+        val c = if (hl(o, sel))
             floatArrayOf(minOf(1f, o.color[0] + 0.25f), minOf(1f, o.color[1] + 0.25f), minOf(1f, o.color[2] + 0.25f))
         else o.color
         drawMesh(waterMesh, vpc, model, c, true, 0, waterMesh.count, alpha)
@@ -1007,8 +1016,8 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         }
         val hasPhoto = o.photo.isNotEmpty() && textureFor(o.photo) > 0
         val c = if (hasPhoto || o.shape == Shape.TERRAIN) {
-            if (o === sel) floatArrayOf(1.3f, 1.3f, 1.3f) else floatArrayOf(1f, 1f, 1f)
-        } else if (o === sel) {
+            if (hl(o, sel)) floatArrayOf(1.3f, 1.3f, 1.3f) else floatArrayOf(1f, 1f, 1f)
+        } else if (hl(o, sel)) {
             floatArrayOf(o.color[0] * 0.6f + 0.4f, o.color[1] * 0.6f + 0.4f, o.color[2] * 0.6f + 0.4f)
         } else o.color
         setMaterial(o)
@@ -1407,6 +1416,13 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
     }
 
     /** How much of each light reaches this object: measured at the point of its bounding sphere that faces the light. */
+    /** Selected, picked in Multi mode, or a member of the selected group. */
+    private fun hl(o: SceneObject, sel: SceneObject?): Boolean {
+        if (o === sel) return true
+        if (scene.multi.contains(o)) return true
+        return sel != null && scene.isGroup(sel) && Rig.isDescendant(scene, o, sel)
+    }
+
     private fun setLightVis(o: SceneObject) {
         var shaded = false
         if (false && visActive && o.shape != Shape.TERRAIN && o.shape != Shape.WATER && o.shape != Shape.GRASS && !o.shape.isEmitter) {
@@ -1792,7 +1808,7 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
             GLES20.glUniform2f(uScreen, w.toFloat(), h.toFloat())
             GLES20.glUniform1f(uMirror, 1f)
         }
-        val c = if (o === sel) floatArrayOf(minOf(1f, o.color[0] + 0.25f), minOf(1f, o.color[1] + 0.25f), minOf(1f, o.color[2] + 0.25f)) else o.color
+        val c = if (hl(o, sel)) floatArrayOf(minOf(1f, o.color[0] + 0.25f), minOf(1f, o.color[1] + 0.25f), minOf(1f, o.color[2] + 0.25f)) else o.color
         drawMesh(quad, vpc, model, c, true)
         GLES20.glUniform1f(uMirror, 0f)
     }

@@ -3,7 +3,7 @@
     <uses-feature android:glEsVersion="0x00020000" android:required="true" />
     <application
         android:allowBackup="true"
-        android:label="Mini 3D Editor"
+        android:label="${appLabel}"
         android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
         <activity
             android:name=".MainActivity"

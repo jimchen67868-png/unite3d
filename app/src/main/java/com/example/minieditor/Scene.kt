@@ -278,7 +278,7 @@ class Scene {
     }
 
     private fun canCopy(s: SceneObject): Boolean =
-        !(s.shape.isScreen || s.shape == Shape.SETTINGS || s.shape == Shape.CAMERA)
+        !(s.shape.isScreen || s.shape == Shape.SETTINGS || s.shape == Shape.CAMERA || isGroup(s))
 
     private fun cloneOf(s: SceneObject, name: String, dx: Float): SceneObject {
         val o = SceneObject(s.shape, name, s.x + dx, s.y, s.z, s.rx, s.ry, s.rz,
@@ -339,8 +339,70 @@ class Scene {
     fun hasClipboard(): Boolean = clipboard != null
 
     fun removeSelected() {
-        selected?.let { objects.remove(it) }
+        val s = selected
+        if (s != null) {
+            if (isGroup(s)) objects.removeAll(objects.filter { it !== s && Rig.isDescendant(this, it, s) }.toSet())
+            objects.remove(s)
+        }
         selected = null
+        multi.clear()
+    }
+
+    /** Deletes every object picked in Multi mode. */
+    fun removeMulti() {
+        for (o in multi.toList()) {
+            if (isGroup(o)) objects.removeAll(objects.filter { it !== o && Rig.isDescendant(this, it, o) }.toSet())
+            objects.remove(o)
+        }
+        multi.clear()
+        selected = null
+    }
+
+    // ---------- groups ----------
+    // A group is an invisible Bone called "Group n": the objects in it are attached to it, so moving or rotating
+    // the group moves them all together.
+
+    /** Objects picked in Multi mode (safe to read while drawing). */
+    val multi = java.util.concurrent.CopyOnWriteArraySet<SceneObject>()
+
+    fun isGroup(o: SceneObject): Boolean = o.shape == Shape.BONE && o.name.startsWith("Group ")
+
+    /** The outermost group an object belongs to, or the object itself if it is not in a group. */
+    fun groupRoot(o: SceneObject): SceneObject {
+        var cur = o
+        var n = 0
+        while (n < 32) {
+            val p = Rig.find(this, cur.parentId) ?: break
+            if (isGroup(p)) cur = p else break
+            n++
+        }
+        return cur
+    }
+
+    /** Puts the given objects into a new group (placed at their centre) and returns it. */
+    fun makeGroup(members: List<SceneObject>): SceneObject {
+        counter++
+        var cx = 0f
+        var cy = 0f
+        var cz = 0f
+        for (m in members) { cx += m.x; cy += m.y; cz += m.z }
+        val n = members.size.coerceAtLeast(1)
+        val g = SceneObject(Shape.BONE, "Group " + counter, x = cx / n, y = cy / n, z = cz / n, sx = 1f, sy = 1f, sz = 1f,
+            color = floatArrayOf(1f, 1f, 1f))
+        objects.add(g)
+        for (m in members) {
+            if (m === g || Rig.isDescendant(this, g, m)) continue
+            Rig.bind(m, g)
+        }
+        return g
+    }
+
+    /** Releases the members of a group (they stay where they are) and removes the group itself. */
+    fun ungroup(g: SceneObject) {
+        if (g.uid != 0) for (o in objects) if (o.parentId == g.uid) Rig.detach(o)
+        objects.remove(g)
+        if (selected === g) selected = null
+        multi.clear()
     }
 
     fun toJson(): String {
