@@ -515,35 +515,57 @@ end
             setSingleLine(true)
             if (secret) inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
         }
+        val hosts = arrayOf("Code is on GitHub", "Code is on Bitbucket")
+        val spinner = android.widget.Spinner(this)
+        spinner.adapter = android.widget.ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, hosts)
+        spinner.setSelection(sp.getInt("host", 0).coerceIn(0, 1))
         val nameBox = field("Game name", sp.getString("name", "My Game") ?: "My Game", false)
-        val repoBox = field("GitHub repo (owner/name)", sp.getString("repo", "jimchen67868-png/unite3d") ?: "", false)
-        val tokenBox = field("GitHub token", sp.getString("token", "") ?: "", true)
+        val repoBox = field("", sp.getString("repo", "jimchen67868-png/unite3d") ?: "", false)
+        val userBox = field("Atlassian account email (or Bitbucket username)", sp.getString("bbUser", "") ?: "", false)
+        val tokenBox = field("", sp.getString("token", "") ?: "", true)
+        val ciBox = field("CircleCI personal API token", sp.getString("ciToken", "") ?: "", true)
+        val help = TextView(this).apply { textSize = 12f }
         val form = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(16), dp(8), dp(16), 0)
-            addView(TextView(context).apply {
-                text = "Uploads this scene to your GitHub repo; GitHub Actions builds the APK (about 3-5 minutes). " +
-                    "The token needs: Contents = read and write, Actions = read and write (for this repo only)."
-                textSize = 12f
-            })
-            addView(nameBox); addView(repoBox); addView(tokenBox)
+            addView(spinner); addView(help); addView(nameBox); addView(repoBox); addView(userBox); addView(tokenBox); addView(ciBox)
         }
+        fun refreshForm() {
+            val bb = spinner.selectedItemPosition == 1
+            userBox.visibility = if (bb) View.VISIBLE else View.GONE
+            repoBox.hint = if (bb) "Bitbucket repo (workspace/repo-name)" else "GitHub repo (owner/name)"
+            tokenBox.hint = if (bb) "Bitbucket API token (with scopes)" else "GitHub token (Contents: read and write)"
+            help.text = "Uploads the scene to your repo, then CircleCI builds the APK (about 3-5 minutes). " +
+                "The repo must already be added as a project in CircleCI. The " + (if (bb) "API token" else "GitHub token") +
+                " is only used to upload the game file."
+        }
+        spinner.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(parent: android.widget.AdapterView<*>?, view: View?, position: Int, id: Long) { refreshForm() }
+            override fun onNothingSelected(parent: android.widget.AdapterView<*>?) {}
+        }
+        refreshForm()
         AlertDialog.Builder(this)
-            .setTitle("Build game APK")
+            .setTitle("Build game APK (CircleCI)")
             .setView(form)
             .setPositiveButton("Build") { _, _ ->
+                val hostIdx = spinner.selectedItemPosition
                 val name = nameBox.text.toString().trim().ifEmpty { "My Game" }
                 val repo = repoBox.text.toString().trim()
+                val user = userBox.text.toString().trim()
                 val token = tokenBox.text.toString().trim()
-                if (repo.isEmpty() || token.isEmpty()) { toast("Enter the repo and the token"); return@setPositiveButton }
-                sp.edit().putString("name", name).putString("repo", repo).putString("token", token).apply()
-                runCloudBuild(name, repo, token)
+                val ci = ciBox.text.toString().trim()
+                if (repo.isEmpty() || token.isEmpty()) { toast("Enter the repo and the " + (if (hostIdx == 1) "API token" else "GitHub token")); return@setPositiveButton }
+                if (hostIdx == 1 && user.isEmpty()) { toast("Enter your Atlassian email"); return@setPositiveButton }
+                if (ci.isEmpty()) { toast("Enter the CircleCI token"); return@setPositiveButton }
+                sp.edit().putInt("host", hostIdx).putString("name", name).putString("repo", repo).putString("bbUser", user)
+                    .putString("token", token).putString("ciToken", ci).apply()
+                runCloudBuild(hostIdx, name, repo, user, token, ci)
             }
             .setNegativeButton("Cancel", null)
             .show()
     }
 
-    private fun runCloudBuild(name: String, repo: String, token: String) {
+    private fun runCloudBuild(hostIdx: Int, name: String, repo: String, user: String, token: String, ci: String) {
         val zip = projectZipBytes(name)
         val msg = TextView(this).apply { text = "Starting..."; setPadding(dp(20), dp(16), dp(20), dp(8)) }
         val dlg = AlertDialog.Builder(this)
@@ -552,7 +574,9 @@ end
             .setCancelable(false)
             .setNegativeButton("Cancel", null)
             .show()
-        val cb = CloudBuild(token, repo) { s -> runOnUiThread { msg.text = s } }
+        val say: (String) -> Unit = { s -> runOnUiThread { msg.text = s } }
+        val host: RepoHost = if (hostIdx == 1) BitbucketHost(user, token, repo, say) else GitHubHost(token, repo, say)
+        val cb: ApkBuilder = CircleBuild(host, repo, ci, say)
         dlg.getButton(AlertDialog.BUTTON_NEGATIVE).setOnClickListener { cb.cancelled = true; dlg.dismiss() }
         Thread {
             try {
@@ -666,7 +690,7 @@ end
         pm.menu.add(0, 13, 12, "Load sample: lake (water)")
         pm.menu.add(0, 14, 13, "Load sample: campfire (fire and smoke)")
         pm.menu.add(0, 15, 14, "Load sample game: Battle Royale (shooter)")
-        pm.menu.add(0, 16, 15, "Build game APK (cloud)...")
+        pm.menu.add(0, 16, 15, "Build game APK (CircleCI)...")
         pm.menu.add(0, 7, 6, "Load sample game (Coin Rush)")
         pm.menu.add(0, 8, 7, "Editor lighting: " + (if (editor.renderer.editorBright) "Bright (tap for Scene)" else "Scene (tap for Bright)"))
         pm.setOnMenuItemClickListener { item ->

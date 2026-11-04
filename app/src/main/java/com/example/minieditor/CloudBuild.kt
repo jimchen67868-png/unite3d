@@ -11,8 +11,8 @@ import java.util.zip.ZipInputStream
  * Builds the game into an APK with GitHub Actions: uploads game/game.zip to the repo, waits for the
  * "Build Game APK" workflow, and downloads the finished app-debug.apk. Plain HttpURLConnection, no libraries.
  */
-class CloudBuild(private val token: String, private val repo: String, private val say: (String) -> Unit) {
-    @Volatile var cancelled = false
+class CloudBuild(private val token: String, private val repo: String, private val say: (String) -> Unit) : ApkBuilder {
+    @Volatile override var cancelled = false
     private val api = "https://api.github.com"
 
     private class Reply(val code: Int, val body: ByteArray, val location: String?) {
@@ -69,8 +69,8 @@ class CloudBuild(private val token: String, private val repo: String, private va
         return if (runs.length() > 0) runs.getJSONObject(0) else null
     }
 
-    /** Uploads [zip] as game/game.zip, waits for the build and returns the APK bytes. */
-    fun build(zip: ByteArray): ByteArray {
+    /** Uploads [zip] as game/game.zip on the default branch. Returns (branch, commit sha). */
+    fun uploadGame(zip: ByteArray): Pair<String, String> {
         say("Checking the repository...")
         val r = http("GET", "$api/repos/$repo")
         if (r.code == 401) throw RuntimeException("The token was refused (401). Make a new token.")
@@ -93,6 +93,12 @@ class CloudBuild(private val token: String, private val repo: String, private va
         }
         val commit = JSONObject(up.text).getJSONObject("commit").getString("sha")
         check()
+        return Pair(branch, commit)
+    }
+
+    /** Uploads [zip] as game/game.zip, waits for the build and returns the APK bytes. */
+    override fun build(zip: ByteArray): ByteArray {
+        val (branch, commit) = uploadGame(zip)
 
         // wait for the workflow run (started by the push; started by hand if the push did not start one)
         say("Waiting for GitHub to start the build...")
