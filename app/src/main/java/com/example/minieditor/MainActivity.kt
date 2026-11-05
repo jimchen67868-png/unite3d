@@ -521,7 +521,7 @@ end
         spinner.setSelection(sp.getInt("host", 0).coerceIn(0, 1))
         val nameBox = field("Game name", sp.getString("name", "My Game") ?: "My Game", false)
         val repoBox = field("", sp.getString("repo", "jimchen67868-png/unite3d") ?: "", false)
-        val userBox = field("Atlassian account email (or Bitbucket username)", sp.getString("bbUser", "") ?: "", false)
+        val userBox = field("Bitbucket OAuth consumer key (or your Atlassian email)", sp.getString("bbUser", "") ?: "", false)
         val tokenBox = field("", sp.getString("token", "") ?: "", true)
         val ciBox = field("CircleCI personal API token", sp.getString("ciToken", "") ?: "", true)
         val help = TextView(this).apply { textSize = 12f }
@@ -534,9 +534,9 @@ end
             val bb = spinner.selectedItemPosition == 1
             userBox.visibility = if (bb) View.VISIBLE else View.GONE
             repoBox.hint = if (bb) "Bitbucket repo (workspace/repo-name)" else "GitHub repo (owner/name)"
-            tokenBox.hint = if (bb) "Bitbucket API token (with scopes)" else "GitHub token (Contents: read and write)"
+            tokenBox.hint = if (bb) "Bitbucket OAuth consumer secret (or the API token)" else "GitHub token (Contents: read and write)"
             help.text = "Uploads the scene to your repo, then CircleCI builds the APK (about 3-5 minutes). " +
-                "The repo must already be added as a project in CircleCI. The " + (if (bb) "API token" else "GitHub token") +
+                "The repo must already be added as a project in CircleCI. The " + (if (bb) "OAuth consumer" else "GitHub token") +
                 " is only used to upload the game file."
         }
         spinner.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
@@ -554,8 +554,8 @@ end
                 val user = userBox.text.toString().trim()
                 val token = tokenBox.text.toString().trim()
                 val ci = ciBox.text.toString().trim()
-                if (repo.isEmpty() || token.isEmpty()) { toast("Enter the repo and the " + (if (hostIdx == 1) "API token" else "GitHub token")); return@setPositiveButton }
-                if (hostIdx == 1 && user.isEmpty()) { toast("Enter your Atlassian email"); return@setPositiveButton }
+                if (repo.isEmpty() || token.isEmpty()) { toast("Enter the repo and the " + (if (hostIdx == 1) "OAuth consumer secret" else "GitHub token")); return@setPositiveButton }
+                if (hostIdx == 1 && user.isEmpty()) { toast("Enter the OAuth consumer key"); return@setPositiveButton }
                 if (ci.isEmpty()) { toast("Enter the CircleCI token"); return@setPositiveButton }
                 sp.edit().putInt("host", hostIdx).putString("name", name).putString("repo", repo).putString("bbUser", user)
                     .putString("token", token).putString("ciToken", ci).apply()

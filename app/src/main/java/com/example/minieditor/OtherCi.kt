@@ -25,21 +25,44 @@ class GitHubHost(token: String, repo: String, say: (String) -> Unit) : RepoHost 
 }
 
 class BitbucketHost(
-    private val user: String,
-    private val appPassword: String,
+    private val consumerKey: String,
+    private val consumerSecret: String,
     private val repo: String,
     private val say: (String) -> Unit
 ) : RepoHost {
     @Volatile override var cancelled = false
     override val slugPrefix = "bb"
     private val api = "https://api.bitbucket.org/2.0"
-    private fun auth(): String = "Basic " + Base64.encodeToString((user + ":" + appPassword).toByteArray(), Base64.NO_WRAP)
+    private var bearer: String? = null
+
+    /** Swaps the OAuth consumer key + secret for a 2-hour access token (client credentials). */
+    private fun auth(): String {
+        // an Atlassian email as the first box means: email + API token (plain Basic login)
+        if (consumerKey.contains("@")) {
+            return "Basic " + Base64.encodeToString((consumerKey + ":" + consumerSecret).toByteArray(), Base64.NO_WRAP)
+        }
+        var t = bearer
+        if (t == null) {
+            val basic = "Basic " + Base64.encodeToString((consumerKey + ":" + consumerSecret).toByteArray(), Base64.NO_WRAP)
+            val r = Net.call("POST", "https://bitbucket.org/site/oauth2/access_token",
+                mapOf("Authorization" to basic, "Content-Type" to "application/x-www-form-urlencoded"),
+                "grant_type=client_credentials".toByteArray())
+            if (r.code != 200) {
+                throw RuntimeException("Bitbucket refused the OAuth key and secret (HTTP " + r.code + "). " +
+                    "Check them, and that the consumer is a private consumer with Repositories: Read and Write.")
+            }
+            t = JSONObject(r.text).getString("access_token")
+            bearer = t
+        }
+        return "Bearer " + t
+    }
 
     override fun uploadGame(zip: ByteArray): String {
         say("Checking the Bitbucket repository...")
         val r = Net.call("GET", "$api/repositories/$repo", mapOf("Authorization" to auth(), "Accept" to "application/json"), null)
         if (r.code == 401 || r.code == 403) {
-            throw RuntimeException("Bitbucket refused the login (HTTP " + r.code + "). Check the email (or username) and the API token. The token needs these scopes: read:repository:bitbucket and write:repository:bitbucket (also read:user and read:workspace).")
+            throw RuntimeException("Bitbucket would not let this login into $repo (HTTP " + r.code + "). " +
+                "Use an OAuth consumer with Repositories: Read and Write, or an API token with the read:repository and write:repository scopes.")
         }
         if (r.code != 200) throw RuntimeException("Cannot open $repo on Bitbucket (HTTP " + r.code + "). Use workspace/repo-name.")
         val branch = JSONObject(r.text).optJSONObject("mainbranch")?.optString("name", "main") ?: "main"
