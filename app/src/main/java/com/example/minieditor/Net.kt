@@ -6,6 +6,10 @@ import java.net.URL
 /** Something that can turn a game zip into an APK somewhere in the cloud. */
 interface ApkBuilder {
     var cancelled: Boolean
+    /** Called with 0-100 as the build moves along (for the progress bar). */
+    var onProgress: ((Int) -> Unit)?
+        get() = null
+        set(_) {}
     fun build(zip: ByteArray): ByteArray
 }
 

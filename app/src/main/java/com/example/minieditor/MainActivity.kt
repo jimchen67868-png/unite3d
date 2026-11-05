@@ -581,6 +581,7 @@ end
         Thread {
             try {
                 val apk = cb.build(zip)
+                runOnUiThread { msg.text = "Saving the APK..." }
                 val file = name.replace(Regex("[^A-Za-z0-9._-]"), "_") + ".apk"
                 val uri = saveApk(apk, file)
                 runOnUiThread {

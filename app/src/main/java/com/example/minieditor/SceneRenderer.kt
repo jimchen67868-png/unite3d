@@ -364,6 +364,8 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
                         if (i >= uLCount) break;
                         float pd = length(uLPos[i] - vW);
                         float pa = clamp(1.0 - pd / max(uLCol[i].w, 0.001), 0.0, 1.0);
+                        // a box or wall between the light and the smoke blocks it, like for everything else
+                        if (uCubeOn > 0.5) pa *= lightVisAt(i, uLPos[i]);
                         sl += uLCol[i].rgb * pa * pa * 0.9;
                     }
                     sc *= clamp(sl * 1.25, 0.0, 1.5);
@@ -1114,17 +1116,20 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         GLES20.glEnable(GLES20.GL_BLEND)
         GLES20.glBlendFunc(GLES20.GL_SRC_ALPHA, GLES20.GL_ONE_MINUS_SRC_ALPHA)
         GLES20.glEnable(GLES20.GL_POLYGON_OFFSET_FILL)
+        // Every shadow copy gets its OWN depth offset (a hair closer to the camera than the one before), so
+        // each copy blends once everywhere: flattened faces of one object never double up inside a copy, and
+        // the sun's shadow, each lamp's shadow and the soft copies all show together instead of hiding each other.
+        var n = 0
         for (k in 0 until samples) {
-            // each copy sits a hair closer to the camera so every copy blends, but copies of the same
-            // pass never double up where one object's flattened faces overlap
-            GLES20.glPolygonOffset(0f, -(k + 1) * 1.5f)
             if (sunOk) {
+                GLES20.glPolygonOffset(0f, -(++n) * 1.5f)
                 val sp = soft * 0.15f
                 dirMatrix(shM, -lx / ll + ox[k] * sp, -ly / ll, -lz / ll + oz[k] * sp, gh)
                 val total = strength
                 drawShadowSet(casters, vpc, tint, passAlpha(total, samples)) { false }
             }
             for (l in lights) {
+                GLES20.glPolygonOffset(0f, -(++n) * 1.5f)
                 val j = soft * 0.8f
                 pointMatrix(shM, l.x + ox[k] * j, l.y, l.z + oz[k] * j, gh)
                 val total = strength * minOf(1f, l.sx / 1.5f)

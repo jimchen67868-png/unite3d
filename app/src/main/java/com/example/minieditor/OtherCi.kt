@@ -103,6 +103,9 @@ class CircleBuild(
         get() = flag
         set(v) { flag = v; host.cancelled = v }
 
+    override var onProgress: ((Int) -> Unit)? = null
+    private fun pct(p: Int) { onProgress?.invoke(p.coerceIn(0, 100)) }
+
     private val api = "https://circleci.com/api/v2"
     private val slug = host.slugPrefix + "/" + repo
     private fun hdr(json: Boolean = false): Map<String, String> =
@@ -148,8 +151,10 @@ class CircleBuild(
 
 
     override fun build(zip: ByteArray): ByteArray {
+        pct(3)
         val branch = host.uploadGame(zip)
         check()
+        pct(15)
         say("Starting the CircleCI build...")
         val body = JSONObject().put("branch", branch).put("parameters", JSONObject().put("build_game", true)).toString().toByteArray()
         val t = net("POST", "$api/project/$slug/pipeline", hdr(true), body)
@@ -158,6 +163,7 @@ class CircleBuild(
                 "\nIs this repo added as a project in CircleCI, and is the CircleCI token right?")
         }
         val pipelineId = JSONObject(t.text).getString("id")
+        pct(18)
 
         var wfId: String? = null
         val t0 = nowMs()
@@ -170,6 +176,7 @@ class CircleBuild(
                     if (items.length() > 0) wfId = items.getJSONObject(0).getString("id")
                 }
                 if (wfId == null) {
+                    pct(20)
                     say("Waiting for CircleCI to start the workflow...")
                     if (nowMs() - t0 > 4 * 60 * 1000L) {
                         throw RuntimeException("CircleCI made no workflow. Is .circleci/config.yml in the repo?")
@@ -179,7 +186,10 @@ class CircleBuild(
                 val w = net("GET", "$api/workflow/$wfId", hdr(), null)
                 if (w.code == 200) {
                     val st = JSONObject(w.text).optString("status")
-                    say("CircleCI is building: " + st.replace('_', ' ') + " (" + ((nowMs() - t0) / 1000) + " s)")
+                    val secs = (nowMs() - t0) / 1000.0
+                    // a build usually takes about 5 minutes: the bar creeps towards 90% and never stops moving
+                    pct(25 + (65.0 * (1.0 - Math.exp(-secs / 200.0))).toInt())
+                    say("CircleCI is building: " + st.replace('_', ' ') + " (" + secs.toInt() + " s)")
                     if (st == "success") break
                     if (st == "failed" || st == "error" || st == "failing" || st == "canceled" || st == "unauthorized" || st == "not_run") {
                         throw RuntimeException("The build ended with: " + st + ". Open the pipeline in CircleCI to see why.")
@@ -190,6 +200,7 @@ class CircleBuild(
             Thread.sleep(8000)
         }
 
+        pct(92)
         say("Downloading the APK...")
         val j = net("GET", "$api/workflow/$wfId/job", hdr(), null)
         if (j.code != 200) throw RuntimeException("Could not read the CircleCI jobs (HTTP " + j.code + ").")
@@ -200,6 +211,7 @@ class CircleBuild(
             if (o.optString("name") == "game" && o.has("job_number")) jobNumber = o.getLong("job_number")
         }
         if (jobNumber < 0) throw RuntimeException("CircleCI had no job called \"game\".")
+        pct(94)
         val a = net("GET", "$api/project/$slug/$jobNumber/artifacts", hdr(), null)
         if (a.code != 200) throw RuntimeException("Could not list the build files (HTTP " + a.code + ").")
         val items = JSONObject(a.text).getJSONArray("items")
@@ -209,6 +221,7 @@ class CircleBuild(
             if (o.optString("path").endsWith(".apk")) url = o.getString("url")
         }
         if (url == null) throw RuntimeException("The build finished but made no APK.")
+        pct(96)
         val dl = netDownload(url, hdr())
         if (dl.code != 200) throw RuntimeException("Download failed (HTTP " + dl.code + ").")
         return dl.body
