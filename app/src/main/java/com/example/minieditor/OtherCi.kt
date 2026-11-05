@@ -111,12 +111,48 @@ class CircleBuild(
 
     private fun check() { if (flag) throw RuntimeException("Cancelled") }
 
+    private var fails = 0
+
+    /** A network call that waits and tries again when the phone has no network for a while (for example while the app was in the background). */
+    private fun net(method: String, url: String, headers: Map<String, String>, body: ByteArray? = null): Net.Reply {
+        while (true) {
+            check()
+            try {
+                val r = Net.call(method, url, headers, body)
+                fails = 0
+                return r
+            } catch (e: java.io.IOException) {
+                fails++
+                say("No network, trying again... (" + fails + ")")
+                if (fails > 60) throw RuntimeException("The network is gone: " + e.message)
+                Thread.sleep(5000)
+            }
+        }
+    }
+
+    private fun netDownload(url: String, firstHeaders: Map<String, String>): Net.Reply {
+        while (true) {
+            check()
+            try {
+                val r = Net.download(url, firstHeaders)
+                fails = 0
+                return r
+            } catch (e: java.io.IOException) {
+                fails++
+                say("No network, trying again... (" + fails + ")")
+                if (fails > 60) throw RuntimeException("The network is gone: " + e.message)
+                Thread.sleep(5000)
+            }
+        }
+    }
+
+
     override fun build(zip: ByteArray): ByteArray {
         val branch = host.uploadGame(zip)
         check()
         say("Starting the CircleCI build...")
         val body = JSONObject().put("branch", branch).put("parameters", JSONObject().put("build_game", true)).toString().toByteArray()
-        val t = Net.call("POST", "$api/project/$slug/pipeline", hdr(true), body)
+        val t = net("POST", "$api/project/$slug/pipeline", hdr(true), body)
         if (t.code != 201 && t.code != 200) {
             throw RuntimeException("CircleCI would not start a build (HTTP " + t.code + "): " + Net.short(t.text) +
                 "\nIs this repo added as a project in CircleCI, and is the CircleCI token right?")
@@ -128,7 +164,7 @@ class CircleBuild(
         while (true) {
             check()
             if (wfId == null) {
-                val w = Net.call("GET", "$api/pipeline/$pipelineId/workflow", hdr(), null)
+                val w = net("GET", "$api/pipeline/$pipelineId/workflow", hdr(), null)
                 if (w.code == 200) {
                     val items = JSONObject(w.text).getJSONArray("items")
                     if (items.length() > 0) wfId = items.getJSONObject(0).getString("id")
@@ -140,7 +176,7 @@ class CircleBuild(
                     }
                 }
             } else {
-                val w = Net.call("GET", "$api/workflow/$wfId", hdr(), null)
+                val w = net("GET", "$api/workflow/$wfId", hdr(), null)
                 if (w.code == 200) {
                     val st = JSONObject(w.text).optString("status")
                     say("CircleCI is building: " + st.replace('_', ' ') + " (" + ((nowMs() - t0) / 1000) + " s)")
@@ -155,7 +191,7 @@ class CircleBuild(
         }
 
         say("Downloading the APK...")
-        val j = Net.call("GET", "$api/workflow/$wfId/job", hdr(), null)
+        val j = net("GET", "$api/workflow/$wfId/job", hdr(), null)
         if (j.code != 200) throw RuntimeException("Could not read the CircleCI jobs (HTTP " + j.code + ").")
         val jobs = JSONObject(j.text).getJSONArray("items")
         var jobNumber = -1L
@@ -164,7 +200,7 @@ class CircleBuild(
             if (o.optString("name") == "game" && o.has("job_number")) jobNumber = o.getLong("job_number")
         }
         if (jobNumber < 0) throw RuntimeException("CircleCI had no job called \"game\".")
-        val a = Net.call("GET", "$api/project/$slug/$jobNumber/artifacts", hdr(), null)
+        val a = net("GET", "$api/project/$slug/$jobNumber/artifacts", hdr(), null)
         if (a.code != 200) throw RuntimeException("Could not list the build files (HTTP " + a.code + ").")
         val items = JSONObject(a.text).getJSONArray("items")
         var url: String? = null
@@ -173,7 +209,7 @@ class CircleBuild(
             if (o.optString("path").endsWith(".apk")) url = o.getString("url")
         }
         if (url == null) throw RuntimeException("The build finished but made no APK.")
-        val dl = Net.download(url, hdr())
+        val dl = netDownload(url, hdr())
         if (dl.code != 200) throw RuntimeException("Download failed (HTTP " + dl.code + ").")
         return dl.body
     }
