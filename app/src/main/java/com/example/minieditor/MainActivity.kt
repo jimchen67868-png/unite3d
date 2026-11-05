@@ -64,6 +64,8 @@ class MainActivity : Activity(), SensorEventListener {
     private lateinit var bottomPanel: LinearLayout
     private var gameMode = false
     private lateinit var toolsButton: Button
+    private lateinit var moreButton: Button
+    private lateinit var moreRows: LinearLayout
     private lateinit var transformRow: LinearLayout
     private lateinit var playButton: Button
     private lateinit var joystick: JoystickView
@@ -374,6 +376,11 @@ end
             if (!show) { editor.locked = false; refreshButtons() }
             toolsButton.setBackgroundColor(if (show) 0xFF3D7BFF.toInt() else 0xFF444444.toInt())
         }
+        moreButton = btn("More") {
+            val show = moreRows.visibility != View.VISIBLE
+            moreRows.visibility = if (show) View.VISIBLE else View.GONE
+            moreButton.setBackgroundColor(if (show) 0xFF3D7BFF.toInt() else 0xFF444444.toInt())
+        }
         fileButton = btn("File") { showFileMenu() }
         playButton = btn("Play") { togglePlay() }
         playButton.setBackgroundColor(0xFF2E8B57.toInt())
@@ -386,29 +393,7 @@ end
             setBackgroundColor(0xAA000000.toInt())
             addView(consoleView)
             addView(info)
-            addView(row(
-                btn("+Cube", true) { scene.add(Shape.CUBE); editor.refresh() },
-                btn("+Pyramid", true) { scene.add(Shape.PYRAMID); editor.refresh() },
-                btn("+Sphere", true) { scene.add(Shape.SPHERE); editor.refresh() },
-                importButton
-            ))
-            transformRow = row(lockButton, modeButtons[Mode.MOVE]!!, modeButtons[Mode.ROTATE]!!, modeButtons[Mode.SCALE]!!, yButton)
-            transformRow.visibility = View.GONE   // select-only by default; Tools shows Lock / Move / Rotate / Scale / Axis
-            addView(transformRow)
-            addView(row(
-                btn("Cut", true) { if (scene.cutSelected()) editor.refresh() else toast("Select an object first") },
-                btn("Copy", true) { if (scene.copySelected()) toast("Copied") else toast("Select an object first") },
-                btn("Paste", true) { if (scene.paste() != null) editor.refresh() else toast("Nothing to paste") },
-                btn("Delete", true) {
-                    if (editor.multiMode && scene.multi.isNotEmpty()) { scene.removeMulti(); editor.refresh() }
-                    else if (scene.selected != null) { scene.removeSelected(); editor.refresh() }
-                    else toast("Select an object first")
-                },
-                btn("Undo") { }.also { b -> b.setOnClickListener { undo() } },
-                btn("Redo") { }.also { b -> b.setOnClickListener { redo() } }
-            ))
-            multiButton = btn("Multi: Off") { toggleMulti() }
-            addView(row(multiButton, btn("Group", true) { doGroup() }, btn("Ungroup", true) { doUngroup() }))
+            // always visible: two rows. Everything else is behind "More".
             addView(row(
                 btn("Hierarchy") { setPanel(Panel.HIER) },
                 btn("Inspector") { setPanel(Panel.INSPECT) },
@@ -419,11 +404,42 @@ end
             addView(row(
                 playButton,
                 viewButton,
-                cameraButton,
-                selectButton,
-                toolsButton,
-                btn("Clear log") { logLines.clear(); showLog() }
+                btn("Undo") { }.also { b -> b.setOnClickListener { undo() } },
+                btn("Redo") { }.also { b -> b.setOnClickListener { redo() } },
+                moreButton
             ))
+            multiButton = btn("Multi: Off") { toggleMulti() }
+            transformRow = row(lockButton, modeButtons[Mode.MOVE]!!, modeButtons[Mode.ROTATE]!!, modeButtons[Mode.SCALE]!!, yButton)
+            transformRow.visibility = View.GONE   // Tools shows Lock / Move / Rotate / Scale / Axis
+            moreRows = LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.VERTICAL
+                visibility = View.GONE
+                addView(row(
+                    btn("+Cube", true) { scene.add(Shape.CUBE); editor.refresh() },
+                    btn("+Pyramid", true) { scene.add(Shape.PYRAMID); editor.refresh() },
+                    btn("+Sphere", true) { scene.add(Shape.SPHERE); editor.refresh() },
+                    importButton
+                ))
+                addView(row(
+                    btn("Cut", true) { if (scene.cutSelected()) editor.refresh() else toast("Select an object first") },
+                    btn("Copy", true) { if (scene.copySelected()) toast("Copied") else toast("Select an object first") },
+                    btn("Paste", true) { if (scene.paste() != null) editor.refresh() else toast("Nothing to paste") },
+                    btn("Delete", true) {
+                        if (editor.multiMode && scene.multi.isNotEmpty()) { scene.removeMulti(); editor.refresh() }
+                        else if (scene.selected != null) { scene.removeSelected(); editor.refresh() }
+                        else toast("Select an object first")
+                    }
+                ))
+                addView(row(multiButton, btn("Group", true) { doGroup() }, btn("Ungroup", true) { doUngroup() }))
+                addView(transformRow)
+                addView(row(
+                    cameraButton,
+                    selectButton,
+                    toolsButton,
+                    btn("Clear log") { logLines.clear(); showLog() }
+                ))
+            }
+            addView(moreRows)
         }
 
         bottomPanel = bottom
