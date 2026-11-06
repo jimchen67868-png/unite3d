@@ -45,7 +45,7 @@ class ScriptEngine(private val scene: Scene, private val log: (String) -> Unit) 
     private val worldPushed = FloatArray(6)
     private var time = 0f
     private var spawnCount = 0
-    private val maxObjects = 500
+    private val maxObjects = 800
 
     var touching = false
     var touchX = 0f
@@ -241,9 +241,9 @@ class ScriptEngine(private val scene: Scene, private val log: (String) -> Unit) 
         num(t, "rx")?.let { o.rx = it }
         num(t, "ry")?.let { o.ry = it }
         num(t, "rz")?.let { o.rz = it }
-        num(t, "sx")?.let { o.sx = it.coerceIn(0.01f, 100f) }
-        num(t, "sy")?.let { o.sy = it.coerceIn(0.01f, 100f) }
-        num(t, "sz")?.let { o.sz = it.coerceIn(0.01f, 100f) }
+        num(t, "sx")?.let { o.sx = it.coerceIn(0.01f, 2000f) }
+        num(t, "sy")?.let { o.sy = it.coerceIn(0.01f, 2000f) }
+        num(t, "sz")?.let { o.sz = it.coerceIn(0.01f, 2000f) }
         num(t, "collider")?.let { o.collider = it.toInt().coerceIn(0, 2) }
         num(t, "opacity")?.let { o.opacity = it.coerceIn(0f, 1f) }
         num(t, "emit")?.let { o.emit = it.coerceIn(0f, 1f) }

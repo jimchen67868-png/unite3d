@@ -1892,7 +1892,7 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         // Grid + axes
         if (gridBuilt != gridHalf) {
             gridBuilt = gridHalf
-            val step = if (gridHalf <= 30) 1 else if (gridHalf <= 150) 5 else if (gridHalf <= 600) 20 else 50
+            val step = if (gridHalf <= 100) 1 else if (gridHalf <= 300) 5 else if (gridHalf <= 800) 20 else 50
             gridStep = step
             grid = Meshes.grid(maxOf(step, gridHalf / step * step), step)
         }
