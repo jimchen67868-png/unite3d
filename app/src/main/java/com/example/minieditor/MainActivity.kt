@@ -63,9 +63,8 @@ class MainActivity : Activity(), SensorEventListener {
     private lateinit var multiButton: Button
     private lateinit var bottomPanel: LinearLayout
     private var gameMode = false
-    private lateinit var toolsButton: Button
-    private lateinit var moreButton: Button
     private lateinit var moreRows: LinearLayout
+    private var toolbarShowTab: (Int) -> Unit = {}   // opens a toolbar tab by number (1 = Play)
     private lateinit var transformRow: LinearLayout
     private lateinit var playButton: Button
     private lateinit var joystick: JoystickView
@@ -338,6 +337,24 @@ end
         setOnClickListener { if (structural && playing) toast("Stop play mode first") else { record(); onClick(); record() } }
     }
 
+    /** A row of tab buttons; tapping one shows only that box. Returns the row. */
+    private fun tabbedBoxes(names: List<String>, boxes: List<View>, first: Int = 0): LinearLayout {
+        val buttons = ArrayList<Button>()
+        fun show(i: Int) {
+            boxes.forEachIndexed { k, b -> b.visibility = if (k == i) View.VISIBLE else View.GONE }
+            buttons.forEachIndexed { k, b -> b.setBackgroundColor(if (k == i) 0xFF3D7BFF.toInt() else 0xFF555555.toInt()) }
+        }
+        names.forEachIndexed { i, n ->
+            val b = btn(n) { }
+            b.setOnClickListener { clearFieldFocus(); show(i) }
+            buttons.add(b)
+        }
+        show(first)
+        return row(*buttons.toTypedArray())
+    }
+
+    private fun vbox() = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+
     private fun row(vararg views: View) = LinearLayout(this).apply {
         orientation = LinearLayout.HORIZONTAL
         views.forEach { addView(it) }
@@ -373,17 +390,6 @@ end
             if (!editor.selectEnabled) { editor.locked = false; scene.selected = null; editor.refresh() }
             refreshButtons()
         }
-        toolsButton = btn("Tools") {
-            val show = transformRow.visibility != View.VISIBLE
-            transformRow.visibility = if (show) View.VISIBLE else View.GONE
-            if (!show) { editor.locked = false; refreshButtons() }
-            toolsButton.setBackgroundColor(if (show) 0xFF3D7BFF.toInt() else 0xFF444444.toInt())
-        }
-        moreButton = btn("More") {
-            val show = moreRows.visibility != View.VISIBLE
-            moreRows.visibility = if (show) View.VISIBLE else View.GONE
-            moreButton.setBackgroundColor(if (show) 0xFF3D7BFF.toInt() else 0xFF444444.toInt())
-        }
         fileButton = btn("File") { showFileMenu() }
         playButton = btn("Play") { togglePlay() }
         playButton.setBackgroundColor(0xFF2E8B57.toInt())
@@ -396,33 +402,31 @@ end
             setBackgroundColor(0xAA000000.toInt())
             addView(consoleView)
             addView(info)
-            // always visible: two rows. Everything else is behind "More".
-            addView(row(
-                btn("Hierarchy") { setPanel(Panel.HIER) },
-                btn("Inspector") { setPanel(Panel.INSPECT) },
-                btn("Material") { setPanel(Panel.MATERIAL) },
-                btn("Script") { setPanel(Panel.SCRIPT) },
-                fileButton
-            ))
-            addView(row(
-                playButton,
-                viewButton,
-                btn("Undo") { }.also { b -> b.setOnClickListener { undo() } },
-                btn("Redo") { }.also { b -> b.setOnClickListener { redo() } },
-                moreButton
-            ))
+            // One row of category tabs; under it only the buttons of the chosen category. Tapping the chosen tab again hides them.
             multiButton = btn("Multi: Off") { toggleMulti() }
             transformRow = row(lockButton, modeButtons[Mode.MOVE]!!, modeButtons[Mode.ROTATE]!!, modeButtons[Mode.SCALE]!!, yButton)
-            transformRow.visibility = View.GONE   // Tools shows Lock / Move / Rotate / Scale / Axis
-            // "More" opens one row of categories; only the chosen category's row is shown (max 2 extra rows).
             val catRows = listOf(
+                // 0 Panels
+                row(
+                    btn("Hierarchy") { setPanel(Panel.HIER) },
+                    btn("Inspector") { setPanel(Panel.INSPECT) },
+                    btn("Material") { setPanel(Panel.MATERIAL) },
+                    btn("Script") { setPanel(Panel.SCRIPT) },
+                    fileButton
+                ),
+                // 1 Play
+                row(playButton, viewButton),
+                // 2 Add
                 row(
                     btn("+Cube", true) { scene.add(Shape.CUBE); editor.refresh() },
                     btn("+Pyramid", true) { scene.add(Shape.PYRAMID); editor.refresh() },
                     btn("+Sphere", true) { scene.add(Shape.SPHERE); editor.refresh() },
                     importButton
                 ),
+                // 3 Edit
                 row(
+                    btn("Undo") { }.also { b -> b.setOnClickListener { undo() } },
+                    btn("Redo") { }.also { b -> b.setOnClickListener { redo() } },
                     btn("Cut", true) { if (scene.cutSelected()) editor.refresh() else toast("Select an object first") },
                     btn("Copy", true) { if (scene.copySelected()) toast("Copied") else toast("Select an object first") },
                     btn("Paste", true) { if (scene.paste() != null) editor.refresh() else toast("Nothing to paste") },
@@ -432,33 +436,39 @@ end
                         else toast("Select an object first")
                     }
                 ),
+                // 4 Group
                 row(multiButton, btn("Group", true) { doGroup() }, btn("Ungroup", true) { doUngroup() }),
+                // 5 View
                 row(
                     cameraButton,
                     selectButton,
-                    toolsButton,
                     btn("Clear log") { logLines.clear(); showLog() }
-                )
+                ),
+                // 6 Tools
+                transformRow
             )
-            val catNames = listOf("Add", "Edit", "Group", "View")
+            val catNames = listOf("Panels", "Play", "Add", "Edit", "Group", "View", "Tools")
+            val toolsIdx = 6
             val catButtons = ArrayList<Button>()
+            var chosen = toolsIdx
             fun showCat(i: Int) {
+                if (chosen == toolsIdx && i != toolsIdx) { editor.locked = false; refreshButtons() }
+                chosen = i
                 catRows.forEachIndexed { k, r -> r.visibility = if (k == i) View.VISIBLE else View.GONE }
                 catButtons.forEachIndexed { k, b -> b.setBackgroundColor(if (k == i) 0xFF3D7BFF.toInt() else 0xFF555555.toInt()) }
             }
             catNames.forEachIndexed { i, n ->
                 val b = btn(n) { }
-                b.setOnClickListener { showCat(i) }
+                b.setOnClickListener { showCat(if (i == chosen) -1 else i) }
                 catButtons.add(b)
             }
+            toolbarShowTab = { showCat(it) }
             moreRows = LinearLayout(this@MainActivity).apply {
                 orientation = LinearLayout.VERTICAL
-                visibility = View.GONE
                 addView(row(*catButtons.toTypedArray()))
                 catRows.forEach { addView(it) }
-                addView(transformRow)
             }
-            showCat(0)
+            showCat(toolsIdx)
             addView(moreRows)
         }
 
@@ -1020,6 +1030,7 @@ end
         joystick.reset()
         buttonViews.forEach { it.reset() }
         playButton.text = "Stop"
+        toolbarShowTab(1)
         playButton.setBackgroundColor(0xFFC0392B.toInt())
         try {
             val eng = ScriptEngine(scene) { appendLog(it) }
@@ -1225,25 +1236,28 @@ end
             val o = matTarget()
             if (o != null) { o.pattern = (o.pattern + 1) % 3; editor.refresh() }
         }
+        val boxLook = vbox().apply { addView(row(presetBtn, patternBtn, photoBtn)) }
+        val boxShine = vbox().apply {
+            for (i in 0..2) { addView(matLabels[i]); addView(matSliders[i]) }
+        }
+        val boxOpacity = vbox().apply {
+            addView(matLabels[3])
+            addView(matSliders[3])
+            // fine control: the slider is touchy, these change opacity by an exact amount
+            addView(row(
+                btn("-10%") { nudgeOpacity(-0.1f) },
+                btn("-1%") { nudgeOpacity(-0.01f) },
+                btn("+1%") { nudgeOpacity(0.01f) },
+                btn("+10%") { nudgeOpacity(0.1f) },
+                btn("Solid") { nudgeOpacity(1f) }
+            ))
+        }
         materialView = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             visibility = View.GONE
             setPadding(dp(6), dp(4), dp(6), dp(4))
-            addView(row(presetBtn, patternBtn, photoBtn))
-            for (i in 0..3) {
-                addView(matLabels[i])
-                addView(matSliders[i])
-                if (i == 3) {
-                    // fine control: the slider is touchy, these change opacity by an exact amount
-                    addView(row(
-                        btn("-10%") { nudgeOpacity(-0.1f) },
-                        btn("-1%") { nudgeOpacity(-0.01f) },
-                        btn("+1%") { nudgeOpacity(0.01f) },
-                        btn("+10%") { nudgeOpacity(0.1f) },
-                        btn("Solid") { nudgeOpacity(1f) }
-                    ))
-                }
-            }
+            addView(tabbedBoxes(listOf("Look", "Shine", "Opacity"), listOf(boxLook, boxShine, boxOpacity)))
+            addView(boxLook); addView(boxShine); addView(boxOpacity)
         }
     }
 
@@ -1441,19 +1455,25 @@ end
             setOnFocusChangeListener { _, has -> if (!has) applyName() }
             setOnEditorActionListener { _, a, _ -> if (a == EditorInfo.IME_ACTION_DONE) applyName(); false }
         }
+        val catTransform = vbox()
+        val catColour = vbox()
+        val catObject = vbox()
+        val catExtra = vbox()
         inspectorView = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             visibility = View.GONE
             setPadding(dp(6), dp(4), dp(6), dp(4))
-            addView(nameField)
-            addView(fieldRow("Pos", 0))
-            addView(fieldRow("Rot", 3))
-            addView(fieldRow("Scale", 6))
+            addView(tabbedBoxes(listOf("Transform", "Colour", "Object", "Extra"), listOf(catTransform, catColour, catObject, catExtra)))
+            addView(catTransform); addView(catColour); addView(catObject); addView(catExtra)
+            catTransform.addView(nameField)
+            catTransform.addView(fieldRow("Pos", 0))
+            catTransform.addView(fieldRow("Rot", 3))
+            catTransform.addView(fieldRow("Scale", 6))
             objSwatches = swatchRow(swatchColors)
-            addView(objSwatches)
+            catColour.addView(objSwatches)
             skyRow = swatchRow(skyColors)
             skyRow.visibility = View.GONE
-            addView(skyRow)
+            catColour.addView(skyRow)
             skyLabels = Array(3) {
                 TextView(this@MainActivity).apply {
                     textSize = 12f; setTextColor(0xFFDDDDDD.toInt()); setPadding(dp(4), dp(4), dp(4), 0)
@@ -1496,7 +1516,7 @@ end
                 addView(row(skyPhotoBtn, skyModeBtn))
                 for (i in 0..2) { addView(skyLabels[i]); addView(skySliders[i]) }
             }
-            addView(skyPanel)
+            catColour.addView(skyPanel)
             settingsHint = TextView(this@MainActivity).apply {
                 text = "Settings: World = gravity, fog distance (0 = off), ambient 0-1.  Snap/Shd/Gnd = grid snap (0 = off), shadow strength 0-1 (0 = off), ground height for shadows.  Last row = time scale, show grid (1/0), collisions on (1/0).  Swatches = sky colour."
                 textSize = 11f
@@ -1504,7 +1524,7 @@ end
                 setPadding(dp(4), dp(4), dp(4), dp(2))
                 visibility = View.GONE
             }
-            addView(settingsHint)
+            catTransform.addView(settingsHint)
             colliderBtn = Button(this@MainActivity).apply {
                 text = "Collider: Off"
                 textSize = 12f
@@ -1521,7 +1541,7 @@ end
                     }
                 }
             }
-            addView(colliderBtn)
+            catObject.addView(colliderBtn)
             shadowBtn = Button(this@MainActivity).apply {
                 text = "Casts shadow: On"
                 textSize = 12f
@@ -1538,15 +1558,15 @@ end
                     }
                 }
             }
-            addView(shadowBtn)
+            catObject.addView(shadowBtn)
             attachBtn = btn("Attach to: none") { showAttachMenu() }
-            addView(attachBtn)
+            catObject.addView(attachBtn)
             treeTypeBtn = btn("Tree type: Round") {
                 val t = scene.selected
                 if (t != null && t.shape == Shape.TREE) { t.pattern = if (t.pattern == 1) 0 else 1; editor.refresh() }
             }
             treeTypeBtn.visibility = View.GONE
-            addView(treeTypeBtn)
+            catObject.addView(treeTypeBtn)
             grassLabel = TextView(this@MainActivity).apply {
                 textSize = 12f; setTextColor(0xFFDDDDDD.toInt()); setPadding(dp(4), dp(6), dp(4), 0)
             }
@@ -1571,7 +1591,7 @@ end
                 addView(grassLabel)
                 addView(grassSlider)
             }
-            addView(grassPanel)
+            catExtra.addView(grassPanel)
             labelA = TextView(this@MainActivity).apply {
                 textSize = 12f; setTextColor(0xFFDDDDDD.toInt()); setPadding(dp(4), dp(6), dp(4), 0)
             }
@@ -1588,7 +1608,7 @@ end
                 addView(labelB)
                 addView(sliderB)
             }
-            addView(lightPanel)
+            catExtra.addView(lightPanel)
             shLabels = Array(3) {
                 TextView(this@MainActivity).apply {
                     textSize = 12f; setTextColor(0xFFDDDDDD.toInt()); setPadding(dp(4), dp(6), dp(4), 0)
@@ -1641,7 +1661,7 @@ end
                     }
                 })
             }
-            addView(shadowPanel)
+            catExtra.addView(shadowPanel)
             windLabels = Array(2) {
                 TextView(this@MainActivity).apply {
                     textSize = 12f; setTextColor(0xFFDDDDDD.toInt()); setPadding(dp(4), dp(6), dp(4), 0)
@@ -1665,7 +1685,7 @@ end
                 addView(windLabels[0]); addView(windSliders[0])
                 addView(windLabels[1]); addView(windSliders[1])
             }
-            addView(windPanel)
+            catExtra.addView(windPanel)
             waveLabels = Array(3) {
                 TextView(this@MainActivity).apply {
                     textSize = 12f; setTextColor(0xFFDDDDDD.toInt()); setPadding(dp(4), dp(6), dp(4), 0)
@@ -1690,7 +1710,7 @@ end
                 addView(waveLabels[1]); addView(waveSliders[1])
                 addView(waveLabels[2]); addView(waveSliders[2])
             }
-            addView(wavePanel)
+            catExtra.addView(wavePanel)
             sculptBtn = btn("Sculpt: Off") { editor.sculpt = (editor.sculpt + 1) % 5; editor.refresh() }
             brushLabels = Array(2) {
                 TextView(this@MainActivity).apply {
@@ -1730,7 +1750,7 @@ end
                 addView(brushLabels[0]); addView(brushSliders[0])
                 addView(brushLabels[1]); addView(brushSliders[1])
             }
-            addView(terrainPanel)
+            catExtra.addView(terrainPanel)
         }
     }
 
