@@ -55,7 +55,7 @@ class EditorView(ctx: Context, val scene: Scene) : GLSurfaceView(ctx) {
 
     private val scaleDetector = ScaleGestureDetector(ctx, object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
         override fun onScale(d: ScaleGestureDetector): Boolean {
-            if (!renderer.fpMode) renderer.dist = (renderer.dist / d.scaleFactor).coerceIn(2f, 250f)
+            if (!renderer.fpMode) renderer.dist = (renderer.dist / d.scaleFactor).coerceIn(2f, 1500f)
             requestRender()
             return true
         }
@@ -450,13 +450,13 @@ class EditorView(ctx: Context, val scene: Scene) : GLSurfaceView(ctx) {
                 if (o.shape == Shape.CAMERA) { o.sx = (o.sx * f).coerceIn(20f, 120f); refresh(); return }
                 if (o.shape == Shape.BONE) { o.sy = (o.sy * f).coerceIn(0.1f, 20f); refresh(); return }
                 when (axis) {
-                    1 -> o.sx = (o.sx * f).coerceIn(0.05f, 400f)
-                    2 -> o.sy = (o.sy * f).coerceIn(0.05f, 400f)
-                    3 -> o.sz = (o.sz * f).coerceIn(0.05f, 400f)
+                    1 -> o.sx = (o.sx * f).coerceIn(0.05f, 2000f)
+                    2 -> o.sy = (o.sy * f).coerceIn(0.05f, 2000f)
+                    3 -> o.sz = (o.sz * f).coerceIn(0.05f, 2000f)
                     else -> {
-                        o.sx = (o.sx * f).coerceIn(0.05f, 400f)
-                        o.sy = (o.sy * f).coerceIn(0.05f, 400f)
-                        o.sz = (o.sz * f).coerceIn(0.05f, 400f)
+                        o.sx = (o.sx * f).coerceIn(0.05f, 2000f)
+                        o.sy = (o.sy * f).coerceIn(0.05f, 2000f)
+                        o.sz = (o.sz * f).coerceIn(0.05f, 2000f)
                     }
                 }
             }

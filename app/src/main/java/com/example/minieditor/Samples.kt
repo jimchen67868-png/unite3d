@@ -820,23 +820,43 @@ end
     }
 
     /** A PUBG-style island: loot houses, 8 enemy soldiers, a closing storm. Joystick, FIRE, RELOAD, JUMP, VIEW. */
-    fun battleRoyale(scene: Scene) {
+    /** Battle Royale. [large] = the big PUBG-style map (300 x 300, 16 houses, 20 enemies, a big closing storm). */
+    fun battleRoyale(scene: Scene, large: Boolean = false) {
+        val map = if (large) 300f else 70f
+        val sp = map / 70f                       // everything that is a distance scales with the map
+        val relief = if (large) 16f else 7f
+        val nHouses = if (large) 16 else 5
+        val houseGap = if (large) 32.0 else 16.0
+        val nTrees = if (large) 130 else 40
+        val nBots = if (large) 20 else 8
+        val nExtraLoot = if (large) 14 else 6
+        val playerScript = BR_PLAYER.replace("local NBOTS = 8", "local NBOTS = " + nBots)
+        val zoneScript = if (!large) BR_ZONE else BR_ZONE
+            .replace("local NPOSTS = 40", "local NPOSTS = 80")
+            .replace("local stages = { { 35, 25, 22 }, { 30, 20, 12 }, { 25, 20, 5 } }", "local stages = { { 45, 40, 110 }, { 40, 35, 70 }, { 35, 30, 40 }, { 30, 25, 15 } }")
+            .replace("  r = 38\n", "  r = 165\n")
+            .replace("\"cube\", self.x, 8, self.z", "\"cube\", self.x, 20, self.z")
+            .replace("p.sy = 16", "p.sy = 60")
+            .replace("p.sx = 0.7", "p.sx = 1.2")
+            .replace("p.sz = 0.7", "p.sz = 1.2")
+            .replace("8 enemies on the island", nBots.toString() + " enemies on the island")
+
         scene.objects.clear()
         scene.selected = null
         scene.addSettings()?.let {
-            it.x = 12f; it.y = 95f; it.z = 0.45f; it.ry = 0.55f; it.wind = 0.3f; it.windDir = 60f
+            it.x = 12f; it.y = if (large) 380f else 95f; it.z = 0.45f; it.ry = 0.55f; it.wind = 0.3f; it.windDir = 60f
             it.color = floatArrayOf(0.55f, 0.75f, 0.92f)
         }
         scene.addLight(Shape.SUN)?.let { it.sx = 1.1f; it.sy = 0.4f }
         val land = scene.addTerrain()
-        land.sx = 70f; land.sy = 7f; land.sz = 70f
+        land.sx = map; land.sy = relief; land.sz = map
         land.heights = TerrainGen.generate(3, 0.6f)
         land.hVersion++
         val sea = scene.addWater()
-        sea.sx = 90f; sea.sz = 90f; sea.y = 2.1f; sea.sy = 0.2f
+        sea.sx = map * 1.3f; sea.sz = map * 1.3f; sea.y = relief * 0.3f; sea.sy = 0.2f
         val seaY = sea.y
         val grass = scene.addGrass()
-        grass.x = 0f; grass.z = 0f; grass.y = 0f; grass.sx = 50f; grass.sz = 50f; grass.rx = 0.6f
+        grass.x = 0f; grass.z = 0f; grass.y = 0f; grass.sx = if (large) 100f else 50f; grass.sz = if (large) 100f else 50f; grass.rx = 0.6f
 
         val rnd = kotlin.random.Random(21)
         fun ground(x: Float, z: Float): Float? = TerrainGen.heightAt(land, x, z)
@@ -846,8 +866,8 @@ end
         var zcz = 0f
         var zbest = -1f
         for (k in 0 until 120) {
-            val x = (rnd.nextFloat() - 0.5f) * 28f
-            val z = (rnd.nextFloat() - 0.5f) * 28f
+            val x = (rnd.nextFloat() - 0.5f) * 0.4f * map
+            val z = (rnd.nextFloat() - 0.5f) * 0.4f * map
             val h = ground(x, z) ?: continue
             if (h > zbest) { zbest = h; zcx = x; zcz = z }
         }
@@ -855,10 +875,10 @@ end
         // ---- houses ----
         val houses = ArrayList<FloatArray>()   // centre x, centre z, floor top y
         var tries = 0
-        while (houses.size < 5 && tries < 800) {
+        while (houses.size < nHouses && tries < 3000) {
             tries++
-            val hx = (rnd.nextFloat() - 0.5f) * 52f
-            val hz = (rnd.nextFloat() - 0.5f) * 52f
+            val hx = (rnd.nextFloat() - 0.5f) * 0.74f * map
+            val hz = (rnd.nextFloat() - 0.5f) * 0.74f * map
             var lo = 1e9f
             var hi = -1e9f
             var ok = true
@@ -866,9 +886,9 @@ end
                 val h = ground(hx + dx, hz + dz)
                 if (h == null) ok = false else { lo = minOf(lo, h); hi = maxOf(hi, h) }
             }
-            val tol = if (tries < 400) 1.0f else 2.2f
+            val tol = if (tries < 1500) 1.0f else 2.2f
             if (!ok || lo < seaY + 0.6f || hi - lo > tol) continue
-            if (houses.any { Math.hypot((it[0] - hx).toDouble(), (it[1] - hz).toDouble()) < 16.0 }) continue
+            if (houses.any { Math.hypot((it[0] - hx).toDouble(), (it[1] - hz).toDouble()) < houseGap }) continue
             houses.add(floatArrayOf(hx, hz, hi + 0.2f, lo))
         }
         var wallN = 0
@@ -900,10 +920,10 @@ end
         // ---- trees (away from houses and water) ----
         var trees = 0
         tries = 0
-        while (trees < 40 && tries < 600) {
+        while (trees < nTrees && tries < 1500) {
             tries++
-            val tx = (rnd.nextFloat() - 0.5f) * 64f
-            val tz = (rnd.nextFloat() - 0.5f) * 64f
+            val tx = (rnd.nextFloat() - 0.5f) * 0.91f * map
+            val tz = (rnd.nextFloat() - 0.5f) * 0.91f * map
             val th = ground(tx, tz) ?: continue
             if (th < seaY + 0.4f || th > land.sy * 0.8f) continue
             if (houses.any { Math.hypot((it[0] - tx).toDouble(), (it[1] - tz).toDouble()) < 7.0 }) continue
@@ -934,10 +954,10 @@ end
         }
         var extra = 0
         tries = 0
-        while (extra < 6 && tries < 300) {
+        while (extra < nExtraLoot && tries < 600) {
             tries++
-            val x = (rnd.nextFloat() - 0.5f) * 56f
-            val z = (rnd.nextFloat() - 0.5f) * 56f
+            val x = (rnd.nextFloat() - 0.5f) * 0.8f * map
+            val z = (rnd.nextFloat() - 0.5f) * 0.8f * map
             val h = ground(x, z) ?: continue
             if (h < seaY + 0.5f) continue
             if (extra % 2 == 0) medkit(x, h + 0.5f, z) else ammo(x, h + 0.5f, z)
@@ -952,7 +972,7 @@ end
         while (tries < 400) {
             tries++
             val a = rnd.nextFloat() * 6.2832f
-            val d = 20f + rnd.nextFloat() * 10f
+            val d = (20f + rnd.nextFloat() * 10f) * sp
             val x = zcx + Math.cos(a.toDouble()).toFloat() * d
             val z = zcz + Math.sin(a.toDouble()).toFloat() * d
             val h = ground(x, z) ?: continue
@@ -961,19 +981,19 @@ end
             px = x; pz = z; pg = h
             break
         }
-        val player = mk(scene, Shape.SPHERE, "Player", px, pg + 1.2f, pz, 1.0f, 1.7f, 1.0f, floatArrayOf(0.25f, 0.5f, 0.9f), BR_PLAYER)
+        val player = mk(scene, Shape.SPHERE, "Player", px, pg + 1.2f, pz, 1.0f, 1.7f, 1.0f, floatArrayOf(0.25f, 0.5f, 0.9f), playerScript)
         player.collider = 1; player.shadow = false
 
         // ---- enemy soldiers ----
         var bots = 0
         tries = 0
-        while (bots < 8 && tries < 800) {
+        while (bots < nBots && tries < 2000) {
             tries++
-            val x = (rnd.nextFloat() - 0.5f) * 56f
-            val z = (rnd.nextFloat() - 0.5f) * 56f
+            val x = (rnd.nextFloat() - 0.5f) * 0.8f * map
+            val z = (rnd.nextFloat() - 0.5f) * 0.8f * map
             val h = ground(x, z) ?: continue
             if (h < seaY + 0.6f) continue
-            if (Math.hypot((x - px).toDouble(), (z - pz).toDouble()) < 16.0) continue
+            if (Math.hypot((x - px).toDouble(), (z - pz).toDouble()) < 16.0 * sp) continue
             if (houses.any { Math.hypot((it[0] - x).toDouble(), (it[1] - z).toDouble()) < 9.0 }) continue
             bots++
             val b = mk(scene, Shape.SPHERE, "Bot " + bots, x, h + 1.2f, z, 0.9f, 1.8f, 0.9f, floatArrayOf(0.85f, 0.2f, 0.2f), BR_BOT)
@@ -981,7 +1001,7 @@ end
         }
 
         // ---- storm controller (hidden under the ground at the storm centre) ----
-        val zone = mk(scene, Shape.SPHERE, "Zone", zcx, -3f, zcz, 0.3f, 0.3f, 0.3f, floatArrayOf(0.3f, 0.5f, 1f), BR_ZONE)
+        val zone = mk(scene, Shape.SPHERE, "Zone", zcx, -3f, zcz, 0.3f, 0.3f, 0.3f, floatArrayOf(0.3f, 0.5f, 1f), zoneScript)
         zone.shadow = false
 
         scene.addJoystick()

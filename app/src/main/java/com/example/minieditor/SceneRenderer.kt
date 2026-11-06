@@ -62,8 +62,9 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
     private lateinit var meshes: Map<Shape, Mesh>
     private lateinit var grid: Mesh
     /** Half-width of the floor grid; change from any thread, the grid is rebuilt on the next frame. */
-    @Volatile var gridHalf = 10
-    private var gridBuilt = 10
+    @Volatile var gridHalf = 100
+    private var gridBuilt = 0
+    private var gridStep = 5
     private lateinit var gizmo: Mesh
     private lateinit var circle: Mesh
     private lateinit var quad: Mesh
@@ -600,6 +601,7 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         uCubeOn = GLES20.glGetUniformLocation(prog, "uCubeOn")
         meshes = mapOf(Shape.CUBE to Meshes.cube(), Shape.PYRAMID to Meshes.pyramid(), Shape.SPHERE to Meshes.sphere())
         grid = Meshes.grid()
+        gridBuilt = 0
         gizmo = Meshes.gizmo()
         circle = Meshes.circle()
         quad = Meshes.quad()
@@ -616,7 +618,7 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
     private fun updateMatrices() {
         synchronized(lock) {
             val cam = if (!fpMode && (playing || previewCam)) scene.objects.firstOrNull { it.shape == Shape.CAMERA } else null
-            Matrix.perspectiveM(proj, 0, if (cam != null) cam.sx.coerceIn(20f, 120f) else fov, w.toFloat() / h, 0.15f, 600f)
+            Matrix.perspectiveM(proj, 0, if (cam != null) cam.sx.coerceIn(20f, 120f) else fov, w.toFloat() / h, 0.15f, 3000f)
             val p = Math.toRadians(pitch.toDouble())
             val y = Math.toRadians(yaw.toDouble())
             if (fpMode) {
@@ -1890,7 +1892,8 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         // Grid + axes
         if (gridBuilt != gridHalf) {
             gridBuilt = gridHalf
-            val step = if (gridHalf <= 30) 1 else if (gridHalf <= 150) 5 else 10
+            val step = if (gridHalf <= 30) 1 else if (gridHalf <= 150) 5 else if (gridHalf <= 600) 20 else 50
+            gridStep = step
             grid = Meshes.grid(maxOf(step, gridHalf / step * step), step)
         }
         Matrix.setIdentityM(model, 0)

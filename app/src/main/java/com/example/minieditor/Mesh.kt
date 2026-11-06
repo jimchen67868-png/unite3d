@@ -121,13 +121,12 @@ object Meshes {
         Shape.MODEL, Shape.JOYSTICK, Shape.BUTTON, Shape.LIGHT, Shape.SUN, Shape.SETTINGS, Shape.CAMERA, Shape.TERRAIN, Shape.BONE, Shape.WATER, Shape.TREE, Shape.GRASS, Shape.FIRE, Shape.SMOKE, Shape.MIRROR -> null
     }
 
-    /** Grid lines first; the last 4 vertices are the X axis and Z axis. Covers -half..half, a line every [step]. */
+    /** Grid lines first (-half..half, a line every [step]); the last 4 vertices are the X axis and Z axis. */
     fun grid(half: Int = 10, step: Int = 1): Mesh {
         val o = ArrayList<Float>()
         val h = half.toFloat()
         val n = half / step
         for (k in -n..n) {
-            if (k == 0) continue
             val v = (k * step).toFloat()
             line(o, -h, 0f, v, h, 0f, v)
             line(o, v, 0f, -h, v, 0f, h)

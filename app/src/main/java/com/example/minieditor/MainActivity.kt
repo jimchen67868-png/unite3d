@@ -745,6 +745,7 @@ end
         pm.menu.add(0, 13, 12, "Load sample: lake (water)")
         pm.menu.add(0, 14, 13, "Load sample: campfire (fire and smoke)")
         pm.menu.add(0, 15, 14, "Load sample game: Battle Royale (shooter)")
+        pm.menu.add(0, 19, 14, "Load sample game: Battle Royale LARGE map (PUBG style)")
         pm.menu.add(0, 16, 15, "Build game APK (CircleCI)...")
         pm.menu.add(0, 17, 15, "Sounds and music...")
         pm.menu.add(0, 18, 15, "Toolbar and panel size...")
@@ -768,7 +769,8 @@ end
                     12 -> loadRigSample()
                     13 -> loadLakeSample()
                     14 -> loadCampfireSample()
-                    15 -> loadBattleSample()
+                    15 -> loadBattleSample(false)
+                    19 -> loadBattleSample(true)
                     16 -> buildGameApk()
                     17 -> showSoundsDialog()
                     18 -> showLayoutDialog()
@@ -780,9 +782,9 @@ end
         pm.show()
     }
 
-    private fun loadBattleSample() {
+    private fun loadBattleSample(large: Boolean) {
         val go = {
-            Samples.battleRoyale(scene)
+            Samples.battleRoyale(scene, large)
             val pl = scene.objects.firstOrNull { it.name == "Player" }
             editor.renderer.dist = 7f
             editor.renderer.pitch = 20f
@@ -790,13 +792,13 @@ end
                 editor.renderer.target[0] = pl.x; editor.renderer.target[1] = pl.y; editor.renderer.target[2] = pl.z
             }
             editor.refresh()
-            toast("Battle Royale loaded - tap Play. Joystick moves, drag the screen to look, hold Fire to shoot.")
+            toast((if (large) "Battle Royale (large map, 20 enemies)" else "Battle Royale") + " loaded - tap Play. Joystick moves, drag the screen to look, hold Fire to shoot.")
         }
         if (scene.objects.isEmpty()) {
             go()
         } else {
             AlertDialog.Builder(this)
-                .setTitle("Load Battle Royale?")
+                .setTitle(if (large) "Load Battle Royale (large map)?" else "Load Battle Royale?")
                 .setMessage("This replaces the current scene. Use File > Export scene zip first if you want to keep it.")
                 .setPositiveButton("Load") { _, _ -> go() }
                 .setNegativeButton("Cancel", null)
@@ -1649,11 +1651,11 @@ end
                     textSize = 12f; setTextColor(Color.WHITE); setPadding(dp(4), dp(4), dp(4), dp(0))
                 })
                 addView(row(
-                    btn("20") { applyGridSize(20) },
                     btn("50") { applyGridSize(50) },
-                    btn("100") { applyGridSize(100) },
                     btn("200") { applyGridSize(200) },
-                    btn("400") { applyGridSize(400) }
+                    btn("500") { applyGridSize(500) },
+                    btn("1000") { applyGridSize(1000) },
+                    btn("2000") { applyGridSize(2000) }
                 ))
                 addView(row(gridSizeField, btn("Set grid") { applyGridSize(gridSizeField.text.toString().trim().toIntOrNull()) }))
                 addView(row(
@@ -1767,10 +1769,10 @@ end
                 })
                 addView(row(
                     btn("24", true) { setMapSize(24f) },
-                    btn("50", true) { setMapSize(50f) },
                     btn("100", true) { setMapSize(100f) },
-                    btn("200", true) { setMapSize(200f) },
-                    btn("400", true) { setMapSize(400f) }
+                    btn("400", true) { setMapSize(400f) },
+                    btn("1000", true) { setMapSize(1000f) },
+                    btn("2000", true) { setMapSize(2000f) }
                 ))
                 mapSizeField = EditText(this@MainActivity).apply {
                     setTextColor(Color.WHITE)
@@ -1913,7 +1915,7 @@ end
 
     private fun applyGridSize(size: Int?) {
         if (size == null || size <= 0) { toast("Type a number first"); return }
-        gridSize = size.coerceIn(4, 400)
+        gridSize = size.coerceIn(4, 2000)
         editor.renderer.gridHalf = gridSize / 2
         editor.requestRender()
         getSharedPreferences("layout", MODE_PRIVATE).edit().putInt("grid", gridSize).apply()
@@ -1925,7 +1927,7 @@ end
     private fun applyTypedMapSize() {
         val v = mapSizeField.text.toString().trim().toFloatOrNull()
         if (v == null || v <= 0f) { toast("Type a number first"); return }
-        setMapSize(v.coerceIn(2f, 400f))
+        setMapSize(v.coerceIn(2f, 2000f))
         clearFieldFocus()
     }
 
@@ -2348,7 +2350,7 @@ end
         val dz = maxZ - minZ
         val radius = 0.5f * sqrt(dx * dx + dy * dy + dz * dz)
         val half = Math.toRadians(r.fov / 2.0)
-        r.dist = (radius / sin(half).toFloat() * 1.15f).coerceIn(2f, 250f)
+        r.dist = (radius / sin(half).toFloat() * 1.15f).coerceIn(2f, 1500f)
     }
 
     // ---------- First-person view (play mode) ----------
@@ -2476,14 +2478,14 @@ end
     // ---------- Layout sizes ----------
 
     private var toolbarScale = 1f   // button height of the bottom toolbar (1 = normal)
-    private var gridSize = 20        // width of the editor floor grid
+    private var gridSize = 200       // width of the editor floor grid
     private var panelFrac = 0.6f    // how much of the screen the top panels (Inspector, ...) may use
 
     private fun loadLayoutPrefs() {
         val sp = getSharedPreferences("layout", MODE_PRIVATE)
         toolbarScale = sp.getFloat("toolbar", 1f).coerceIn(0.5f, 2f)
         panelFrac = sp.getFloat("panel", 0.6f).coerceIn(0.2f, 0.8f)
-        gridSize = sp.getInt("grid", 20).coerceIn(4, 400)
+        gridSize = sp.getInt("grid", 200).coerceIn(4, 2000)
         editor.renderer.gridHalf = gridSize / 2
     }
 
