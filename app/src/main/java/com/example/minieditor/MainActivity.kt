@@ -134,6 +134,8 @@ class MainActivity : Activity(), SensorEventListener {
     private lateinit var inspectorView: LinearLayout
     private lateinit var scriptView: LinearLayout
     private lateinit var scriptField: EditText
+    private var suggestRow: LinearLayout? = null
+    private var suggestScroll: android.widget.HorizontalScrollView? = null
     private lateinit var nameField: EditText
     private val fields = ArrayList<EditText>()
     private val rowLabels = ArrayList<TextView>()
@@ -148,6 +150,7 @@ class MainActivity : Activity(), SensorEventListener {
     private val reqOpen = 44
     private val reqObj = 45
     private val reqPhoto = 46
+    private val reqSound = 47
     private var photoForSelected = false
     private var photoForSky = false
 
@@ -411,16 +414,15 @@ end
             multiButton = btn("Multi: Off") { toggleMulti() }
             transformRow = row(lockButton, modeButtons[Mode.MOVE]!!, modeButtons[Mode.ROTATE]!!, modeButtons[Mode.SCALE]!!, yButton)
             transformRow.visibility = View.GONE   // Tools shows Lock / Move / Rotate / Scale / Axis
-            moreRows = LinearLayout(this@MainActivity).apply {
-                orientation = LinearLayout.VERTICAL
-                visibility = View.GONE
-                addView(row(
+            // "More" opens one row of categories; only the chosen category's row is shown (max 2 extra rows).
+            val catRows = listOf(
+                row(
                     btn("+Cube", true) { scene.add(Shape.CUBE); editor.refresh() },
                     btn("+Pyramid", true) { scene.add(Shape.PYRAMID); editor.refresh() },
                     btn("+Sphere", true) { scene.add(Shape.SPHERE); editor.refresh() },
                     importButton
-                ))
-                addView(row(
+                ),
+                row(
                     btn("Cut", true) { if (scene.cutSelected()) editor.refresh() else toast("Select an object first") },
                     btn("Copy", true) { if (scene.copySelected()) toast("Copied") else toast("Select an object first") },
                     btn("Paste", true) { if (scene.paste() != null) editor.refresh() else toast("Nothing to paste") },
@@ -429,20 +431,40 @@ end
                         else if (scene.selected != null) { scene.removeSelected(); editor.refresh() }
                         else toast("Select an object first")
                     }
-                ))
-                addView(row(multiButton, btn("Group", true) { doGroup() }, btn("Ungroup", true) { doUngroup() }))
-                addView(transformRow)
-                addView(row(
+                ),
+                row(multiButton, btn("Group", true) { doGroup() }, btn("Ungroup", true) { doUngroup() }),
+                row(
                     cameraButton,
                     selectButton,
                     toolsButton,
                     btn("Clear log") { logLines.clear(); showLog() }
-                ))
+                )
+            )
+            val catNames = listOf("Add", "Edit", "Group", "View")
+            val catButtons = ArrayList<Button>()
+            fun showCat(i: Int) {
+                catRows.forEachIndexed { k, r -> r.visibility = if (k == i) View.VISIBLE else View.GONE }
+                catButtons.forEachIndexed { k, b -> b.setBackgroundColor(if (k == i) 0xFF3D7BFF.toInt() else 0xFF555555.toInt()) }
             }
+            catNames.forEachIndexed { i, n ->
+                val b = btn(n) { }
+                b.setOnClickListener { showCat(i) }
+                catButtons.add(b)
+            }
+            moreRows = LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.VERTICAL
+                visibility = View.GONE
+                addView(row(*catButtons.toTypedArray()))
+                catRows.forEach { addView(it) }
+                addView(transformRow)
+            }
+            showCat(0)
             addView(moreRows)
         }
 
         bottomPanel = bottom
+        loadLayoutPrefs()
+        applyToolbarHeight()
         buildHierarchy()
         buildInspector()
         buildScript()
@@ -480,7 +502,7 @@ end
             root.addView(v, FrameLayout.LayoutParams(dp(90), dp(90), Gravity.TOP or Gravity.START))
         }
         root.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
-            topScroll.maxHeightPx = (root.height * 0.6f).toInt()
+            topScroll.maxHeightPx = (root.height * panelFrac).toInt()
             refreshJoystick()
         }
         setContentView(root)
@@ -517,6 +539,7 @@ end
                 val f = File(photosDir(), k)
                 if (f.exists()) { z.putNextEntry(ZipEntry("photos/" + k)); z.write(f.readBytes()); z.closeEntry() }
             }
+            for (f in usedSoundFiles()) { z.putNextEntry(ZipEntry("sounds/" + f.name)); z.write(f.readBytes()); z.closeEntry() }
         }
         return bos.toByteArray()
     }
@@ -663,6 +686,7 @@ end
                     if (name == "scene.json") json = String(data)
                     else if (e.name.startsWith("models/")) File(modelsDir(), name).writeBytes(data)
                     else if (e.name.startsWith("photos/")) File(photosDir(), name).writeBytes(data)
+                    else if (e.name.startsWith("sounds/")) File(soundsDir(), name).writeBytes(data)
                 }
             }
             val text = json ?: return false
@@ -708,6 +732,8 @@ end
         pm.menu.add(0, 14, 13, "Load sample: campfire (fire and smoke)")
         pm.menu.add(0, 15, 14, "Load sample game: Battle Royale (shooter)")
         pm.menu.add(0, 16, 15, "Build game APK (CircleCI)...")
+        pm.menu.add(0, 17, 15, "Sounds and music...")
+        pm.menu.add(0, 18, 15, "Toolbar and panel size...")
         pm.menu.add(0, 7, 6, "Load sample game (Coin Rush)")
         pm.menu.add(0, 8, 7, "Editor lighting: " + (if (editor.renderer.editorBright) "Bright (tap for Scene)" else "Scene (tap for Bright)"))
         pm.setOnMenuItemClickListener { item ->
@@ -730,6 +756,8 @@ end
                     14 -> loadCampfireSample()
                     15 -> loadBattleSample()
                     16 -> buildGameApk()
+                    17 -> showSoundsDialog()
+                    18 -> showLayoutDialog()
                     10 -> {
                         val s = scene.objects.firstOrNull { it.shape == Shape.SETTINGS } ?: scene.addSettings()
                         scene.selected = s
@@ -996,6 +1024,11 @@ end
         try {
             val eng = ScriptEngine(scene) { appendLog(it) }
             engine = eng
+            stopPreview()
+            val au = Audio { soundsDir() }
+            au.start()
+            audio = au
+            eng.audio = au
             eng.start()
         } catch (e: Throwable) {
             appendLog("Script error: " + e.message)
@@ -1020,6 +1053,8 @@ end
         camTargetName = "Player"
         Choreographer.getInstance().removeFrameCallback(frameCb)
         engine = null
+        audio?.release()
+        audio = null
         for (s in snaps) {
             val o = s.o; val v = s.v
             o.x = v[0]; o.y = v[1]; o.z = v[2]
@@ -1044,7 +1079,12 @@ end
     // ---------- Script panel ----------
 
     private fun buildScript() {
-        scriptField = EditText(this).apply {
+        scriptField = object : EditText(this@MainActivity) {
+            override fun onSelectionChanged(selStart: Int, selEnd: Int) {
+                super.onSelectionChanged(selStart, selEnd)
+                refreshSuggest()
+            }
+        }.apply {
             setTextColor(Color.WHITE)
             setBackgroundColor(0xFF1E1E1E.toInt())
             textSize = 12f
@@ -1059,8 +1099,16 @@ end
                 override fun onTextChanged(s: CharSequence?, st: Int, b: Int, c: Int) {}
                 override fun afterTextChanged(s: Editable?) {
                     if (!settingScript) scene.selected?.script = s?.toString() ?: ""
+                    refreshSuggest()
                 }
             })
+        }
+        suggestRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        suggestScroll = android.widget.HorizontalScrollView(this).apply {
+            isHorizontalScrollBarEnabled = false
+            setBackgroundColor(0xFF262626.toInt())
+            layoutParams = LinearLayout.LayoutParams(-1, dp(44))
+            addView(suggestRow)
         }
         val help = TextView(this).apply {
             text = "Lua. Define start() and update(dt).\n" +
@@ -1077,12 +1125,50 @@ end
             visibility = View.GONE
             addView(help)
             addView(scriptField)
+            addView(suggestScroll)
             addView(row(
                 btn("Spin") { setScript(scriptTemplate) },
                 btn("Tilt") { setScript(tiltTemplate) },
                 btn("Spawn") { setScript(spawnTemplate) },
                 btn("Clear") { setScript("") }
             ))
+        }
+    }
+
+    /** Fills the suggestion bar under the script box with what could be typed at the cursor. */
+    private fun refreshSuggest() {
+        val row = suggestRow ?: return
+        row.removeAllViews()
+        suggestScroll?.scrollTo(0, 0)
+        if (!scriptField.isEnabled || scriptField.selectionStart != scriptField.selectionEnd) return
+        val text = scriptField.text.toString()
+        val res = Autocomplete.compute(
+            text, scriptField.selectionStart,
+            { scene.objects.filter { !it.shape.isScreen }.map { it.name }.filter { it.isNotBlank() } },
+            { scene.objects.filter { it.shape == Shape.BUTTON }.map { it.name }.filter { it.isNotBlank() } },
+            { soundFiles().map { it.name } }
+        ) ?: return
+        for (item in res.items) {
+            val b = Button(this).apply {
+                this.text = item.label
+                setAllCaps(false)
+                textSize = 12f
+                typeface = Typeface.MONOSPACE
+                setTextColor(Color.WHITE)
+                setBackgroundColor(0xFF2D4F7C.toInt())
+                minWidth = 0; minHeight = 0
+                isFocusable = false
+                setPadding(dp(10), dp(6), dp(10), dp(6))
+                layoutParams = LinearLayout.LayoutParams(-2, -1).also { it.setMargins(dp(3), dp(4), dp(3), dp(4)) }
+                setOnClickListener {
+                    val ed = scriptField.text
+                    val st = res.start.coerceIn(0, ed.length)
+                    val en = scriptField.selectionStart.coerceIn(st, ed.length)
+                    ed.replace(st, en, item.insert)
+                    scriptField.setSelection((st + item.insert.length - item.back).coerceIn(0, scriptField.text.length))
+                }
+            }
+            row.addView(b)
         }
     }
 
@@ -2150,7 +2236,7 @@ end
         val dz = maxZ - minZ
         val radius = 0.5f * sqrt(dx * dx + dy * dy + dz * dz)
         val half = Math.toRadians(r.fov / 2.0)
-        r.dist = (radius / sin(half).toFloat() * 1.15f).coerceIn(2f, 40f)
+        r.dist = (radius / sin(half).toFloat() * 1.15f).coerceIn(2f, 250f)
     }
 
     // ---------- First-person view (play mode) ----------
@@ -2241,6 +2327,7 @@ end
             reqOpen -> readProject(uri)
             reqObj -> writeObj(uri)
             reqPhoto -> importPhoto(uri)
+            reqSound -> importSound(uri)
         }
     }
 
@@ -2268,6 +2355,156 @@ end
                     scene.add(Shape.MODEL, md, display.substringBeforeLast('.'))
                     editor.refresh()
                 }
+            } catch (e: Throwable) {
+                runOnUiThread { toast("Import failed: " + e.message) }
+            }
+        }.start()
+    }
+
+    // ---------- Layout sizes ----------
+
+    private var toolbarScale = 1f   // button height of the bottom toolbar (1 = normal)
+    private var panelFrac = 0.6f    // how much of the screen the top panels (Inspector, ...) may use
+
+    private fun loadLayoutPrefs() {
+        val sp = getSharedPreferences("layout", MODE_PRIVATE)
+        toolbarScale = sp.getFloat("toolbar", 1f).coerceIn(0.5f, 2f)
+        panelFrac = sp.getFloat("panel", 0.6f).coerceIn(0.2f, 0.8f)
+    }
+
+    private fun applyToolbarHeight() {
+        val v = (dp(8) * toolbarScale).toInt()
+        fun walk(g: android.view.ViewGroup) {
+            for (i in 0 until g.childCount) {
+                val c = g.getChildAt(i)
+                if (c is Button) c.setPadding(dp(4), v, dp(4), v)
+                else if (c is android.view.ViewGroup) walk(c)
+            }
+        }
+        walk(bottomPanel)
+        bottomPanel.requestLayout()
+    }
+
+    private fun showLayoutDialog() {
+        fun bar(label: String, progress: Int, onChange: (Int) -> Unit): View {
+            val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(16), dp(8), dp(16), dp(8)) }
+            box.addView(TextView(this).apply { text = label })
+            box.addView(SeekBar(this).apply {
+                max = 100
+                this.progress = progress
+                setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                    override fun onProgressChanged(sb: SeekBar?, p: Int, fromUser: Boolean) { if (fromUser) onChange(p) }
+                    override fun onStartTrackingTouch(sb: SeekBar?) {}
+                    override fun onStopTrackingTouch(sb: SeekBar?) {
+                        getSharedPreferences("layout", MODE_PRIVATE).edit()
+                            .putFloat("toolbar", toolbarScale).putFloat("panel", panelFrac).apply()
+                    }
+                })
+            })
+            return box
+        }
+        val body = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        body.addView(bar("Toolbar button height", ((toolbarScale - 0.5f) / 1.5f * 100f).toInt()) { p ->
+            toolbarScale = 0.5f + p / 100f * 1.5f
+            applyToolbarHeight()
+        })
+        body.addView(bar("Panel height (Inspector, Hierarchy, ...)", ((panelFrac - 0.2f) / 0.6f * 100f).toInt()) { p ->
+            panelFrac = 0.2f + p / 100f * 0.6f
+            topScroll.maxHeightPx = (root.height * panelFrac).toInt()
+        })
+        AlertDialog.Builder(this)
+            .setTitle("Toolbar and panel size")
+            .setView(body)
+            .setPositiveButton("Done", null)
+            .setNeutralButton("Reset") { _, _ ->
+                toolbarScale = 1f; panelFrac = 0.6f
+                getSharedPreferences("layout", MODE_PRIVATE).edit().putFloat("toolbar", 1f).putFloat("panel", 0.6f).apply()
+                applyToolbarHeight()
+                topScroll.maxHeightPx = (root.height * panelFrac).toInt()
+            }
+            .show()
+    }
+
+    // ---------- Sounds and music ----------
+
+    private var audio: Audio? = null
+    private var preview: android.media.MediaPlayer? = null
+
+    private fun soundsDir() = File(filesDir, "sounds").apply { mkdirs() }
+
+    private fun soundFiles(): List<File> = soundsDir().listFiles()?.filter { it.isFile }?.sortedBy { it.name.lowercase() } ?: emptyList()
+
+    /** Sound files that some script mentions (by file name or the part before the dot): these go into the game. */
+    private fun usedSoundFiles(): List<File> {
+        val scripts = scene.objects.map { it.script }.filter { it.isNotBlank() }
+        return soundFiles().filter { f ->
+            val base = f.name.substringBeforeLast('.')
+            scripts.any { it.contains(f.name, true) || it.contains(base, true) }
+        }
+    }
+
+    private fun stopPreview() {
+        preview?.let { try { it.release() } catch (e: Throwable) { } }
+        preview = null
+    }
+
+    private fun previewSound(f: File) {
+        stopPreview()
+        try {
+            val mp = android.media.MediaPlayer()
+            mp.setDataSource(f.path)
+            mp.setOnPreparedListener { it.start() }
+            mp.setOnCompletionListener { if (preview === it) stopPreview() }
+            mp.setOnErrorListener { _, _, _ -> toast("Cannot play this file"); stopPreview(); true }
+            preview = mp
+            mp.prepareAsync()
+        } catch (e: Throwable) {
+            stopPreview()
+            toast("Cannot play: " + e.message)
+        }
+    }
+
+    private fun showSoundsDialog() {
+        val files = soundFiles()
+        val items = ArrayList<String>()
+        items.add("+ Import sound or music...")
+        for (f in files) items.add(f.name + "  (" + (f.length() / 1024) + " KB)")
+        AlertDialog.Builder(this)
+            .setTitle("Sounds and music")
+            .setItems(items.toTypedArray()) { _, which ->
+                if (which == 0) pickSound()
+                else {
+                    val f = files[which - 1]
+                    AlertDialog.Builder(this)
+                        .setTitle(f.name)
+                        .setMessage("In a script:\n  playSound(\"" + f.name + "\")\n  playMusic(\"" + f.name + "\")")
+                        .setPositiveButton("Play") { _, _ -> previewSound(f) }
+                        .setNeutralButton("Delete") { _, _ -> stopPreview(); f.delete(); toast("Deleted " + f.name) }
+                        .setNegativeButton("Close") { _, _ -> stopPreview() }
+                        .show()
+                }
+            }
+            .setNegativeButton("Close", null)
+            .show()
+    }
+
+    private fun pickSound() {
+        val i = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "audio/*"
+        }
+        startActivityForResult(i, reqSound)
+    }
+
+    private fun importSound(uri: Uri) {
+        val display = displayName(uri)
+        val key = display.replace(Regex("[^A-Za-z0-9._-]"), "_").ifEmpty { "sound" }
+        toast("Importing $display ...")
+        Thread {
+            try {
+                val bytes = contentResolver.openInputStream(uri)!!.use { it.readBytes() }
+                File(soundsDir(), key).writeBytes(bytes)
+                runOnUiThread { toast("Imported. Script: playSound(\"" + key + "\") or playMusic(\"" + key + "\")") }
             } catch (e: Throwable) {
                 runOnUiThread { toast("Import failed: " + e.message) }
             }
@@ -2449,6 +2686,12 @@ end
                                 z.closeEntry()
                             }
                         }
+                        for (f in soundsDir().listFiles() ?: emptyArray()) {
+                            if (!f.isFile) continue
+                            z.putNextEntry(ZipEntry("sounds/" + f.name))
+                            z.write(f.readBytes())
+                            z.closeEntry()
+                        }
                     }
                 }
                 runOnUiThread { toast("Exported") }
@@ -2472,6 +2715,7 @@ end
                         if (name == "scene.json") json = String(data)
                         else if (e.name.startsWith("models/")) File(modelsDir(), name).writeBytes(data)
                         else if (e.name.startsWith("photos/")) File(photosDir(), name).writeBytes(data)
+                        else if (e.name.startsWith("sounds/")) File(soundsDir(), name).writeBytes(data)
                     }
                 }
                 val text = json ?: throw IllegalArgumentException("No scene.json in file")
@@ -2558,6 +2802,7 @@ end
 
     override fun onPause() {
         stopPlay()
+        stopPreview()
         if (!gameMode) autoSave()
         Choreographer.getInstance().removeFrameCallback(waterCb)
         waterLoop = false

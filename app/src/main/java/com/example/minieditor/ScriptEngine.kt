@@ -89,6 +89,31 @@ class ScriptEngine(private val scene: Scene, private val log: (String) -> Unit) 
         }
     }
 
+    /** Set by the app before start(); null means sounds are silently ignored. */
+    var audio: Audio? = null
+
+    private val playSoundFn = object : VarArgFunction() {
+        override fun invoke(args: Varargs): Varargs {
+            audio?.playSound(args.arg(1).tojstring(), args.optdouble(2, 1.0).toFloat(), args.optdouble(3, 1.0).toFloat())
+            return LuaValue.NONE
+        }
+    }
+
+    private val playMusicFn = object : VarArgFunction() {
+        override fun invoke(args: Varargs): Varargs {
+            audio?.playMusic(args.arg(1).tojstring(), args.optdouble(2, 1.0).toFloat(), args.optboolean(3, true))
+            return LuaValue.NONE
+        }
+    }
+
+    private val stopMusicFn = object : VarArgFunction() {
+        override fun invoke(args: Varargs): Varargs { audio?.stopMusic(); return LuaValue.NONE }
+    }
+
+    private val musicVolumeFn = object : VarArgFunction() {
+        override fun invoke(args: Varargs): Varargs { audio?.setMusicVolume(args.optdouble(1, 1.0).toFloat()); return LuaValue.NONE }
+    }
+
     private val logFn = object : VarArgFunction() {
         override fun invoke(args: Varargs): Varargs {
             val sb = StringBuilder()
@@ -430,6 +455,7 @@ class ScriptEngine(private val scene: Scene, private val log: (String) -> Unit) 
     }
 
     fun start() {
+        audio?.warn = log
         for (o in scene.objects) {
             val t = LuaTable()
             push(o, t)
@@ -453,6 +479,10 @@ class ScriptEngine(private val scene: Scene, private val log: (String) -> Unit) 
                 g.set("groundHeight", groundFn)
                 g.set("waterHeight", waterFn)
                 g.set("destroy", destroyFn)
+                g.set("playSound", playSoundFn)
+                g.set("playMusic", playMusicFn)
+                g.set("stopMusic", stopMusicFn)
+                g.set("setMusicVolume", musicVolumeFn)
                 g.set("log", logFn)
                 g.set("print", logFn)
                 g.set("time", 0.0)

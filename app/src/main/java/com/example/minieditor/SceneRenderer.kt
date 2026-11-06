@@ -317,6 +317,11 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
             float spot = pow(max(dot(r, uSunDir), 0.0), 220.0);
             return sky + uSunCol * spot * 3.0;
         }
+        float cubeLit(vec2 uv, float thr) {
+            vec3 c = texture2D(uCube, uv).rgb;
+            float stored = dot(c, vec3(1.0, 1.0 / 255.0, 1.0 / 65025.0)) * 20.0;
+            return (stored > thr) ? 0.0 : 1.0;
+        }
         // Is the point light number li blocked from this pixel? Looks up the light's cube depth map
         // (6 faces side by side, one row per light; depth stored as 1/z packed into 3 bytes).
         float lightVisAt(int li, vec3 lp) {
@@ -337,12 +342,25 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
                 y = q.y;
             }
             if (z < 0.06) return 1.0;
-            float ux = clamp((x / z * 0.5 + 0.5) * 128.0, 0.5, 127.5);
-            float uy = clamp((y / z * 0.5 + 0.5) * 128.0, 0.5, 127.5);
-            vec2 uv = vec2((f * 128.0 + ux) / 768.0, (float(li) * 128.0 + uy) / 512.0);
-            vec3 c = texture2D(uCube, uv).rgb;
-            float stored = dot(c, vec3(1.0, 1.0 / 255.0, 1.0 / 65025.0)) * 20.0;
-            return (stored > (1.0 / z) * 1.06 + 0.002) ? 0.0 : 1.0;
+            // smooth edge: compare the 4 nearest depth texels and blend by distance (bilinear shadow filtering)
+            float px = (x / z * 0.5 + 0.5) * 128.0 - 0.5;
+            float py = (y / z * 0.5 + 0.5) * 128.0 - 0.5;
+            float ix = floor(px);
+            float iy = floor(py);
+            float fx = px - ix;
+            float fy = py - iy;
+            float thr = (1.0 / z) * 1.06 + 0.002;
+            float x0 = clamp(ix, 0.0, 127.0);
+            float x1 = clamp(ix + 1.0, 0.0, 127.0);
+            float y0 = clamp(iy, 0.0, 127.0);
+            float y1 = clamp(iy + 1.0, 0.0, 127.0);
+            float rowY = float(li) * 128.0;
+            float fo = f * 128.0;
+            float s00 = cubeLit(vec2((fo + x0 + 0.5) / 768.0, (rowY + y0 + 0.5) / 512.0), thr);
+            float s10 = cubeLit(vec2((fo + x1 + 0.5) / 768.0, (rowY + y0 + 0.5) / 512.0), thr);
+            float s01 = cubeLit(vec2((fo + x0 + 0.5) / 768.0, (rowY + y1 + 0.5) / 512.0), thr);
+            float s11 = cubeLit(vec2((fo + x1 + 0.5) / 768.0, (rowY + y1 + 0.5) / 512.0), thr);
+            return mix(mix(s00, s10, fx), mix(s01, s11, fx), fy);
         }
         void main() {
             if (uClipOn > 0.5 && dot(vW, uClipPl.xyz) + uClipPl.w < 0.0) discard;
@@ -595,7 +613,7 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
     private fun updateMatrices() {
         synchronized(lock) {
             val cam = if (!fpMode && (playing || previewCam)) scene.objects.firstOrNull { it.shape == Shape.CAMERA } else null
-            Matrix.perspectiveM(proj, 0, if (cam != null) cam.sx.coerceIn(20f, 120f) else fov, w.toFloat() / h, 0.1f, 100f)
+            Matrix.perspectiveM(proj, 0, if (cam != null) cam.sx.coerceIn(20f, 120f) else fov, w.toFloat() / h, 0.15f, 600f)
             val p = Math.toRadians(pitch.toDouble())
             val y = Math.toRadians(yaw.toDouble())
             if (fpMode) {
