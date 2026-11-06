@@ -410,6 +410,7 @@ function start()
       p.g = 0.55
       p.b = 1
       p.emit = 0.8
+      p.shadow = false
       p.opacity = 0.4
       posts[#posts + 1] = p
     end
@@ -832,7 +833,7 @@ end
         val nExtraLoot = if (large) 14 else 6
         val playerScript = BR_PLAYER.replace("local NBOTS = 8", "local NBOTS = " + nBots)
         val zoneScript = if (!large) BR_ZONE else BR_ZONE
-            .replace("local NPOSTS = 40", "local NPOSTS = 80")
+            .replace("local NPOSTS = 40", "local NPOSTS = 56")
             .replace("local stages = { { 35, 25, 22 }, { 30, 20, 12 }, { 25, 20, 5 } }", "local stages = { { 45, 40, 110 }, { 40, 35, 70 }, { 35, 30, 40 }, { 30, 25, 15 } }")
             .replace("  r = 38\n", "  r = 165\n")
             .replace("\"cube\", self.x, 8, self.z", "\"cube\", self.x, 20, self.z")

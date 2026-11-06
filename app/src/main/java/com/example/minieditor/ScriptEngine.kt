@@ -222,7 +222,9 @@ class ScriptEngine(private val scene: Scene, private val log: (String) -> Unit) 
         t.set("collider", o.collider.toDouble())
         t.set("opacity", o.opacity.toDouble())
         t.set("emit", o.emit.toDouble())
-        val wy = Water.surfaceAt(scene, o.x, o.z)
+        t.set("shadow", LuaValue.valueOf(o.shadow))
+        // water depth is only worked out for solid or scripted objects (it is the costly part of this call)
+        val wy = if (o.collider != 0 || instByObj.containsKey(o)) Water.surfaceAt(scene, o.x, o.z) else null
         t.set("inWater", LuaValue.valueOf(wy != null && o.y < wy))
         if (wy != null) t.set("waterY", wy.toDouble()) else t.set("waterY", LuaValue.NIL)
     }
@@ -247,6 +249,7 @@ class ScriptEngine(private val scene: Scene, private val log: (String) -> Unit) 
         num(t, "collider")?.let { o.collider = it.toInt().coerceIn(0, 2) }
         num(t, "opacity")?.let { o.opacity = it.coerceIn(0f, 1f) }
         num(t, "emit")?.let { o.emit = it.coerceIn(0f, 1f) }
+        t.get("shadow").let { if (it.isboolean()) o.shadow = it.toboolean() }
         o.color = floatArrayOf(
             (num(t, "r") ?: o.color[0]).coerceIn(0f, 1f),
             (num(t, "g") ?: o.color[1]).coerceIn(0f, 1f),
