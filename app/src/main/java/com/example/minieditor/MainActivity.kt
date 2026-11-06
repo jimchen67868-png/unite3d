@@ -1908,6 +1908,13 @@ end
 
     /** Settings are not a scene object the user adds: this opens them (creating the hidden data on first use). */
     private fun openSettings() {
+        // tapping Settings again while it is showing hides the panel
+        if (panel == Panel.INSPECT && scene.selected?.shape == Shape.SETTINGS) {
+            setPanel(Panel.INSPECT)
+            scene.selected = null
+            editor.refresh()
+            return
+        }
         scene.selected = scene.objects.firstOrNull { it.shape == Shape.SETTINGS } ?: scene.addSettings()
         if (panel != Panel.INSPECT) setPanel(Panel.INSPECT)
         editor.refresh()
