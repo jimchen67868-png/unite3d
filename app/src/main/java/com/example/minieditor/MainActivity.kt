@@ -79,6 +79,7 @@ class MainActivity : Activity(), SensorEventListener {
     private var waterLoop = false
     private lateinit var attachBtn: Button
     private lateinit var terrainPanel: LinearLayout
+    private lateinit var mapSizeField: EditText
     private lateinit var sculptBtn: Button
     private lateinit var brushLabels: Array<TextView>
     private lateinit var brushSliders: Array<SeekBar>
@@ -1738,6 +1739,30 @@ end
                     text = "Terrain: turn Sculpt on, then drag over the hills. Turn it off to orbit again. Size W/H/D sets width, tallest height and depth."
                     textSize = 11f; setTextColor(0xFFAAAAAA.toInt()); setPadding(dp(4), dp(4), dp(4), dp(2))
                 })
+                addView(TextView(this@MainActivity).apply {
+                    text = "Map size (width and depth)"
+                    textSize = 12f; setTextColor(Color.WHITE); setPadding(dp(4), dp(4), dp(4), dp(0))
+                })
+                addView(row(
+                    btn("24", true) { setMapSize(24f) },
+                    btn("50", true) { setMapSize(50f) },
+                    btn("100", true) { setMapSize(100f) },
+                    btn("200", true) { setMapSize(200f) },
+                    btn("400", true) { setMapSize(400f) }
+                ))
+                mapSizeField = EditText(this@MainActivity).apply {
+                    setTextColor(Color.WHITE)
+                    setHintTextColor(0xFF888888.toInt())
+                    hint = "Type a size, e.g. 150"
+                    textSize = 14f
+                    inputType = android.text.InputType.TYPE_CLASS_NUMBER or android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL
+                    imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_DONE
+                    setSingleLine(true)
+                    setBackgroundColor(0xFF2D2D2D.toInt())
+                    setPadding(dp(8), dp(8), dp(8), dp(8))
+                    setOnEditorActionListener { _, _, _ -> applyTypedMapSize(); true }
+                }
+                addView(row(mapSizeField, btn("Set size", true) { applyTypedMapSize() }))
                 addView(row(
                     sculptBtn,
                     btn("New hills") { regenTerrain(false) },
@@ -1857,6 +1882,24 @@ end
         toast("Grass planted on the terrain")
     }
 
+    private fun applyTypedMapSize() {
+        val v = mapSizeField.text.toString().trim().toFloatOrNull()
+        if (v == null || v <= 0f) { toast("Type a number first"); return }
+        setMapSize(v.coerceIn(2f, 400f))
+        clearFieldFocus()
+    }
+
+    /** Sets the selected terrain's width and depth (hill height is kept). */
+    private fun setMapSize(size: Float) {
+        val o = scene.selected
+        if (o == null || o.shape != Shape.TERRAIN) { toast("Select the terrain first"); return }
+        o.sx = size
+        o.sz = size
+        o.hVersion++
+        editor.refresh()
+        toast("Map size " + size.toInt() + " x " + size.toInt())
+    }
+
     private fun regenTerrain(flat: Boolean) {
         val o = scene.selected
         if (o == null || o.shape != Shape.TERRAIN) return
@@ -1964,6 +2007,10 @@ end
         windPanel.visibility = if (st) View.VISIBLE else View.GONE
         wavePanel.visibility = if (water) View.VISIBLE else View.GONE
         terrainPanel.visibility = if (ter) View.VISIBLE else View.GONE
+        if (ter && !mapSizeField.hasFocus()) {
+            val w = scene.selected?.sx ?: 0f
+            mapSizeField.setText(if (w == w.toInt().toFloat()) w.toInt().toString() else "%.1f".format(w))
+        }
         shadowBtn.visibility = colliderBtn.visibility
         attachBtn.visibility = if (o != null && !joy && !st && !ter) View.VISIBLE else View.GONE
         treeTypeBtn.visibility = if (tree) View.VISIBLE else View.GONE
