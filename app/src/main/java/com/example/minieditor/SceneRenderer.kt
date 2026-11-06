@@ -61,6 +61,9 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
     private var uTex = 0; private var uUseTex = 0; private var uMapMode = 0; private var uTerrain = 0
     private lateinit var meshes: Map<Shape, Mesh>
     private lateinit var grid: Mesh
+    /** Half-width of the floor grid; change from any thread, the grid is rebuilt on the next frame. */
+    @Volatile var gridHalf = 10
+    private var gridBuilt = 10
     private lateinit var gizmo: Mesh
     private lateinit var circle: Mesh
     private lateinit var quad: Mesh
@@ -1885,6 +1888,11 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         }
 
         // Grid + axes
+        if (gridBuilt != gridHalf) {
+            gridBuilt = gridHalf
+            val step = if (gridHalf <= 30) 1 else if (gridHalf <= 150) 5 else 10
+            grid = Meshes.grid(maxOf(step, gridHalf / step * step), step)
+        }
         Matrix.setIdentityM(model, 0)
         val showGrid = settings == null || settings.sy >= 0.5f
         GLES20.glLineWidth(1f)

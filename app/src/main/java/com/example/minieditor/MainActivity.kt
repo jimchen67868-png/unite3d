@@ -80,6 +80,8 @@ class MainActivity : Activity(), SensorEventListener {
     private lateinit var attachBtn: Button
     private lateinit var terrainPanel: LinearLayout
     private lateinit var mapSizeField: EditText
+    private lateinit var gridSizeField: EditText
+    private var inspTabRow: LinearLayout? = null
     private lateinit var sculptBtn: Button
     private lateinit var brushLabels: Array<TextView>
     private lateinit var brushSliders: Array<SeekBar>
@@ -413,6 +415,7 @@ end
                     btn("Inspector") { setPanel(Panel.INSPECT) },
                     btn("Material") { setPanel(Panel.MATERIAL) },
                     btn("Script") { setPanel(Panel.SCRIPT) },
+                    btn("Settings") { openSettings() },
                     fileButton
                 ),
                 // 1 Play
@@ -736,7 +739,7 @@ end
         pm.menu.add(0, 5, 4, "Export OBJ...")
         pm.menu.add(0, 6, 5, "New scene")
         pm.menu.add(0, 9, 8, "Show coordinates: " + (if (showCoords) "on" else "off"))
-        pm.menu.add(0, 10, 9, "Shadow settings...")
+        pm.menu.add(0, 10, 9, "Settings...")
         pm.menu.add(0, 11, 10, "Tilt control: " + (if (tiltOn) "on" else "off"))
         pm.menu.add(0, 12, 11, "Load sample: robot arm (bones)")
         pm.menu.add(0, 13, 12, "Load sample: lake (water)")
@@ -769,12 +772,7 @@ end
                     16 -> buildGameApk()
                     17 -> showSoundsDialog()
                     18 -> showLayoutDialog()
-                    10 -> {
-                        val s = scene.objects.firstOrNull { it.shape == Shape.SETTINGS } ?: scene.addSettings()
-                        scene.selected = s
-                        if (panel != Panel.INSPECT) setPanel(Panel.INSPECT)
-                        editor.refresh()
-                    }
+                    10 -> openSettings()
                 }
             }
             true
@@ -1347,7 +1345,6 @@ end
             addView(row(
                 btn("+Light", true) { if (scene.addLight(Shape.LIGHT) == null) toast("Max 4 point lights") else editor.refresh() },
                 btn("+Sun", true) { if (scene.addLight(Shape.SUN) == null) toast("Sun already added") else editor.refresh() },
-                btn("+Settings", true) { if (scene.addSettings() == null) toast("Settings already added") else editor.refresh() },
                 btn("+Block", true) { scene.addBlock(); editor.refresh() }
             ))
             addView(row(
@@ -1377,7 +1374,7 @@ end
             order.add(Pair(o, depth))
             if (o.uid != 0) for (c in scene.objects) if (c.parentId == o.uid && c !== o) walk(c, depth + 1)
         }
-        for (o in scene.objects) if (Rig.find(scene, o.parentId) == null) walk(o, 0)
+        for (o in scene.objects) if (o.shape != Shape.SETTINGS && Rig.find(scene, o.parentId) == null) walk(o, 0)
         for ((o, depth) in order) {
             val sel = o === scene.selected
             hierList.addView(TextView(this).apply {
@@ -1464,7 +1461,8 @@ end
             orientation = LinearLayout.VERTICAL
             visibility = View.GONE
             setPadding(dp(6), dp(4), dp(6), dp(4))
-            addView(tabbedBoxes(listOf("Transform", "Colour", "Object", "Extra"), listOf(catTransform, catColour, catObject, catExtra)))
+            inspTabRow = tabbedBoxes(listOf("Transform", "Colour", "Object", "Extra"), listOf(catTransform, catColour, catObject, catExtra))
+            addView(inspTabRow)
             addView(catTransform); addView(catColour); addView(catObject); addView(catExtra)
             catTransform.addView(nameField)
             catTransform.addView(fieldRow("Pos", 0))
@@ -1631,9 +1629,33 @@ end
                 text = "Shadow colour"
                 textSize = 12f; setTextColor(0xFFDDDDDD.toInt()); setPadding(dp(4), dp(6), dp(4), 0)
             }
+            gridSizeField = EditText(this@MainActivity).apply {
+                setTextColor(Color.WHITE)
+                setHintTextColor(0xFF888888.toInt())
+                hint = "Grid size, e.g. 100"
+                textSize = 14f
+                inputType = android.text.InputType.TYPE_CLASS_NUMBER
+                imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_DONE
+                setSingleLine(true)
+                setBackgroundColor(0xFF2D2D2D.toInt())
+                setPadding(dp(8), dp(8), dp(8), dp(8))
+                setOnEditorActionListener { _, _, _ -> applyGridSize(gridSizeField.text.toString().trim().toIntOrNull()); true }
+            }
             shadowPanel = LinearLayout(this@MainActivity).apply {
                 orientation = LinearLayout.VERTICAL
                 visibility = View.GONE
+                addView(TextView(this@MainActivity).apply {
+                    text = "Grid size (the floor grid in the editor)"
+                    textSize = 12f; setTextColor(Color.WHITE); setPadding(dp(4), dp(4), dp(4), dp(0))
+                })
+                addView(row(
+                    btn("20") { applyGridSize(20) },
+                    btn("50") { applyGridSize(50) },
+                    btn("100") { applyGridSize(100) },
+                    btn("200") { applyGridSize(200) },
+                    btn("400") { applyGridSize(400) }
+                ))
+                addView(row(gridSizeField, btn("Set grid") { applyGridSize(gridSizeField.text.toString().trim().toIntOrNull()) }))
                 addView(row(
                     btn("Hard black") {
                         val s = scene.selected
@@ -1882,6 +1904,24 @@ end
         toast("Grass planted on the terrain")
     }
 
+    /** Settings are not a scene object the user adds: this opens them (creating the hidden data on first use). */
+    private fun openSettings() {
+        scene.selected = scene.objects.firstOrNull { it.shape == Shape.SETTINGS } ?: scene.addSettings()
+        if (panel != Panel.INSPECT) setPanel(Panel.INSPECT)
+        editor.refresh()
+    }
+
+    private fun applyGridSize(size: Int?) {
+        if (size == null || size <= 0) { toast("Type a number first"); return }
+        gridSize = size.coerceIn(4, 400)
+        editor.renderer.gridHalf = gridSize / 2
+        editor.requestRender()
+        getSharedPreferences("layout", MODE_PRIVATE).edit().putInt("grid", gridSize).apply()
+        gridSizeField.setText(gridSize.toString())
+        clearFieldFocus()
+        toast("Grid " + gridSize + " x " + gridSize)
+    }
+
     private fun applyTypedMapSize() {
         val v = mapSizeField.text.toString().trim().toFloatOrNull()
         if (v == null || v <= 0f) { toast("Type a number first"); return }
@@ -1989,6 +2029,10 @@ end
         val light = o?.shape?.isLight == true
         val sun = o?.shape == Shape.SUN
         val st = o?.shape == Shape.SETTINGS
+        inspTabRow?.let { r ->
+            val names = if (st) listOf("World", "Sky", "Object", "Shadow/Grid") else listOf("Transform", "Colour", "Object", "Extra")
+            for (i in 0..3) (r.getChildAt(i) as? Button)?.text = names[i]
+        }
         val cam = o?.shape == Shape.CAMERA
         val ter = o?.shape == Shape.TERRAIN
         val bone = o?.shape == Shape.BONE
@@ -2004,6 +2048,7 @@ end
         colliderBtn.visibility = if (o != null && !joy && !light && !st && !cam && !bone && !water && !grass && !emitter) View.VISIBLE else View.GONE
         lightPanel.visibility = if (light) View.VISIBLE else View.GONE
         shadowPanel.visibility = if (st) View.VISIBLE else View.GONE
+        if (st && !gridSizeField.hasFocus()) gridSizeField.setText(gridSize.toString())
         windPanel.visibility = if (st) View.VISIBLE else View.GONE
         wavePanel.visibility = if (water) View.VISIBLE else View.GONE
         terrainPanel.visibility = if (ter) View.VISIBLE else View.GONE
@@ -2431,12 +2476,15 @@ end
     // ---------- Layout sizes ----------
 
     private var toolbarScale = 1f   // button height of the bottom toolbar (1 = normal)
+    private var gridSize = 20        // width of the editor floor grid
     private var panelFrac = 0.6f    // how much of the screen the top panels (Inspector, ...) may use
 
     private fun loadLayoutPrefs() {
         val sp = getSharedPreferences("layout", MODE_PRIVATE)
         toolbarScale = sp.getFloat("toolbar", 1f).coerceIn(0.5f, 2f)
         panelFrac = sp.getFloat("panel", 0.6f).coerceIn(0.2f, 0.8f)
+        gridSize = sp.getInt("grid", 20).coerceIn(4, 400)
+        editor.renderer.gridHalf = gridSize / 2
     }
 
     private fun applyToolbarHeight() {
