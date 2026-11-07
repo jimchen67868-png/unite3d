@@ -53,7 +53,7 @@ class ScriptEngine(private val scene: Scene, private val log: (String) -> Unit) 
     private val worldPushed = FloatArray(6)
     private var time = 0f
     private var spawnCount = 0
-    private val maxObjects = 800
+    private val maxObjects = 1200
 
     var touching = false
     var touchX = 0f
@@ -229,7 +229,19 @@ class ScriptEngine(private val scene: Scene, private val log: (String) -> Unit) 
         }
     }
 
+    // what each object looked like when it was last copied into its Lua table; unchanged ones are skipped
+    private val pushCache = HashMap<SceneObject, FloatArray>()
+
     private fun push(o: SceneObject, t: LuaTable) {
+        val c = pushCache.getOrPut(o) { FloatArray(17) { Float.NaN } }
+        val scripted = instByObj.containsKey(o)
+        var changed = false
+        var moved = false
+        fun chk(i: Int, v: Float) { if (c[i] != v) { c[i] = v; changed = true; if (i < 3) moved = true } }
+        chk(0, o.x); chk(1, o.y); chk(2, o.z); chk(3, o.rx); chk(4, o.ry); chk(5, o.rz)
+        chk(6, o.sx); chk(7, o.sy); chk(8, o.sz); chk(9, o.color[0]); chk(10, o.color[1]); chk(11, o.color[2])
+        chk(12, o.collider.toFloat()); chk(13, o.opacity); chk(14, o.emit); chk(15, if (o.shadow) 1f else 0f); chk(16, o.swing)
+        if (!changed && !scripted) return
         t.set("name", o.name)
         t.set("x", o.x.toDouble()); t.set("y", o.y.toDouble()); t.set("z", o.z.toDouble())
         t.set("rx", o.rx.toDouble()); t.set("ry", o.ry.toDouble()); t.set("rz", o.rz.toDouble())
@@ -238,20 +250,13 @@ class ScriptEngine(private val scene: Scene, private val log: (String) -> Unit) 
         t.set("collider", o.collider.toDouble())
         t.set("opacity", o.opacity.toDouble())
         t.set("emit", o.emit.toDouble())
+        t.set("swing", o.swing.toDouble())
         t.set("shadow", LuaValue.valueOf(o.shadow))
-        // water depth is only worked out for solid or scripted objects (it is the costly part of this call)
-        val wy = if (o.collider != 0 || instByObj.containsKey(o)) Water.surfaceAt(scene, o.x, o.z) else null
+        // water depth is only worked out for scripted objects and ones that just moved (it is the costly part)
+        val wy = if (scripted || (o.collider != 0 && moved)) Water.surfaceAt(scene, o.x, o.z) else null
         t.set("inWater", LuaValue.valueOf(wy != null && o.y < wy))
         if (wy != null) t.set("waterY", wy.toDouble()) else t.set("waterY", LuaValue.NIL)
     }
-
-    private fun num(t: LuaTable, k: String): Float? {
-        val v = t.get(k)
-        if (!v.isnumber()) return null
-        val f = v.tofloat()
-        return if (f.isNaN() || f.isInfinite()) null else f
-    }
-
     private fun pull(o: SceneObject, t: LuaTable) {
         num(t, "x")?.let { o.x = it }
         num(t, "y")?.let { o.y = it }
@@ -265,6 +270,7 @@ class ScriptEngine(private val scene: Scene, private val log: (String) -> Unit) 
         num(t, "collider")?.let { o.collider = it.toInt().coerceIn(0, 2) }
         num(t, "opacity")?.let { o.opacity = it.coerceIn(0f, 1f) }
         num(t, "emit")?.let { o.emit = it.coerceIn(0f, 1f) }
+        num(t, "swing")?.let { o.swing = it.coerceIn(-170f, 170f) }
         t.get("shadow").let { if (it.isboolean()) o.shadow = it.toboolean() }
         o.color = floatArrayOf(
             (num(t, "r") ?: o.color[0]).coerceIn(0f, 1f),

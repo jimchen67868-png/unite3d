@@ -14,6 +14,10 @@ function start()
   self.vy = 0
   self.reserveAdd = 0
   fx = {}
+  findParts()
+  aimT = 0
+  fpWas = nil
+  deadT = 0
   swimming = false
   diveDepth = 0
   breath = 20
@@ -117,7 +121,7 @@ end
 -- true when no wall is between the two points
 function lineClear(x0, y0, z0, x1, y1, z1)
   local dx, dy, dz = x1 - x0, y1 - y0, z1 - z0
-  local n = math.ceil(math.sqrt(dx * dx + dy * dy + dz * dz) / 0.4)
+  local n = math.ceil(math.sqrt(dx * dx + dy * dy + dz * dz) / 0.2)
   for s = 1, n - 1 do
     local t = s / n
     if pointInWall(x0 + dx * t, y0 + dy * t, z0 + dz * t) then return false end
@@ -160,6 +164,7 @@ end
 function shoot()
   mag = mag - 1
   fireT = 0.12
+  aimT = 0.7
   playSound("shot", 0.7)
   local fx, fy, fz = aimDir()
   local ok, b = pcall(spawn, "sphere", self.x + fx * 1.2, self.y + 0.5 + fy * 1.2, self.z + fz * 1.2)
@@ -239,6 +244,52 @@ function stairFloor(x, z)
   a = stairAt(x, z - r)
   if a ~= nil and (best == nil or a > best) then best = a end
   return best
+end
+
+-- ===== the person: find the parts (they follow this body) and swing the arms and legs =====
+walkT = 0
+legAmp = 0
+
+function findParts()
+  local n = self.name
+  P = {
+    head = find(n .. " head"), helm = find(n .. " helm"), torso = find(n .. " torso"), pack = find(n .. " pack"),
+    armL = find(n .. " armL"), armR = find(n .. " armR"), legL = find(n .. " legL"), legR = find(n .. " legR"),
+    gun = find(n .. " gun")
+  }
+end
+
+-- walking: legs and arms swing; aiming: arms come up with the rifle
+function walkPose(dt, moving, speed, aiming)
+  if moving then walkT = walkT + dt * speed * 1.7 end
+  local want = 0
+  if moving then want = 38 end
+  legAmp = legAmp + (want - legAmp) * math.min(1, dt * 8)
+  local s = math.sin(walkT)
+  P.legL.swing = legAmp * s
+  P.legR.swing = -legAmp * s
+  local base = 55
+  if aiming then base = 78 end
+  P.armL.swing = base + legAmp * 0.12 * s
+  P.armR.swing = base - legAmp * 0.12 * s
+end
+
+-- lying down when shot: the body tips over backwards and sinks to the ground
+function fallPose(t, groundY)
+  local k = math.min(1, t / 0.6)
+  self.rx = 90 * k
+  self.y = groundY + 0.9 - 0.7 * k
+  P.legL.swing = 10 * k
+  P.legR.swing = -10 * k
+  P.armL.swing = 55 + 80 * k
+  P.armR.swing = 55 + 80 * k
+end
+
+function removeBody()
+  for k, part in pairs(P) do
+    if part ~= nil then destroy(part) end
+  end
+  destroy(self)
 end
 
 -- ===== water effects: ripples and splash drops (little see-through spheres) =====
@@ -332,7 +383,12 @@ function update(dt)
   end
   updateBullets(dt)
   updateFx(dt)
-  if self.dead then return end
+  if self.dead then
+    deadT = deadT + dt
+    if camera.firstPerson then camera.firstPerson = false end
+    fallPose(deadT, deadG or groundHeight(self.x, self.z))
+    return
+  end
 
   -- move
   local mx, mz = 0, 0
@@ -352,8 +408,27 @@ function update(dt)
   local moving = len > 0.1
   local sp = 6
   if swimming then sp = 3.2 elseif self.inWater then sp = 4 end
-  self.x = self.x + mx * sp * dt
-  self.z = self.z + mz * sp * dt
+  -- cliffs: a slope steeper than about 55 degrees cannot be walked up (no popping up a cliff face)
+  local mvx, mvz = mx * sp * dt, mz * sp * dt
+  local feet0 = self.y - 0.9
+  if (mvx ~= 0 or mvz ~= 0) and feet0 < ground + 0.6 then
+    local lim = 1.4 * math.sqrt(mvx * mvx + mvz * mvz)
+    local gNew = groundHeight(self.x + mvx, self.z + mvz)
+    if gNew - ground > lim and gNew > feet0 + 0.15 then
+      local gx = groundHeight(self.x + mvx, self.z)
+      local gz = groundHeight(self.x, self.z + mvz)
+      if gx - ground <= 1.4 * math.abs(mvx) or gx <= feet0 + 0.15 then
+        mvz = 0
+      elseif gz - ground <= 1.4 * math.abs(mvz) or gz <= feet0 + 0.15 then
+        mvx = 0
+      else
+        mvx = 0
+        mvz = 0
+      end
+    end
+  end
+  self.x = self.x + mvx
+  self.z = self.z + mvz
   self.ry = input.yaw
 
   if swimming and not wasSwim then
@@ -384,9 +459,9 @@ function update(dt)
   if #STAIRS > 0 and not swimming and self.vy <= 0.1 then
     local fl = stairFloor(self.x, self.z)
     if fl ~= nil then
-      local feet = self.y - 0.85
+      local feet = self.y - 0.9
       if feet > fl - 0.8 and feet < fl + 0.8 then
-        self.y = fl + 0.85
+        self.y = fl + 0.9
         self.vy = 0
         onStairs = true
       end
@@ -511,6 +586,34 @@ function update(dt)
     end
   end
 
+  -- the person: pose, swim stroke, and hide the body in first person
+  aimT = aimT - dt
+  local fp = camera.firstPerson
+  if fp ~= fpWas then
+    fpWas = fp
+    local o = 1
+    if fp then o = 0 end
+    P.head.opacity = o
+    P.helm.opacity = o
+    P.torso.opacity = o
+    P.pack.opacity = o
+    P.legL.opacity = o
+    P.legR.opacity = o
+  end
+  local leanTo = 0
+  if swimming then
+    leanTo = -80
+    walkT = walkT + dt * (moving and 5 or 2)
+    local s = math.sin(walkT)
+    P.armL.swing = 135 + 35 * s
+    P.armR.swing = 135 - 35 * s
+    P.legL.swing = 22 * math.sin(walkT * 2.2)
+    P.legR.swing = -22 * math.sin(walkT * 2.2)
+  else
+    walkPose(dt, moving and (self.grounded or onStairs), sp, aimT > 0)
+  end
+  self.rx = self.rx + (leanTo - self.rx) * math.min(1, dt * 6)
+
   -- health
   if self.hp < lastHp and math.floor(self.hp / 10) < math.floor(lastHp / 10) then
     log("HP " .. math.max(0, math.floor(self.hp)))
@@ -523,6 +626,10 @@ function update(dt)
   lastHp = self.hp
   if self.hp <= 0 then
     self.dead = true
+    deadG = groundHeight(self.x, self.z)
+    for k, part in pairs(P) do
+      if part ~= nil then part.opacity = 1 end
+    end
     log("YOU DIED.  Enemies left: " .. countAlive())
     return
   end
@@ -566,6 +673,54 @@ function start()
   player = find("Player")
   zone = find("Zone")
   home = { x = self.x, z = self.z }
+  findParts()
+  deadT = -1
+end
+
+-- ===== the person: find the parts (they follow this body) and swing the arms and legs =====
+walkT = 0
+legAmp = 0
+
+function findParts()
+  local n = self.name
+  P = {
+    head = find(n .. " head"), helm = find(n .. " helm"), torso = find(n .. " torso"), pack = find(n .. " pack"),
+    armL = find(n .. " armL"), armR = find(n .. " armR"), legL = find(n .. " legL"), legR = find(n .. " legR"),
+    gun = find(n .. " gun")
+  }
+end
+
+-- walking: legs and arms swing; aiming: arms come up with the rifle
+function walkPose(dt, moving, speed, aiming)
+  if moving then walkT = walkT + dt * speed * 1.7 end
+  local want = 0
+  if moving then want = 38 end
+  legAmp = legAmp + (want - legAmp) * math.min(1, dt * 8)
+  local s = math.sin(walkT)
+  P.legL.swing = legAmp * s
+  P.legR.swing = -legAmp * s
+  local base = 55
+  if aiming then base = 78 end
+  P.armL.swing = base + legAmp * 0.12 * s
+  P.armR.swing = base - legAmp * 0.12 * s
+end
+
+-- lying down when shot: the body tips over backwards and sinks to the ground
+function fallPose(t, groundY)
+  local k = math.min(1, t / 0.6)
+  self.rx = 90 * k
+  self.y = groundY + 0.9 - 0.7 * k
+  P.legL.swing = 10 * k
+  P.legR.swing = -10 * k
+  P.armL.swing = 55 + 80 * k
+  P.armR.swing = 55 + 80 * k
+end
+
+function removeBody()
+  for k, part in pairs(P) do
+    if part ~= nil then destroy(part) end
+  end
+  destroy(self)
 end
 
 -- walls are put into a coarse grid once, so a bullet only tests the few walls near it
@@ -697,17 +852,25 @@ function updateBullets(dt)
 end
 
 function update(dt)
-  if self.hp <= 0 then
-    for i = 1, #bullets do destroy(bullets[i]) end
-    bullets = {}
-    self.dead = true
-    destroy(self)
+  if self.hp <= 0 or self.dead then
+    if deadT < 0 then
+      deadT = 0
+      deadG = groundHeight(self.x, self.z)
+      self.dead = true
+      self.collider = 0
+      for i = 1, #bullets do destroy(bullets[i]) end
+      bullets = {}
+    end
+    deadT = deadT + dt
+    fallPose(deadT, deadG)
+    if deadT > 6 then removeBody() end
     return
   end
 
   local dx, dz = player.x - self.x, player.z - self.z
   local d = math.sqrt(dx * dx + dz * dz) + 0.001
   local mx, mz = 0, 0
+  local aiming = false
   local zx, zz = self.x - zone.x, self.z - zone.z
   local zd = math.sqrt(zx * zx + zz * zz) + 0.001
   local zr = zone.radius or 40
@@ -716,8 +879,10 @@ function update(dt)
     -- caught in the storm: run for the middle
     self.hp = self.hp - 2 * dt
     mx, mz = -zx / zd, -zz / zd
+    self.ry = math.deg(math.atan2(-mx, -mz))
   elseif (not player.dead) and d < 30 then
     -- fight: keep a medium distance, strafe, shoot
+    aiming = true
     self.ry = math.deg(math.atan2(-dx, -dz))
     if d > 16 then
       mx, mz = dx / d, dz / d
@@ -747,6 +912,7 @@ function update(dt)
     local wd = math.sqrt(wx * wx + wz * wz) + 0.001
     if wanderT <= 0 or wd < 1.5 then pickTarget() end
     mx, mz = wx / wd * 0.6, wz / wd * 0.6
+    self.ry = math.deg(math.atan2(-mx, -mz))
   end
 
   local sp = spd
@@ -763,6 +929,7 @@ function update(dt)
     self.y = groundHeight(home.x, home.z) + 2
     self.vy = 0
   end
+  walkPose(dt, (mx ~= 0 or mz ~= 0) and self.grounded, sp, aiming)
   updateBullets(dt)
 end
 """
@@ -1036,6 +1203,38 @@ end
         o.collider = collider
     }
 
+    /**
+     * A person made of simple parts that follow one invisible body (the root): head, helmet, torso, backpack,
+     * two arms, two legs and a rifle. The root keeps the name, the script and the collision; scripts swing the
+     * arms and legs through the parts' "swing" value. Front of the person is -z, like the rest of the sample.
+     */
+    private fun human(
+        scene: Scene, name: String, x: Float, y: Float, z: Float, script: String,
+        shirt: FloatArray, pants: FloatArray, helmet: FloatArray
+    ): SceneObject {
+        val skin = floatArrayOf(0.93f, 0.74f, 0.6f)
+        val dark = floatArrayOf(0.16f, 0.16f, 0.18f)
+        val root = mk(scene, Shape.SPHERE, name, x, y, z, 0.9f, 1.8f, 0.9f, shirt, script)
+        root.collider = 1
+        root.shadow = false
+        root.opacity = 0.02f       // the body is only the collision shape; the parts are what you see
+        fun part(suffix: String, shape: Shape, dx: Float, dy: Float, dz: Float, sx: Float, sy: Float, sz: Float, color: FloatArray) {
+            val p = mk(scene, shape, name + " " + suffix, x + dx, y + dy, z + dz, sx, sy, sz, color)
+            p.shadow = false
+            Rig.bind(p, root)
+        }
+        part("head", Shape.SPHERE, 0f, 0.74f, 0f, 0.30f, 0.33f, 0.30f, skin)
+        part("helm", Shape.SPHERE, 0f, 0.83f, 0f, 0.37f, 0.24f, 0.39f, helmet)
+        part("torso", Shape.CUBE, 0f, 0.30f, 0f, 0.50f, 0.60f, 0.28f, shirt)
+        part("pack", Shape.CUBE, 0f, 0.32f, 0.22f, 0.36f, 0.42f, 0.18f, dark)
+        part("armL", Shape.CUBE, -0.31f, 0.305f, 0f, 0.13f, 0.55f, 0.13f, shirt)
+        part("armR", Shape.CUBE, 0.31f, 0.305f, 0f, 0.13f, 0.55f, 0.13f, shirt)
+        part("legL", Shape.CUBE, -0.12f, -0.46f, 0f, 0.18f, 0.88f, 0.18f, pants)
+        part("legR", Shape.CUBE, 0.12f, -0.46f, 0f, 0.18f, 0.88f, 0.18f, pants)
+        part("gun", Shape.CUBE, 0.1f, 0.32f, -0.45f, 0.08f, 0.1f, 0.72f, dark)
+        return root
+    }
+
     private fun mk(
         scene: Scene, shape: Shape, name: String, x: Float, y: Float, z: Float,
         sx: Float, sy: Float, sz: Float, color: FloatArray, script: String = ""
@@ -1218,7 +1417,7 @@ end
         val nHouses = if (large) 16 else 5
         val houseGap = if (huge) 40.0 else if (large) 32.0 else 16.0
         val nTrees = if (huge) 110 else if (large) 130 else 40
-        val nBots = if (huge) 22 else if (large) 20 else 8
+        val nBots = if (huge) 18 else if (large) 16 else 8
         val nExtraLoot = if (huge) 24 else if (large) 14 else 6
         val playerScriptBase = BR_PLAYER.replace("local NBOTS = 8", "local NBOTS = " + nBots)
         val zoneScript = when (mode) {
@@ -1296,9 +1495,10 @@ end
             houses.add(floatArrayOf(hx, hz, hi + 0.2f, lo))
         }
         var wallN = 0
-        fun wall(x: Float, y: Float, z: Float, sx: Float, sy: Float, sz: Float) {
+        // walls, roofs and decks all stop bullets (the scripts look for objects named "Wall n")
+        fun wall(x: Float, y: Float, z: Float, sx: Float, sy: Float, sz: Float, color: FloatArray = floatArrayOf(0.78f, 0.70f, 0.55f)) {
             wallN++
-            val o = mk(scene, Shape.CUBE, "Wall " + wallN, x, y, z, sx, sy, sz, floatArrayOf(0.78f, 0.70f, 0.55f))
+            val o = mk(scene, Shape.CUBE, "Wall " + wallN, x, y, z, sx, sy, sz, color)
             o.collider = 1
         }
         var houseN = 0
@@ -1317,8 +1517,7 @@ end
             wall(cx - 3.5f, wy, cz, 0.3f, 3f, 7f)
             wall(cx - 2.25f, wy, cz + 3.5f, 2.5f, 3f, 0.3f)
             wall(cx + 2.25f, wy, cz + 3.5f, 2.5f, 3f, 0.3f)
-            val roof = mk(scene, Shape.CUBE, "Roof " + houseN, cx, top + 3.15f, cz, 7.8f, 0.3f, 7.8f, floatArrayOf(0.55f, 0.2f, 0.18f))
-            roof.collider = 1
+            wall(cx, top + 3.15f, cz, 7.8f, 0.3f, 7.8f, floatArrayOf(0.55f, 0.2f, 0.18f))
         }
 
         // ---- watchtowers with a long stair up to the deck (huge map) ----
@@ -1365,15 +1564,13 @@ end
                 for (sx in intArrayOf(-1, 1)) for (sz in intArrayOf(-1, 1)) {
                     wall(tx + sx * 3.2f, T + legH / 2f, tz + sz * 3.2f, 0.6f, legH, 0.6f)
                 }
-                val deck = mk(scene, Shape.CUBE, "Tower deck " + tn, tx, T + H - 0.2f, tz, 7.4f, 0.4f, 7.4f, floatArrayOf(0.55f, 0.42f, 0.3f))
-                deck.collider = 1
+                wall(tx, T + H - 0.2f, tz, 7.4f, 0.4f, 7.4f, floatArrayOf(0.55f, 0.42f, 0.3f))
                 wall(tx, T + H + 0.5f, tz - 3.6f, 7.4f, 1f, 0.2f)
                 wall(tx + 3.6f, T + H + 0.5f, tz, 0.2f, 1f, 7f)
                 wall(tx - 3.6f, T + H + 0.5f, tz, 0.2f, 1f, 7f)
                 wall(tx - 2.4f, T + H + 0.5f, tz + 3.6f, 2.6f, 1f, 0.2f)
                 wall(tx + 2.4f, T + H + 0.5f, tz + 3.6f, 2.6f, 1f, 0.2f)
-                val roof = mk(scene, Shape.CUBE, "Tower roof " + tn, tx, T + H + 3.45f, tz, 8f, 0.3f, 8f, floatArrayOf(0.55f, 0.2f, 0.18f))
-                roof.collider = 1
+                wall(tx, T + H + 3.45f, tz, 8f, 0.3f, 8f, floatArrayOf(0.55f, 0.2f, 0.18f))
                 // the stair: 20 steps coming up from the south; the player script walks up them (see STAIRS)
                 val z0 = tz + 3.7f
                 val z1 = z0 + nSteps * tread
@@ -1463,8 +1660,10 @@ end
             px = x; pz = z; pg = h
             break
         }
-        val player = mk(scene, Shape.SPHERE, "Player", px, pg + 1.2f, pz, 1.0f, 1.7f, 1.0f, floatArrayOf(0.25f, 0.5f, 0.9f), playerScriptBase.replace("STAIRS = {}", "STAIRS = " + stairLua))
-        player.collider = 1; player.shadow = false
+        human(
+            scene, "Player", px, pg + 1.2f, pz, playerScriptBase.replace("STAIRS = {}", "STAIRS = " + stairLua),
+            floatArrayOf(0.22f, 0.42f, 0.78f), floatArrayOf(0.2f, 0.22f, 0.3f), floatArrayOf(0.2f, 0.3f, 0.5f)
+        )
 
         // ---- enemy soldiers ----
         var bots = 0
@@ -1478,8 +1677,12 @@ end
             if (Math.hypot((x - px).toDouble(), (z - pz).toDouble()) < 16.0 * sp) continue
             if (houses.any { Math.hypot((it[0] - x).toDouble(), (it[1] - z).toDouble()) < 9.0 }) continue
             bots++
-            val b = mk(scene, Shape.SPHERE, "Bot " + bots, x, h + 1.2f, z, 0.9f, 1.8f, 0.9f, floatArrayOf(0.85f, 0.2f, 0.2f), BR_BOT)
-            b.collider = 1; b.shadow = false
+            val shirts = arrayOf(floatArrayOf(0.7f, 0.2f, 0.18f), floatArrayOf(0.35f, 0.45f, 0.25f), floatArrayOf(0.55f, 0.45f, 0.25f), floatArrayOf(0.3f, 0.3f, 0.34f))
+            val shirt = shirts[bots % shirts.size]
+            human(
+                scene, "Bot " + bots, x, h + 1.2f, z, BR_BOT,
+                shirt, floatArrayOf(0.25f, 0.25f, 0.22f), floatArrayOf(shirt[0] * 0.6f, shirt[1] * 0.6f, shirt[2] * 0.6f)
+            )
         }
 
         // ---- storm controller (hidden under the ground at the storm centre) ----

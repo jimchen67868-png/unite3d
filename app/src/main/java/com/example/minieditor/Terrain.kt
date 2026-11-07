@@ -86,7 +86,10 @@ object TerrainGen {
         val h10 = hs[j * V + i + 1]
         val h01 = hs[(j + 1) * V + i]
         val h11 = hs[(j + 1) * V + i + 1]
-        val h = h00 * (1 - fx) * (1 - fz) + h10 * fx * (1 - fz) + h01 * (1 - fx) * fz + h11 * fx * fz
+        // the same two triangles the terrain is drawn with (the diagonal runs from corner 00 to corner 11), so the
+        // ground you stand on is exactly the ground you see, even on steep hills with big cells
+        val h = if (fx >= fz) h00 + fx * (h10 - h00) + fz * (h11 - h10)
+                else h00 + fx * (h11 - h01) + fz * (h01 - h00)
         return t.y + h * t.sy
     }
 

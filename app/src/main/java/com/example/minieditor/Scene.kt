@@ -54,6 +54,7 @@ class SceneObject(
     var hVersion = 0                  // bumps whenever the heights change
     var uid = 0                       // stable id so other objects can attach to this one
     var parentId = 0                  // uid of the bone this object is attached to (0 = free)
+    var swing = 0f                    // runtime only: degrees this attached object swings about its top end (arms, legs)
     var rel: FloatArray? = null       // position/rotation relative to that bone
     var collider: Int = 0   // 0 = none, 1 = solid (blocks), 2 = trigger (events only)
 }

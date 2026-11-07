@@ -1028,7 +1028,8 @@ end
         clearFieldFocus()
         snaps = scene.objects.map {
             Snap(it, floatArrayOf(it.x, it.y, it.z, it.rx, it.ry, it.rz, it.sx, it.sy, it.sz,
-                it.color[0], it.color[1], it.color[2], it.collider.toFloat()))
+                it.color[0], it.color[1], it.color[2], it.collider.toFloat(),
+                it.opacity, it.emit, if (it.shadow) 1f else 0f))
         }
         logLines.clear(); showLog()
         playing = true
@@ -1072,6 +1073,7 @@ end
         engine = null
         audio?.release()
         audio = null
+        for (o in scene.objects) o.swing = 0f
         for (s in snaps) {
             val o = s.o; val v = s.v
             o.x = v[0]; o.y = v[1]; o.z = v[2]
@@ -1079,6 +1081,7 @@ end
             o.sx = v[6]; o.sy = v[7]; o.sz = v[8]
             o.color = floatArrayOf(v[9], v[10], v[11])
             o.collider = v[12].toInt()
+            o.opacity = v[13]; o.emit = v[14]; o.shadow = v[15] > 0.5f
         }
         val orig = snaps.map { it.o }
         if (scene.objects.toList() != orig) {

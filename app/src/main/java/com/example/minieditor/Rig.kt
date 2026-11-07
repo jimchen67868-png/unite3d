@@ -83,14 +83,34 @@ object Rig {
     fun apply(scene: Scene) {
         val kids = scene.objects.filter { it.parentId != 0 && it.rel != null }
         if (kids.isEmpty()) return
+        val byUid = HashMap<Int, SceneObject>()
+        for (o in scene.objects) if (o.uid != 0) byUid[o.uid] = o
+        fun depth(o: SceneObject): Int {
+            var n = 0
+            var cur = o
+            while (n < 64) {
+                val p = byUid[cur.parentId] ?: break
+                cur = p
+                n++
+            }
+            return n
+        }
+        val order = kids.map { it to depth(it) }.sortedBy { it.second }
         val pm = FloatArray(16)
         val wm = FloatArray(16)
-        for (c in kids.sortedBy { depthOf(scene, it) }) {
+        for ((c, _) in order) {
             if (c === editing) continue
-            val p = find(scene, c.parentId) ?: continue
+            val p = byUid[c.parentId] ?: continue
             val rel = c.rel ?: continue
             worldMatrix(p, pm)
             Matrix.multiplyMM(wm, 0, pm, 0, rel, 0)
+            if (c.swing != 0f) {
+                // swing about the top end of the object (shoulder / hip), so a limb moves like a limb
+                val h = 0.5f * c.sy
+                Matrix.translateM(wm, 0, 0f, h, 0f)
+                Matrix.rotateM(wm, 0, c.swing, 1f, 0f, 0f)
+                Matrix.translateM(wm, 0, 0f, -h, 0f)
+            }
             c.x = wm[12]
             c.y = wm[13]
             c.z = wm[14]
