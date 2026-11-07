@@ -9,7 +9,7 @@ import kotlin.math.sin
 
 /**
  * Small synthesized sound effects (WAV) for the sample games, so they have sound without any file to import.
- * Names: shot, splash, swim, hurt, reload, pickup, hit.
+ * Names: shot, splash, swim, hurt, reload, pickup, hit, bubble, gasp.
  */
 object SoundGen {
     private const val RATE = 22050
@@ -84,12 +84,48 @@ object SoundGen {
         }
     }
 
+    /** Resonant filter: lets frequencies around [freq] through (used to turn a buzz into a vowel-like grunt). */
+    private class Formant(freq: Float, bw: Float) {
+        private val r = exp(-PI.toFloat() * bw / RATE)
+        private val a1 = 2f * r * kotlin.math.cos(2f * PI.toFloat() * freq / RATE)
+        private val a2 = -r * r
+        private val g = 1f - r
+        private var y1 = 0f
+        private var y2 = 0f
+        fun run(x: Float): Float {
+            val y = g * x + a1 * y1 + a2 * y2
+            y2 = y1
+            y1 = y
+            return y
+        }
+    }
+
+    /** Getting shot: a dull body thump, a flesh slap, and a short male "ugh" grunt. */
     private fun hurt(): ByteArray {
         val r = Rng(4)
-        return wav(0.28f) { t, _ ->
-            val f = 330f - 520f * t
-            val saw = ((f * t) % 1f) * 2f - 1f
-            (saw * 0.6f + r.next() * 0.25f) * exp(-t * 11f)
+        var slapLp = 0f
+        var phase = 0f
+        val f1 = Formant(620f, 140f)
+        val f2 = Formant(1080f, 190f)
+        val f3 = Formant(2500f, 300f)
+        return wav(0.42f, 0.9f) { t, _ ->
+            // thump: low body hit, pitch dropping
+            val thump = tone(78f - 40f * t, t) * exp(-t * 17f) * 1.0f
+            // slap: short dull noise burst
+            slapLp += (r.next() - slapLp) * 0.28f
+            val slap = slapLp * exp(-t * 55f) * 0.9f
+            // grunt: buzzing voice (pitch falls 125 -> 85 Hz) shaped by vowel resonances
+            val u = t - 0.025f
+            var grunt = 0f
+            if (u > 0f) {
+                val f0 = 125f - 160f * u
+                phase += max(f0, 70f) / RATE
+                val saw = (phase % 1f) * 2f - 1f
+                val src = saw * 0.8f + r.next() * 0.2f
+                val v = f1.run(src) * 1.0f + f2.run(src) * 0.7f + f3.run(src) * 0.25f
+                grunt = v * 6.5f * min(1f, u / 0.012f) * exp(-u * 8f) * (0.6f + 0.4f * exp(-u * 14f))
+            }
+            thump + slap + grunt * 0.55f
         }
     }
 
@@ -110,9 +146,39 @@ object SoundGen {
         tone(f, t) * exp(-t * 9f) * min(1f, t / 0.005f)
     }
 
+    /** You hit an enemy: a short crisp tick with a dull thud under it. */
     private fun hit(): ByteArray {
         val r = Rng(6)
-        return wav(0.14f) { t, _ -> (r.next() * 0.7 + tone(230f, t) * 0.6f).toFloat() * exp(-t * 38f) }
+        var hp = 0f
+        return wav(0.16f, 0.8f) { t, _ ->
+            val n = r.next()
+            hp = n - hp * 0.2f   // brighter noise
+            hp * exp(-t * 70f) * 0.7f + tone(1700f, t) * exp(-t * 90f) * 0.4f + tone(160f, t) * exp(-t * 32f) * 0.8f
+        }
+    }
+
+    /** A few bubbles blooping upwards. */
+    private fun bubbleSnd(): ByteArray {
+        return wav(0.55f, 0.7f) { t, _ ->
+            var v = 0f
+            for (k in 0..2) {
+                val u = t - k * 0.16f
+                if (u > 0f) v += tone(420f + 700f * k + 3000f * u, u) * exp(-u * 24f) * 0.6f
+            }
+            v
+        }
+    }
+
+    /** Coming up for air: a quick breath in. */
+    private fun gasp(): ByteArray {
+        val r = Rng(7)
+        val f1 = Formant(700f, 260f)
+        val f2 = Formant(1700f, 400f)
+        return wav(0.55f, 0.8f) { t, _ ->
+            val n = r.next()
+            val env = min(1f, t / 0.08f) * exp(-t * 4.5f)
+            (f1.run(n) * 1.0f + f2.run(n) * 0.5f) * env * 9f
+        }
     }
 
     /** Writes the effects into [dir] (replacing files with the same names). */
@@ -120,7 +186,8 @@ object SoundGen {
         dir.mkdirs()
         val all = mapOf(
             "shot.wav" to shot(), "splash.wav" to splash(), "swim.wav" to swim(), "hurt.wav" to hurt(),
-            "reload.wav" to reload(), "pickup.wav" to pickup(), "hit.wav" to hit()
+            "reload.wav" to reload(), "pickup.wav" to pickup(), "hit.wav" to hit(),
+            "bubble.wav" to bubbleSnd(), "gasp.wav" to gasp()
         )
         for ((name, bytes) in all) {
             try { File(dir, name).writeBytes(bytes) } catch (e: Throwable) { }

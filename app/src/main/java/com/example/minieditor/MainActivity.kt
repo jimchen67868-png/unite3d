@@ -747,6 +747,7 @@ end
         pm.menu.add(0, 14, 13, "Load sample: campfire (fire and smoke)")
         pm.menu.add(0, 15, 14, "Load sample game: Battle Royale (shooter)")
         pm.menu.add(0, 19, 14, "Load sample game: Battle Royale LARGE map (PUBG style)")
+        pm.menu.add(0, 20, 14, "Load sample game: Battle Royale HUGE map (hills, towers, deep water)")
         pm.menu.add(0, 16, 15, "Build game APK (CircleCI)...")
         pm.menu.add(0, 17, 15, "Sounds and music...")
         pm.menu.add(0, 18, 15, "Toolbar and panel size...")
@@ -770,8 +771,9 @@ end
                     12 -> loadRigSample()
                     13 -> loadLakeSample()
                     14 -> loadCampfireSample()
-                    15 -> loadBattleSample(false)
-                    19 -> loadBattleSample(true)
+                    15 -> loadBattleSample(0)
+                    19 -> loadBattleSample(1)
+                    20 -> loadBattleSample(2)
                     16 -> buildGameApk()
                     17 -> showSoundsDialog()
                     18 -> showLayoutDialog()
@@ -783,9 +785,10 @@ end
         pm.show()
     }
 
-    private fun loadBattleSample(large: Boolean) {
+    private fun loadBattleSample(mode: Int) {
+        val large = mode >= 1
         val go = {
-            Samples.battleRoyale(scene, large)
+            Samples.battleRoyale(scene, mode)
             SoundGen.install(soundsDir())
             val pl = scene.objects.firstOrNull { it.name == "Player" }
             editor.renderer.dist = 7f
@@ -794,13 +797,13 @@ end
                 editor.renderer.target[0] = pl.x; editor.renderer.target[1] = pl.y; editor.renderer.target[2] = pl.z
             }
             editor.refresh()
-            toast((if (large) "Battle Royale (large map, 20 enemies)" else "Battle Royale") + " loaded - tap Play. Joystick moves, drag the screen to look, hold Fire to shoot.")
+            toast((if (mode == 2) "Battle Royale HUGE (hills, watchtowers, deep lakes)" else if (large) "Battle Royale (large map, 20 enemies)" else "Battle Royale") + " loaded - tap Play. Joystick moves, drag the screen to look, hold Fire to shoot.")
         }
         if (scene.objects.isEmpty()) {
             go()
         } else {
             AlertDialog.Builder(this)
-                .setTitle(if (large) "Load Battle Royale (large map)?" else "Load Battle Royale?")
+                .setTitle(if (mode == 2) "Load Battle Royale (HUGE map)?" else if (large) "Load Battle Royale (large map)?" else "Load Battle Royale?")
                 .setMessage("This replaces the current scene. Use File > Export scene zip first if you want to keep it.")
                 .setPositiveButton("Load") { _, _ -> go() }
                 .setNegativeButton("Cancel", null)

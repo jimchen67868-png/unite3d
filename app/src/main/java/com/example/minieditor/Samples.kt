@@ -6,6 +6,7 @@ object Samples {
     private val BR_PLAYER = """-- BATTLE ROYALE player.
 -- Joystick = move, drag the screen = look, hold FIRE = shoot, RELOAD, JUMP, VIEW = 1st / 3rd person.
 local NBOTS = 8
+STAIRS = {}
 
 function start()
   self.hp = 100
@@ -14,6 +15,14 @@ function start()
   self.reserveAdd = 0
   fx = {}
   swimming = false
+  diveDepth = 0
+  breath = 20
+  lastB = 20
+  underT = 0
+  wasUnder = false
+  bubbleT = 0
+  bubbleSndT = 0
+  uwK = 0
   rippleT = 0
   strokeT = 0
   hurtSndT = 0
@@ -204,6 +213,34 @@ function updateBullets(dt)
   end
 end
 
+-- ===== watchtower stairs: the floor height under (x, z), or nil when there is no stair there =====
+function stairAt(px, pz)
+  for i = 1, #STAIRS do
+    local st = STAIRS[i]
+    if px >= st.x0 and px <= st.x1 and pz >= st.z0 and pz <= st.z1 then
+      local k = math.ceil((st.z1 - pz) / st.tread)
+      if k < 0 then k = 0 end
+      if k > st.n then k = st.n end
+      return st.base + k * st.rise
+    end
+  end
+  return nil
+end
+
+function stairFloor(x, z)
+  local best = stairAt(x, z)
+  local r = 0.4
+  local a = stairAt(x + r, z)
+  if a ~= nil and (best == nil or a > best) then best = a end
+  a = stairAt(x - r, z)
+  if a ~= nil and (best == nil or a > best) then best = a end
+  a = stairAt(x, z + r)
+  if a ~= nil and (best == nil or a > best) then best = a end
+  a = stairAt(x, z - r)
+  if a ~= nil and (best == nil or a > best) then best = a end
+  return best
+end
+
 -- ===== water effects: ripples and splash drops (little see-through spheres) =====
 function fxSpawn(x, y, z, sx, sy, sz, r, g, b, op)
   if #fx >= 40 then return nil end
@@ -249,6 +286,18 @@ function splash(x, y, z, n)
   ripple(x, y + 0.03, z)
 end
 
+function bubble(x, y, z, surface)
+  local o = fxSpawn(x, y, z, 0.12, 0.12, 0.12, 0.85, 0.95, 1, 0.6)
+  if o ~= nil then
+    o.kind = "bubble"
+    o.vy = 1.2 + math.random() * 0.8
+    o.life = 3
+    o.surf = surface
+    o.ph = math.random() * 6
+    fx[#fx + 1] = o
+  end
+end
+
 function updateFx(dt)
   for i = #fx, 1, -1 do
     local o = fx[i]
@@ -259,6 +308,10 @@ function updateFx(dt)
       o.sx = 0.8 + k * 3.5
       o.sz = o.sx
       o.opacity = 0.55 * (1 - k)
+    elseif o.kind == "bubble" then
+      o.y = o.y + o.vy * dt
+      o.x = o.x + math.sin(time * 5 + o.ph) * 0.25 * dt
+      o.opacity = 0.6 * math.min(1, o.life / 0.5)
     else
       o.vy = o.vy - 12 * dt
       o.x = o.x + o.vx * dt
@@ -266,7 +319,7 @@ function updateFx(dt)
       o.z = o.z + o.vz * dt
       o.opacity = math.max(0, o.life / 0.8) * 0.8
     end
-    if o.life <= 0 or (o.kind == "drop" and o.y < o.baseY - 0.1) then
+    if o.life <= 0 or (o.kind == "drop" and o.y < o.baseY - 0.1) or (o.kind == "bubble" and o.y >= o.surf) then
       destroy(o)
       table.remove(fx, i)
     end
@@ -291,8 +344,9 @@ function update(dt)
   end
   -- water deeper than a metre: you swim on the surface (no jumping, no shooting)
   local wy = self.waterY
+  local ground = groundHeight(self.x, self.z)
   local depth = 0
-  if wy ~= nil then depth = wy - groundHeight(self.x, self.z) end
+  if wy ~= nil then depth = wy - ground end
   local wasSwim = swimming
   if depth > 1.1 then swimming = true elseif depth < 0.7 then swimming = false end
   local moving = len > 0.1
@@ -305,7 +359,7 @@ function update(dt)
   if swimming and not wasSwim then
     splash(self.x, wy + 0.05, self.z, 10)
     playSound("splash", 1)
-    log("Swimming - you cannot shoot in deep water")
+    log("Swimming - hold JUMP to dive. No shooting in deep water")
   elseif wasSwim and not swimming then
     splash(self.x, (wy or self.y) + 0.05, self.z, 4)
     playSound("splash", 0.6, 1.2)
@@ -325,18 +379,45 @@ function update(dt)
     end
   end
 
+  -- stairs: walk up and down a watchtower stair (the steps are only looks, the floor comes from here)
+  local onStairs = false
+  if #STAIRS > 0 and not swimming and self.vy <= 0.1 then
+    local fl = stairFloor(self.x, self.z)
+    if fl ~= nil then
+      local feet = self.y - 0.85
+      if feet > fl - 0.8 and feet < fl + 0.8 then
+        self.y = fl + 0.85
+        self.vy = 0
+        onStairs = true
+      end
+    end
+  end
+
   -- gravity and jumping (swimming: float on the surface and bob a little)
   if swimming then
     self.vy = 0
-    local target = wy - 0.15 + math.sin(time * 3) * 0.05
+    -- hold JUMP to dive, let go and you float back up
+    local maxDive = math.min(5, math.max(0, depth - 0.75))
+    if input.jump then
+      diveDepth = math.min(diveDepth + 2.5 * dt, maxDive)
+    else
+      diveDepth = math.max(0, diveDepth - 3 * dt)
+    end
+    if diveDepth > maxDive then diveDepth = maxDive end
+    local bob = 0
+    if diveDepth < 0.3 then bob = math.sin(time * 3) * 0.05 end
+    local target = wy - 0.15 - diveDepth + bob
     self.y = self.y + (target - self.y) * math.min(1, dt * 6)
   else
-    if self.grounded then
+    diveDepth = 0
+    if self.grounded or onStairs then
       if self.vy < 0 then self.vy = 0 end
       if input.jumpPressed then self.vy = 7 end
     end
-    self.vy = self.vy - world.gravity * dt
-    self.y = self.y + self.vy * dt
+    if not onStairs or self.vy > 0 then
+      self.vy = self.vy - world.gravity * dt
+      self.y = self.y + self.vy * dt
+    end
   end
   if self.y < -8 then
     self.x = home.x
@@ -344,6 +425,55 @@ function update(dt)
     self.y = groundHeight(home.x, home.z) + 2
     self.vy = 0
   end
+
+  -- underwater: bubbles, breath, the murky look, sounds
+  self.diveDepth = diveDepth
+  local under = swimming and diveDepth > 0.45
+  if under and not wasUnder then
+    splash(self.x, wy + 0.05, self.z, 5)
+    playSound("splash", 0.7, 0.7)
+    log("Diving - breath " .. math.floor(breath) .. "s. Let go of JUMP to surface")
+  elseif wasUnder and not under then
+    splash(self.x, (wy or self.y) + 0.05, self.z, 4)
+    if underT > 3 then playSound("gasp", 0.9) end
+  end
+  wasUnder = under
+  if under then
+    underT = underT + dt
+    breath = breath - dt
+    local bi = math.floor(breath)
+    if bi ~= lastB and (bi == 10 or bi == 5 or bi == 2) then log("Breath " .. bi .. "s - surface!") end
+    lastB = bi
+    if breath <= 0 then
+      breath = 0
+      self.hp = self.hp - 6 * dt
+    end
+    bubbleT = bubbleT - dt
+    if bubbleT <= 0 then
+      bubbleT = 0.25 + math.random() * 0.2
+      bubble(self.x + (math.random() - 0.5) * 0.5, self.y + 0.35, self.z + (math.random() - 0.5) * 0.5, wy)
+    end
+    bubbleSndT = bubbleSndT - dt
+    if bubbleSndT <= 0 then
+      bubbleSndT = 1.3
+      playSound("bubble", 0.5, 0.9 + math.random() * 0.2)
+    end
+  else
+    underT = 0
+    breath = math.min(20, breath + 8 * dt)
+    lastB = math.floor(breath)
+  end
+  if fogNorm == nil then
+    fogNorm = world.fog or 0
+    if fogNorm <= 0 then fogNorm = 400 end
+    ambNorm = world.ambient or 0.45
+  end
+  if under then uwK = math.min(1, uwK + dt * 3) else uwK = math.max(0, uwK - dt * 3) end
+  if uwK > 0 or wasUwK then
+    world.fog = fogNorm + (14 - fogNorm) * uwK
+    world.ambient = ambNorm * (1 - 0.5 * uwK)
+  end
+  wasUwK = uwK > 0
 
   -- pickups
   if self.reserveAdd > 0 then
@@ -387,7 +517,7 @@ function update(dt)
   end
   hurtSndT = hurtSndT - dt
   if self.hp < lastHp - 0.5 and hurtSndT <= 0 then
-    playSound("hurt", 0.8)
+    playSound("hurt", 1, 0.92 + math.random() * 0.16)
     hurtSndT = 0.35
   end
   lastHp = self.hp
@@ -554,7 +684,7 @@ function updateBullets(dt)
       if t < 0 then t = 0 elseif t > 1 then t = 1 end
       local dx, dz = player.x - (ox + ex * t), player.z - (oz + ez * t)
       local dy = player.y - (oy + (b.y - oy) * t)
-      if dx * dx + dz * dz < 0.8 and math.abs(dy) < 1.1 then
+      if dx * dx + dz * dz < 0.8 and math.abs(dy) < 1.1 and (player.diveDepth or 0) < 0.8 then
         player.hp = player.hp - DMG
         gone = true
       end
@@ -603,7 +733,7 @@ function update(dt)
     end
     fireT = fireT - dt
     if fireT <= 0 then
-      if lineClear(self.x, self.y + 0.4, self.z, player.x, player.y + 0.4, player.z) then
+      if (player.diveDepth or 0) < 0.8 and lineClear(self.x, self.y + 0.4, self.z, player.x, player.y + 0.4, player.z) then
         fireT = 0.7 + math.random() * 0.6
         botShoot(dx, dz, d)
       else
@@ -1074,31 +1204,49 @@ end
     }
 
     /** A PUBG-style island: loot houses, 8 enemy soldiers, a closing storm. Joystick, FIRE, RELOAD, JUMP, VIEW. */
-    /** Battle Royale. [large] = the big PUBG-style map (300 x 300, 16 houses, 20 enemies, a big closing storm). */
-    fun battleRoyale(scene: Scene, large: Boolean = false) {
-        val map = if (large) 300f else 70f
+    /**
+     * Battle Royale. mode 0 = small island, 1 = large map (300 x 300, 16 houses, 20 enemies),
+     * 2 = HUGE map (500 x 500, tall hills, deep lakes, watchtowers with stairs, 22 enemies).
+     */
+    fun battleRoyale(scene: Scene, mode: Int = 0) {
+        val large = mode >= 1
+        val huge = mode == 2
+        val map = if (huge) 500f else if (large) 300f else 70f
         val sp = map / 70f                       // everything that is a distance scales with the map
-        val relief = if (large) 16f else 7f
+        val relief = if (huge) 55f else if (large) 16f else 7f
+        val slopeK = if (huge) 2.6f else 1f      // hills are steeper on the huge map, so house sites may be less flat
         val nHouses = if (large) 16 else 5
-        val houseGap = if (large) 32.0 else 16.0
-        val nTrees = if (large) 130 else 40
-        val nBots = if (large) 20 else 8
-        val nExtraLoot = if (large) 14 else 6
-        val playerScript = BR_PLAYER.replace("local NBOTS = 8", "local NBOTS = " + nBots)
-        val zoneScript = if (!large) BR_ZONE else BR_ZONE
-            .replace("local NPOSTS = 40", "local NPOSTS = 56")
-            .replace("local stages = { { 35, 25, 22 }, { 30, 20, 12 }, { 25, 20, 5 } }", "local stages = { { 45, 40, 110 }, { 40, 35, 70 }, { 35, 30, 40 }, { 30, 25, 15 } }")
-            .replace("  r = 38\n", "  r = 165\n")
-            .replace("\"cube\", self.x, 8, self.z", "\"cube\", self.x, 20, self.z")
-            .replace("p.sy = 16", "p.sy = 60")
-            .replace("p.sx = 0.7", "p.sx = 1.2")
-            .replace("p.sz = 0.7", "p.sz = 1.2")
-            .replace("8 enemies on the island", nBots.toString() + " enemies on the island")
+        val houseGap = if (huge) 40.0 else if (large) 32.0 else 16.0
+        val nTrees = if (huge) 110 else if (large) 130 else 40
+        val nBots = if (huge) 22 else if (large) 20 else 8
+        val nExtraLoot = if (huge) 24 else if (large) 14 else 6
+        val playerScriptBase = BR_PLAYER.replace("local NBOTS = 8", "local NBOTS = " + nBots)
+        val zoneScript = when (mode) {
+            0 -> BR_ZONE
+            1 -> BR_ZONE
+                .replace("local NPOSTS = 40", "local NPOSTS = 56")
+                .replace("local stages = { { 35, 25, 22 }, { 30, 20, 12 }, { 25, 20, 5 } }", "local stages = { { 45, 40, 110 }, { 40, 35, 70 }, { 35, 30, 40 }, { 30, 25, 15 } }")
+                .replace("  r = 38\n", "  r = 165\n")
+                .replace("\"cube\", self.x, 8, self.z", "\"cube\", self.x, 20, self.z")
+                .replace("p.sy = 16", "p.sy = 60")
+                .replace("p.sx = 0.7", "p.sx = 1.2")
+                .replace("p.sz = 0.7", "p.sz = 1.2")
+                .replace("8 enemies on the island", nBots.toString() + " enemies on the island")
+            else -> BR_ZONE
+                .replace("local NPOSTS = 40", "local NPOSTS = 72")
+                .replace("local stages = { { 35, 25, 22 }, { 30, 20, 12 }, { 25, 20, 5 } }", "local stages = { { 70, 60, 190 }, { 60, 50, 120 }, { 50, 40, 70 }, { 40, 30, 35 }, { 30, 25, 12 } }")
+                .replace("  r = 38\n", "  r = 270\n")
+                .replace("\"cube\", self.x, 8, self.z", "\"cube\", self.x, 60, self.z")
+                .replace("p.sy = 16", "p.sy = 140")
+                .replace("p.sx = 0.7", "p.sx = 1.6")
+                .replace("p.sz = 0.7", "p.sz = 1.6")
+                .replace("8 enemies on the island", nBots.toString() + " enemies on the island")
+        }
 
         scene.objects.clear()
         scene.selected = null
         scene.addSettings()?.let {
-            it.x = 12f; it.y = if (large) 380f else 95f; it.z = 0.45f; it.ry = 0.55f; it.wind = 0.3f; it.windDir = 60f
+            it.x = 12f; it.y = if (huge) 700f else if (large) 380f else 95f; it.z = 0.45f; it.ry = 0.55f; it.wind = 0.3f; it.windDir = 60f
             it.color = floatArrayOf(0.55f, 0.75f, 0.92f)
         }
         scene.addLight(Shape.SUN)?.let { it.sx = 1.1f; it.sy = 0.4f }
@@ -1107,10 +1255,10 @@ end
         land.heights = TerrainGen.generate(3, 0.6f)
         land.hVersion++
         val sea = scene.addWater()
-        sea.sx = map * 1.3f; sea.sz = map * 1.3f; sea.y = relief * 0.3f; sea.sy = 0.2f
+        sea.sx = map * 1.3f; sea.sz = map * 1.3f; sea.y = relief * (if (huge) 0.34f else 0.3f); sea.sy = if (huge) 0.35f else 0.2f
         val seaY = sea.y
         val grass = scene.addGrass()
-        grass.x = 0f; grass.z = 0f; grass.y = 0f; grass.sx = if (large) 100f else 50f; grass.sz = if (large) 100f else 50f; grass.rx = 0.6f
+        grass.x = 0f; grass.z = 0f; grass.y = 0f; grass.sx = if (huge) 140f else if (large) 100f else 50f; grass.sz = if (huge) 140f else if (large) 100f else 50f; grass.rx = 0.6f
 
         val rnd = kotlin.random.Random(21)
         fun ground(x: Float, z: Float): Float? = TerrainGen.heightAt(land, x, z)
@@ -1126,6 +1274,8 @@ end
             if (h > zbest) { zbest = h; zcx = x; zcz = z }
         }
 
+        if (huge) { grass.x = zcx; grass.z = zcz }
+
         // ---- houses ----
         val houses = ArrayList<FloatArray>()   // centre x, centre z, floor top y
         var tries = 0
@@ -1140,7 +1290,7 @@ end
                 val h = ground(hx + dx, hz + dz)
                 if (h == null) ok = false else { lo = minOf(lo, h); hi = maxOf(hi, h) }
             }
-            val tol = if (tries < 1500) 1.0f else 2.2f
+            val tol = (if (tries < 1500) 1.0f else 2.2f) * slopeK
             if (!ok || lo < seaY + 0.6f || hi - lo > tol) continue
             if (houses.any { Math.hypot((it[0] - hx).toDouble(), (it[1] - hz).toDouble()) < houseGap }) continue
             houses.add(floatArrayOf(hx, hz, hi + 0.2f, lo))
@@ -1171,6 +1321,79 @@ end
             roof.collider = 1
         }
 
+        // ---- watchtowers with a long stair up to the deck (huge map) ----
+        val stairLua = StringBuilder("{")
+        val towerSpots = ArrayList<FloatArray>()
+        if (huge) {
+            val H = 10f          // deck height above the tower base
+            val nSteps = 20
+            val tread = 0.8f
+            tries = 0
+            while (towerSpots.size < 5 && tries < 5000) {
+                tries++
+                val tx = (rnd.nextFloat() - 0.5f) * 0.7f * map
+                val tz = (rnd.nextFloat() - 0.5f) * 0.7f * map
+                var lo = 1e9f
+                var hi = -1e9f
+                var ok = true
+                for (dx in intArrayOf(-5, 0, 5)) for (dz in intArrayOf(-5, 0, 5)) {
+                    val h = ground(tx + dx, tz + dz)
+                    if (h == null) ok = false else { lo = minOf(lo, h); hi = maxOf(hi, h) }
+                }
+                if (!ok || lo < seaY + relief * 0.12f || hi - lo > 2.5f) continue
+                val z1 = tz + 3.7f + nSteps * tread
+                val g1 = ground(tx, z1) ?: continue
+                val topT = hi + 0.2f
+                if (g1 < seaY + 0.5f || g1 < topT - 3.5f || g1 > topT + 3.5f) continue
+                if (houses.any { Math.hypot((it[0] - tx).toDouble(), (it[1] - tz).toDouble()) < 26.0 }) continue
+                if (houses.any { Math.hypot((it[0] - tx).toDouble(), (it[1] - (tz + 12f)).toDouble()) < 14.0 }) continue
+                if (towerSpots.any { Math.hypot((it[0] - tx).toDouble(), (it[1] - tz).toDouble()) < 70.0 }) continue
+                towerSpots.add(floatArrayOf(tx, tz, topT, lo, g1))
+            }
+            var tn = 0
+            for (t in towerSpots) {
+                tn++
+                val tx = t[0]
+                val tz = t[1]
+                val T = t[2]
+                val lo = t[3]
+                val g1 = t[4]
+                val slabH = T - lo + 0.5f
+                val baseSlab = mk(scene, Shape.CUBE, "Tower base " + tn, tx, lo - 0.3f + slabH / 2f, tz, 9f, slabH, 9f, floatArrayOf(0.45f, 0.45f, 0.48f))
+                baseSlab.collider = 1
+                val legH = H + 3.4f
+                for (sx in intArrayOf(-1, 1)) for (sz in intArrayOf(-1, 1)) {
+                    wall(tx + sx * 3.2f, T + legH / 2f, tz + sz * 3.2f, 0.6f, legH, 0.6f)
+                }
+                val deck = mk(scene, Shape.CUBE, "Tower deck " + tn, tx, T + H - 0.2f, tz, 7.4f, 0.4f, 7.4f, floatArrayOf(0.55f, 0.42f, 0.3f))
+                deck.collider = 1
+                wall(tx, T + H + 0.5f, tz - 3.6f, 7.4f, 1f, 0.2f)
+                wall(tx + 3.6f, T + H + 0.5f, tz, 0.2f, 1f, 7f)
+                wall(tx - 3.6f, T + H + 0.5f, tz, 0.2f, 1f, 7f)
+                wall(tx - 2.4f, T + H + 0.5f, tz + 3.6f, 2.6f, 1f, 0.2f)
+                wall(tx + 2.4f, T + H + 0.5f, tz + 3.6f, 2.6f, 1f, 0.2f)
+                val roof = mk(scene, Shape.CUBE, "Tower roof " + tn, tx, T + H + 3.45f, tz, 8f, 0.3f, 8f, floatArrayOf(0.55f, 0.2f, 0.18f))
+                roof.collider = 1
+                // the stair: 20 steps coming up from the south; the player script walks up them (see STAIRS)
+                val z0 = tz + 3.7f
+                val z1 = z0 + nSteps * tread
+                val rise = (T + H - g1) / nSteps
+                val bottom = minOf(g1, T) - 3f
+                for (i in 0 until nSteps) {
+                    val top = g1 + rise * (i + 1)
+                    val zc = z1 - (i + 0.5f) * tread
+                    val h = top - bottom
+                    mk(scene, Shape.CUBE, "Step " + tn + "-" + (i + 1), tx, bottom + h / 2f, zc, 2.2f, h, tread, floatArrayOf(0.72f, 0.62f, 0.45f))
+                }
+                if (tn > 1) stairLua.append(", ")
+                stairLua.append("{ x0 = ").append(tx - 1.1f).append(", x1 = ").append(tx + 1.1f)
+                    .append(", z0 = ").append(z0).append(", z1 = ").append(z1)
+                    .append(", tread = ").append(tread).append(", n = ").append(nSteps)
+                    .append(", rise = ").append(rise).append(", base = ").append(g1).append(" }")
+            }
+        }
+        stairLua.append("}")
+
         // ---- trees (away from houses and water) ----
         var trees = 0
         tries = 0
@@ -1181,6 +1404,7 @@ end
             val th = ground(tx, tz) ?: continue
             if (th < seaY + 0.4f || th > land.sy * 0.8f) continue
             if (houses.any { Math.hypot((it[0] - tx).toDouble(), (it[1] - tz).toDouble()) < 7.0 }) continue
+            if (towerSpots.any { Math.hypot((it[0] - tx).toDouble(), (it[1] - (tz + 10f)).toDouble()) < 16.0 }) continue
             val tr = scene.addTree(rnd.nextInt(2))
             val k = 0.8f + rnd.nextFloat() * 0.6f
             tr.x = tx; tr.z = tz; tr.y = th - 0.05f
@@ -1205,6 +1429,10 @@ end
         for (h in houses) {
             medkit(h[0] - 1.8f, h[2] + 0.5f, h[1] - 1.6f)
             ammo(h[0] + 1.8f, h[2] + 0.5f, h[1] - 1.6f)
+        }
+        for (t in towerSpots) {
+            medkit(t[0] - 1.6f, t[2] + 10f + 0.5f, t[1] - 1.6f)
+            ammo(t[0] + 1.6f, t[2] + 10f + 0.5f, t[1] - 1.6f)
         }
         var extra = 0
         tries = 0
@@ -1235,7 +1463,7 @@ end
             px = x; pz = z; pg = h
             break
         }
-        val player = mk(scene, Shape.SPHERE, "Player", px, pg + 1.2f, pz, 1.0f, 1.7f, 1.0f, floatArrayOf(0.25f, 0.5f, 0.9f), playerScript)
+        val player = mk(scene, Shape.SPHERE, "Player", px, pg + 1.2f, pz, 1.0f, 1.7f, 1.0f, floatArrayOf(0.25f, 0.5f, 0.9f), playerScriptBase.replace("STAIRS = {}", "STAIRS = " + stairLua))
         player.collider = 1; player.shadow = false
 
         // ---- enemy soldiers ----
