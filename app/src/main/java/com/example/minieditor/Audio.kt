@@ -30,6 +30,7 @@ class Audio(private val soundsDir: () -> File) {
 
     /** Loads the short sounds so they play with no delay. */
     fun start() {
+        fileCache = null
         try {
             val p = SoundPool.Builder().setMaxStreams(8).setAudioAttributes(attrs).build()
             p.setOnLoadCompleteListener { _, id, status -> if (status == 0) ready.add(id) }
@@ -44,10 +45,13 @@ class Audio(private val soundsDir: () -> File) {
         }
     }
 
+    private var fileCache: List<File>? = null
+
     private fun find(name: String): File? {
         val n = name.trim()
         if (n.isEmpty() || n.contains('/') || n.contains('\\')) return null
-        val files = soundsDir().listFiles()?.filter { it.isFile } ?: return null
+        // the folder does not change while a game runs, so list it once
+        val files = fileCache ?: (soundsDir().listFiles()?.filter { it.isFile } ?: return null).also { fileCache = it }
         return files.firstOrNull { it.name == n }
             ?: files.firstOrNull { it.name.equals(n, true) }
             ?: files.firstOrNull { it.name.substringBeforeLast('.').equals(n, true) }

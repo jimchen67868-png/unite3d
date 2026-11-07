@@ -446,6 +446,7 @@ end
                 row(
                     cameraButton,
                     selectButton,
+                    btn("Focus") { focusSelected() },
                     btn("Clear log") { logLines.clear(); showLog() }
                 ),
                 // 6 Tools
@@ -785,6 +786,7 @@ end
     private fun loadBattleSample(large: Boolean) {
         val go = {
             Samples.battleRoyale(scene, large)
+            SoundGen.install(soundsDir())
             val pl = scene.objects.firstOrNull { it.name == "Player" }
             editor.renderer.dist = 7f
             editor.renderer.pitch = 20f
@@ -2290,14 +2292,7 @@ end
             3 -> { r.yaw = 180f; r.pitch = 5f }
             4 -> { r.yaw = 270f; r.pitch = 5f }
             5 -> { r.yaw = 90f; r.pitch = 5f }
-            6 -> {
-                val o = scene.selected
-                if (o == null || o.shape.isScreen || o.shape == Shape.SETTINGS) {
-                    toast("Select an object first")
-                } else {
-                    r.target[0] = o.x; r.target[1] = o.y; r.target[2] = o.z
-                }
-            }
+            6 -> focusSelected()
             7 -> frameAll()
             12 -> {
                 if (scene.objects.none { o -> o.shape == Shape.CAMERA }) toast("Add a Camera object first (Hierarchy)")
@@ -2333,6 +2328,37 @@ end
     }
 
     /** Centres the camera on everything in the scene and zooms out to fit it. */
+    /** Turns the camera to the selected object (or the picked group in Multi mode) and moves in so it fills the view. */
+    private fun focusSelected() {
+        if (editor.renderer.fpMode) { toast("Switch to 3rd person first"); return }
+        val list = if (editor.multiMode && scene.multi.isNotEmpty()) scene.multi.toList()
+        else listOfNotNull(scene.selected)
+        val objs = list.filter { !it.shape.isScreen && it.shape != Shape.SETTINGS }
+        if (objs.isEmpty()) { toast("Select an object first"); return }
+        var minX = Float.MAX_VALUE; var minY = Float.MAX_VALUE; var minZ = Float.MAX_VALUE
+        var maxX = -Float.MAX_VALUE; var maxY = -Float.MAX_VALUE; var maxZ = -Float.MAX_VALUE
+        for (o in objs) {
+            val small = o.shape.isLight || o.shape == Shape.CAMERA
+            val hx = if (small) 0.4f else 0.5f * o.sx
+            val hy = if (small) 0.4f else 0.5f * o.sy
+            val hz = if (small) 0.4f else 0.5f * o.sz
+            minX = minOf(minX, o.x - hx); maxX = maxOf(maxX, o.x + hx)
+            minY = minOf(minY, o.y - hy); maxY = maxOf(maxY, o.y + hy)
+            minZ = minOf(minZ, o.z - hz); maxZ = maxOf(maxZ, o.z + hz)
+        }
+        val r = editor.renderer
+        r.target[0] = (minX + maxX) / 2f
+        r.target[1] = (minY + maxY) / 2f
+        r.target[2] = (minZ + maxZ) / 2f
+        val dx = maxX - minX
+        val dy = maxY - minY
+        val dz = maxZ - minZ
+        val radius = 0.5f * sqrt(dx * dx + dy * dy + dz * dz)
+        val half = Math.toRadians(r.fov / 2.0)
+        r.dist = (radius / sin(half).toFloat() * 1.4f).coerceIn(3f, 1500f)
+        editor.requestRender()
+    }
+
     private fun frameAll() {
         val r = editor.renderer
         var minX = Float.MAX_VALUE; var minY = Float.MAX_VALUE; var minZ = Float.MAX_VALUE

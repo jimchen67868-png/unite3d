@@ -12,6 +12,11 @@ function start()
   self.dead = false
   self.vy = 0
   self.reserveAdd = 0
+  fx = {}
+  swimming = false
+  rippleT = 0
+  strokeT = 0
+  hurtSndT = 0
   mag = 30
   reserve = 90
   reloadT = 0
@@ -146,6 +151,7 @@ end
 function shoot()
   mag = mag - 1
   fireT = 0.12
+  playSound("shot", 0.7)
   local fx, fy, fz = aimDir()
   local ok, b = pcall(spawn, "sphere", self.x + fx * 1.2, self.y + 0.5 + fy * 1.2, self.z + fz * 1.2)
   if not ok then return end
@@ -183,6 +189,7 @@ function updateBullets(dt)
           local dy = e.y - (oy + (b.y - oy) * t)
           if dx * dx + dz * dz < 0.9 and math.abs(dy) < 1.1 then
             e.hp = e.hp - 25
+            playSound("hit", 0.7)
             gone = true
             if e.hp <= 0 then log("Enemy down!  " .. countAlive() .. " left") end
             break
@@ -197,11 +204,81 @@ function updateBullets(dt)
   end
 end
 
+-- ===== water effects: ripples and splash drops (little see-through spheres) =====
+function fxSpawn(x, y, z, sx, sy, sz, r, g, b, op)
+  if #fx >= 40 then return nil end
+  local ok, o = pcall(spawn, "sphere", x, y, z)
+  if not ok then return nil end
+  o.sx = sx
+  o.sy = sy
+  o.sz = sz
+  o.r = r
+  o.g = g
+  o.b = b
+  o.opacity = op
+  o.shadow = false
+  o.emit = 0.2
+  return o
+end
+
+function ripple(x, y, z)
+  local o = fxSpawn(x, y, z, 0.8, 0.05, 0.8, 0.8, 0.92, 1, 0.55)
+  if o ~= nil then
+    o.kind = "ripple"
+    o.life = 0.9
+    o.age = 0
+    fx[#fx + 1] = o
+  end
+end
+
+function splash(x, y, z, n)
+  for i = 1, n do
+    local o = fxSpawn(x, y, z, 0.18, 0.18, 0.18, 0.75, 0.9, 1, 0.8)
+    if o ~= nil then
+      local a = math.random() * 6.28
+      local sp = 1 + math.random() * 2.5
+      o.kind = "drop"
+      o.vx = math.cos(a) * sp
+      o.vz = math.sin(a) * sp
+      o.vy = 3 + math.random() * 3
+      o.life = 0.8
+      o.baseY = y
+      fx[#fx + 1] = o
+    end
+  end
+  ripple(x, y + 0.03, z)
+end
+
+function updateFx(dt)
+  for i = #fx, 1, -1 do
+    local o = fx[i]
+    o.life = o.life - dt
+    if o.kind == "ripple" then
+      o.age = o.age + dt
+      local k = o.age / 0.9
+      o.sx = 0.8 + k * 3.5
+      o.sz = o.sx
+      o.opacity = 0.55 * (1 - k)
+    else
+      o.vy = o.vy - 12 * dt
+      o.x = o.x + o.vx * dt
+      o.y = o.y + o.vy * dt
+      o.z = o.z + o.vz * dt
+      o.opacity = math.max(0, o.life / 0.8) * 0.8
+    end
+    if o.life <= 0 or (o.kind == "drop" and o.y < o.baseY - 0.1) then
+      destroy(o)
+      table.remove(fx, i)
+    end
+  end
+end
+
 function update(dt)
   if input.joyTap or input.buttonsPressed["View"] then
     camera.firstPerson = not camera.firstPerson
   end
   updateBullets(dt)
+  updateFx(dt)
   if self.dead then return end
 
   -- move
@@ -212,19 +289,55 @@ function update(dt)
     mx = mx / len
     mz = mz / len
   end
+  -- water deeper than a metre: you swim on the surface (no jumping, no shooting)
+  local wy = self.waterY
+  local depth = 0
+  if wy ~= nil then depth = wy - groundHeight(self.x, self.z) end
+  local wasSwim = swimming
+  if depth > 1.1 then swimming = true elseif depth < 0.7 then swimming = false end
+  local moving = len > 0.1
   local sp = 6
-  if self.inWater then sp = 3 end
+  if swimming then sp = 3.2 elseif self.inWater then sp = 4 end
   self.x = self.x + mx * sp * dt
   self.z = self.z + mz * sp * dt
   self.ry = input.yaw
 
-  -- gravity and jumping
-  if self.grounded then
-    if self.vy < 0 then self.vy = 0 end
-    if input.jumpPressed then self.vy = 7 end
+  if swimming and not wasSwim then
+    splash(self.x, wy + 0.05, self.z, 10)
+    playSound("splash", 1)
+    log("Swimming - you cannot shoot in deep water")
+  elseif wasSwim and not swimming then
+    splash(self.x, (wy or self.y) + 0.05, self.z, 4)
+    playSound("splash", 0.6, 1.2)
   end
-  self.vy = self.vy - world.gravity * dt
-  self.y = self.y + self.vy * dt
+  if swimming or (self.inWater and moving) then
+    rippleT = rippleT - dt
+    if rippleT <= 0 then
+      rippleT = moving and 0.35 or 0.9
+      ripple(self.x, wy + 0.04, self.z)
+    end
+    if moving then
+      strokeT = strokeT - dt
+      if strokeT <= 0 then
+        strokeT = swimming and 0.75 or 0.5
+        playSound("swim", swimming and 0.6 or 0.35, 0.9 + math.random() * 0.2)
+      end
+    end
+  end
+
+  -- gravity and jumping (swimming: float on the surface and bob a little)
+  if swimming then
+    self.vy = 0
+    local target = wy - 0.15 + math.sin(time * 3) * 0.05
+    self.y = self.y + (target - self.y) * math.min(1, dt * 6)
+  else
+    if self.grounded then
+      if self.vy < 0 then self.vy = 0 end
+      if input.jumpPressed then self.vy = 7 end
+    end
+    self.vy = self.vy - world.gravity * dt
+    self.y = self.y + self.vy * dt
+  end
   if self.y < -8 then
     self.x = home.x
     self.z = home.z
@@ -239,9 +352,11 @@ function update(dt)
     log("Ammo picked up  (" .. reserve .. " spare)")
   end
 
-  -- shooting
+  -- shooting (not while swimming)
   fireT = fireT - dt
-  if reloadT > 0 then
+  if swimming then
+    -- no shooting in deep water
+  elseif reloadT > 0 then
     reloadT = reloadT - dt
     if reloadT <= 0 then
       local take = math.min(30 - mag, reserve)
@@ -252,12 +367,14 @@ function update(dt)
   elseif input.buttonsPressed["Reload"] and mag < 30 and reserve > 0 then
     reloadT = 1.4
     log("Reloading...")
+    playSound("reload", 0.8)
   elseif input.buttons["Fire"] and fireT <= 0 then
     if mag > 0 then
       shoot()
     elseif reserve > 0 then
       reloadT = 1.4
       log("Reloading...")
+    playSound("reload", 0.8)
     else
       fireT = 1
       log("Out of ammo! Find an ammo box.")
@@ -267,6 +384,11 @@ function update(dt)
   -- health
   if self.hp < lastHp and math.floor(self.hp / 10) < math.floor(lastHp / 10) then
     log("HP " .. math.max(0, math.floor(self.hp)))
+  end
+  hurtSndT = hurtSndT - dt
+  if self.hp < lastHp - 0.5 and hurtSndT <= 0 then
+    playSound("hurt", 0.8)
+    hurtSndT = 0.35
   end
   lastHp = self.hp
   if self.hp <= 0 then
@@ -398,6 +520,7 @@ function pickTarget()
 end
 
 function botShoot(dx, dz, d)
+  playSound("shot", math.max(0.1, 0.55 - d / 70), 0.8)
   local ex = (math.random() - 0.5) * d * 0.12
   local ez = (math.random() - 0.5) * d * 0.12
   local ddx, ddy, ddz = dx + ex, (player.y - self.y), dz + ez
@@ -617,6 +740,7 @@ function oncollide(other)
   if taken > 0 or other.name ~= "Player" or other.dead then return end
   if other.hp >= 100 then return end
   other.hp = math.min(100, other.hp + 40)
+  playSound("pickup", 0.8)
   taken = 25
   self.y = -50
   log("Medkit +40 HP  (" .. math.floor(other.hp) .. ")")
@@ -643,6 +767,7 @@ end
 function oncollide(other)
   if taken > 0 or other.name ~= "Player" or other.dead then return end
   other.reserveAdd = (other.reserveAdd or 0) + 30
+  playSound("pickup", 0.8, 1.2)
   taken = 25
   self.y = -50
 end
