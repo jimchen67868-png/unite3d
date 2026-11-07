@@ -34,6 +34,14 @@ class ScriptEngine(private val scene: Scene, private val log: (String) -> Unit) 
     private val instances = ArrayList<Inst>()
     private val input = LuaTable()
     private val instByObj = HashMap<SceneObject, Inst>()
+    private val pendingSpawn = ArrayList<SceneObject>()
+    private val nameIndex = HashMap<String, SceneObject>()   // find() looks names up here first
+
+    private fun flushSpawns() {
+        if (pendingSpawn.isEmpty()) return
+        scene.objects.addAll(pendingSpawn)
+        pendingSpawn.clear()
+    }
     private val prev = HashMap<SceneObject, FloatArray>()
     private val grounded = HashSet<SceneObject>()
     private val world = LuaTable()
@@ -84,6 +92,11 @@ class ScriptEngine(private val scene: Scene, private val log: (String) -> Unit) 
     private val findFn = object : OneArgFunction() {
         override fun call(arg: LuaValue): LuaValue {
             val n = arg.tojstring()
+            val known = nameIndex[n]
+            if (known != null) {
+                val kt = tables[known]
+                if (kt != null && known.name == n) return kt
+            }
             for ((o, t) in tables) if (o.name == n) return t
             return LuaValue.NIL
         }
@@ -134,7 +147,7 @@ class ScriptEngine(private val scene: Scene, private val log: (String) -> Unit) 
                 "sphere" -> Shape.SPHERE
                 else -> throw LuaError("spawn: shape must be \"cube\", \"pyramid\" or \"sphere\"")
             }
-            if (scene.objects.size >= maxObjects) throw LuaError("spawn: object limit reached")
+            if (scene.objects.size + pendingSpawn.size >= maxObjects) throw LuaError("spawn: object limit reached")
             spawnCount++
             val o = SceneObject(
                 shape, shape.label + " (spawned " + spawnCount + ")",
@@ -143,7 +156,9 @@ class ScriptEngine(private val scene: Scene, private val log: (String) -> Unit) 
             )
             val t = LuaTable()
             push(o, t)
-            scene.objects.add(o)
+            // joins the scene after the scripts have finished this frame, so a half-set-up object (default size 1)
+            // is never seen by the renderer or the shadow system
+            pendingSpawn.add(o)
             tables[o] = t
             return t
         }
@@ -177,6 +192,7 @@ class ScriptEngine(private val scene: Scene, private val log: (String) -> Unit) 
             for ((o, t) in tables.entries.toList()) {
                 if (t === arg) {
                     tables.remove(o)
+                    pendingSpawn.remove(o)
                     scene.objects.remove(o)
                     if (scene.selected === o) scene.selected = null
                     for (inst in instances) if (inst.obj === o) inst.failed = true
@@ -463,6 +479,7 @@ class ScriptEngine(private val scene: Scene, private val log: (String) -> Unit) 
             val t = LuaTable()
             push(o, t)
             tables[o] = t
+            if (!nameIndex.containsKey(o.name)) nameIndex[o.name] = o
         }
         updateInput()
         pushWorld()
@@ -504,6 +521,7 @@ class ScriptEngine(private val scene: Scene, private val log: (String) -> Unit) 
         pullAll()
         pullWorld()
         pullCamera()
+        flushSpawns()
         Rig.apply(scene)
     }
 
@@ -525,6 +543,7 @@ class ScriptEngine(private val scene: Scene, private val log: (String) -> Unit) 
         pullAll()
         pullWorld()
         pullCamera()
+        flushSpawns()
         Rig.apply(scene)
         collide()
         Rig.apply(scene)

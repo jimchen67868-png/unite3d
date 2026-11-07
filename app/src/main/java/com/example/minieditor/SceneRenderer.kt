@@ -52,7 +52,7 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
     private val lightVis = floatArrayOf(1f, 1f, 1f, 1f)
     private val visOnes = floatArrayOf(1f, 1f, 1f, 1f)
     private val visDepth = FloatArray(4 * 6 * 128 * 128)
-    private var visKey = ""
+    private var visKey = 0L
     private var visTime = 0L
     private var visReady = false
     private var visActive = false
@@ -90,7 +90,12 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
     private var uWind = 0; private var uSwayLocal = 0; private var uTree = 0
     private val SH = 96   // terrain shadow map resolution
     private var shTex = 0
-    private var shKey = ""
+    private var shKey = 0L
+    private var hAcc = 0L
+    // cheap change detection for the shadow maps (no strings): the same numbers give the same hash
+    private fun hBegin() { hAcc = 1469598103934665603L }
+    private fun hf(v: Float) { hAcc = (hAcc xor v.toRawBits().toLong()) * 1099511628211L }
+    private fun hi(v: Int) { hAcc = (hAcc xor v.toLong()) * 1099511628211L }
     private var shTime = 0L
     private val shBuf: java.nio.ByteBuffer = java.nio.ByteBuffer.allocateDirect(SH * SH * 4)
     private val shSunMap = FloatArray(SH * SH)
@@ -536,9 +541,10 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         GLES20.glEnable(GLES20.GL_DEPTH_TEST)
         photoTex.clear()   // textures are lost with the GL context
         shTex = 0
-        shKey = ""
+        shKey = 0L
+        bake = null
         cubeTex = 0
-        visKey = ""
+        visKey = 0L
         visReady = false
         for (i in 0 until 2) { mirFbo[i] = 0; mirTex[i] = 0; mirDepth[i] = 0 }
         mirW = 0
@@ -1194,7 +1200,7 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         val terrain = scene.objects.firstOrNull { it.shape == Shape.TERRAIN && it.heights != null }
         val st = scene.objects.firstOrNull { it.shape == Shape.SETTINGS }
         val strength = if (st != null) st.ry.coerceIn(0f, 1f) else 0.5f
-        if (terrain == null || strength <= 0.01f) { GLES20.glUniform1f(uShadowOn, 0f); return }
+        if (terrain == null || strength <= 0.01f) { bake = null; GLES20.glUniform1f(uShadowOn, 0f); return }
         val soft = (st?.soft ?: 0.4f).coerceIn(0f, 1f)
         val sun = scene.objects.firstOrNull { it.shape == Shape.SUN }
         var lx = 0.4f
@@ -1219,23 +1225,28 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
                 o.shape != Shape.TERRAIN && o.shape != Shape.BONE && o.shape != Shape.WATER && o.shape != Shape.GRASS && !o.shape.isEmitter && max(o.sx, max(o.sy, o.sz)) >= 0.35f
         }
 
-        val sb = StringBuilder()
-        fun f(v: Float) { sb.append(v).append(',') }
-        sb.append(terrain.hVersion).append(',')
-        f(terrain.x); f(terrain.y); f(terrain.z); f(terrain.sx); f(terrain.sy); f(terrain.sz)
-        f(strength); f(soft); f(lx); f(ly); f(lz); f(sunPower)
-        for (l in lights) { f(l.x); f(l.y); f(l.z); f(l.sx); f(l.sy) }
-        sb.append('|')
+        hBegin()
+        hi(terrain.hVersion)
+        hf(terrain.x); hf(terrain.y); hf(terrain.z); hf(terrain.sx); hf(terrain.sy); hf(terrain.sz)
+        hf(strength); hf(soft); hf(lx); hf(ly); hf(lz); hf(sunPower)
+        for (l in lights) { hf(l.x); hf(l.y); hf(l.z); hf(l.sx); hf(l.sy) }
+        hi(-1)
         for (o in casters) {
-            sb.append(o.shape.ordinal).append(',')
-            f(o.x); f(o.y); f(o.z); f(o.rx); f(o.ry); f(o.rz); f(o.sx); f(o.sy); f(o.sz)
+            hi(o.shape.ordinal)
+            hf(o.x); hf(o.y); hf(o.z); hf(o.rx); hf(o.ry); hf(o.rz); hf(o.sx); hf(o.sy); hf(o.sz)
         }
-        val key = sb.toString()
+        val key = hAcc
         val now = System.currentTimeMillis()
-        if (key != shKey && !(shTex != 0 && playing && now - shTime < 100)) {
-            bakeShadowMap(terrain, strength, soft, sunOk, lx / ll, ly / ll, lz / ll, lights, casters)
+        if (key != shKey && bake == null && !(shTex != 0 && playing && now - shTime < 300)) {
+            bake = Bake(terrain, strength, soft, sunOk, lx / ll, ly / ll, lz / ll, lights, casters)
             shKey = key
-            shTime = now
+        }
+        bake?.let { b ->
+            if (b.run(if (playing) 12 else SH)) {
+                b.finish()
+                bake = null
+                shTime = System.currentTimeMillis()
+            }
         }
         if (shTex == 0) { GLES20.glUniform1f(uShadowOn, 0f); return }
         GLES20.glActiveTexture(GLES20.GL_TEXTURE2)
@@ -1381,18 +1392,17 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
                 o.shape != Shape.TERRAIN && o.shape != Shape.BONE && o.shape != Shape.WATER && o.shape != Shape.GRASS && !o.shape.isEmitter && max(o.sx, max(o.sy, o.sz)) >= 0.35f
         }
         if (casters.isEmpty()) return
-        val sb = StringBuilder()
-        sb.append(litCount).append('|')
-        for (i in 0 until litCount * 3) sb.append(litPos[i]).append(',')
-        sb.append('|')
+        hBegin()
+        hi(litCount)
+        for (i in 0 until litCount * 3) hf(litPos[i])
+        hi(-1)
         for (o in casters) {
-            sb.append(o.shape.ordinal).append(',').append(o.x).append(',').append(o.y).append(',').append(o.z).append(',')
-                .append(o.rx).append(',').append(o.ry).append(',').append(o.rz).append(',')
-                .append(o.sx).append(',').append(o.sy).append(',').append(o.sz).append(';')
+            hi(o.shape.ordinal)
+            hf(o.x); hf(o.y); hf(o.z); hf(o.rx); hf(o.ry); hf(o.rz); hf(o.sx); hf(o.sy); hf(o.sz)
         }
-        val key = sb.toString()
+        val key = hAcc
         val now = System.currentTimeMillis()
-        if (key != visKey && !(visReady && playing && now - visTime < 100)) {
+        if (key != visKey && !(visReady && playing && now - visTime < 300)) {
             val tris = casterTriangles(casters)
             val nTri = tris.size / 9
             for (i in 0 until litCount) buildCube(visDepth, i, litPos[i * 3], litPos[i * 3 + 1], litPos[i * 3 + 2], tris, nTri)
@@ -1532,18 +1542,37 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         return if (tot == 0) 0f else cnt.toFloat() / tot
     }
 
-    private fun bakeShadowMap(
-        terrain: SceneObject, strength: Float, soft: Float, sunOk: Boolean,
-        dx0: Float, dy0: Float, dz0: Float, lights: List<SceneObject>, casters: List<SceneObject>
-    ) {
-        val tris = casterTriangles(casters)
-        val nTri = tris.size / 9
+    private var bake: Bake? = null
 
+    /**
+     * One terrain shadow-map rebuild, done a few rows per frame while playing so the game never stalls
+     * (in the editor it is done in one go).
+     */
+    private inner class Bake(
+        val terrain: SceneObject, val strength: Float, val soft: Float, val sunOk: Boolean,
+        val dx0: Float, val dy0: Float, val dz0: Float, val lights: List<SceneObject>, casters: List<SceneObject>
+    ) {
+        var row = 0
+        private val tris = casterTriangles(casters)
+        private val nTri = tris.size / 9
+        private val sunMap = sunOk && nTri > 0
+        private var rx = 0f
+        private var ry = 0f
+        private var rz = 0f
+        private var ux = 0f
+        private var uy = 0f
+        private var uz = 0f
+        private var aMin = 0f
+        private var bMin = 0f
+        private var sA = 1f
+        private var sB = 1f
+        private var cell = 0f
+        private var top = 0f
+        private var spA = 0f
+        private var spB = 0f
+
+        init {
         // ---- sun: orthographic depth map looking down the sun's direction over the terrain ----
-        var rx = 0f; var ry = 0f; var rz = 0f
-        var ux = 0f; var uy = 0f; var uz = 0f
-        var aMin = 0f; var bMin = 0f; var sA = 1f; var sB = 1f
-        val sunMap = sunOk && nTri > 0
         if (sunMap) {
             // right = up x dir
             rx = dz0; ry = 0f; rz = -dx0
@@ -1583,16 +1612,20 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
             }
         }
 
-        val cell = max(terrain.sx, terrain.sz) / TerrainGen.N
-        val top = terrain.y + terrain.sy
+        cell = max(terrain.sx, terrain.sz) / TerrainGen.N
+        top = terrain.y + terrain.sy
         // sample spacing in sun-map pixels (about a third of one shadow-map texel)
-        val spA = terrain.sx / SH * sA / 3f
-        val spB = terrain.sz / SH * sB / 3f
+        spA = terrain.sx / SH * sA / 3f
+        spB = terrain.sz / SH * sB / 3f
 
-        // ---- one texel at a time ----
-        // each light gets a cube depth map made of its real-shape casters
         if (nTri > 0) for ((li, l) in lights.withIndex()) buildCube(cubeDepth, li, l.x, l.y, l.z, tris, nTri)
-        for (j in 0 until SH) {
+        }
+
+        /** Works out up to [maxRows] more rows of the map; true when all rows are done. */
+        fun run(maxRows: Int): Boolean {
+            var done = 0
+            while (row < SH && done < maxRows) {
+                val j = row
             for (i in 0 until SH) {
                 val wx = terrain.x + ((i + 0.5f) / SH - 0.5f) * terrain.sx
                 val wz = terrain.z + ((j + 0.5f) / SH - 0.5f) * terrain.sz
@@ -1652,7 +1685,13 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
                 shSunMap[j * SH + i] = sunS * strength
                 shPtMap[j * SH + i] = (if (tw > 0f) pw / tw else 0f) * strength
             }
+                row++
+                done++
+            }
+            return row >= SH
         }
+
+        fun finish() {
         val br = (soft * 3f + 0.5f).toInt()
         blurMap(shSunMap, br)
         blurMap(shPtMap, br)
@@ -1679,6 +1718,7 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         }
         GLES20.glTexImage2D(GLES20.GL_TEXTURE_2D, 0, GLES20.GL_RGBA, SH, SH, 0, GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, shBuf)
         GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
+        }
     }
 
     private fun terrainMeshFor(o: SceneObject): Mesh {

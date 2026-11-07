@@ -18,11 +18,13 @@ function start()
   fireT = 0
   bullets = {}
   walls = {}
+  grid = {}
   local i = 1
   while true do
     local w = find("Wall " .. i)
     if w == nil then break end
     walls[i] = w
+    addWall(w)
     i = i + 1
   end
   bots = {}
@@ -43,14 +45,70 @@ function countAlive()
   return n
 end
 
-function hitWall(b)
-  for i = 1, #walls do
-    local w = walls[i]
-    if math.abs(b.x - w.x) < w.sx / 2 and math.abs(b.y - w.y) < w.sy / 2 and math.abs(b.z - w.z) < w.sz / 2 then
+-- walls are put into a coarse grid once, so a bullet only tests the few walls near it
+CELL = 6
+
+function addWall(w)
+  local e = { x = w.x, y = w.y, z = w.z, hx = w.sx / 2, hy = w.sy / 2, hz = w.sz / 2 }
+  local x0 = math.floor((e.x - e.hx) / CELL)
+  local x1 = math.floor((e.x + e.hx) / CELL)
+  local z0 = math.floor((e.z - e.hz) / CELL)
+  local z1 = math.floor((e.z + e.hz) / CELL)
+  for cx = x0, x1 do
+    for cz = z0, z1 do
+      local k = cx * 100003 + cz
+      local c = grid[k]
+      if c == nil then
+        c = {}
+        grid[k] = c
+      end
+      c[#c + 1] = e
+    end
+  end
+end
+
+function pointInWall(x, y, z)
+  local c = grid[math.floor(x / CELL) * 100003 + math.floor(z / CELL)]
+  if c == nil then return false end
+  for i = 1, #c do
+    local w = c[i]
+    if math.abs(x - w.x) < w.hx and math.abs(y - w.y) < w.hy and math.abs(z - w.z) < w.hz then
       return true
     end
   end
   return false
+end
+
+-- moves a bullet in small steps so it cannot jump through a thin wall; true if it hit one
+function moveBullet(b, dt)
+  local dx, dy, dz = b.vx * dt, b.vy * dt, b.vz * dt
+  local n = math.ceil(math.sqrt(dx * dx + dy * dy + dz * dz) / 0.2)
+  if n < 1 then n = 1 end
+  if n > 40 then n = 40 end
+  local sx, sy, sz = dx / n, dy / n, dz / n
+  local x, y, z = b.x, b.y, b.z
+  for s = 1, n do
+    x = x + sx
+    y = y + sy
+    z = z + sz
+    if pointInWall(x, y, z) then
+      b.x, b.y, b.z = x, y, z
+      return true
+    end
+  end
+  b.x, b.y, b.z = x, y, z
+  return false
+end
+
+-- true when no wall is between the two points
+function lineClear(x0, y0, z0, x1, y1, z1)
+  local dx, dy, dz = x1 - x0, y1 - y0, z1 - z0
+  local n = math.ceil(math.sqrt(dx * dx + dy * dy + dz * dz) / 0.4)
+  for s = 1, n - 1 do
+    local t = s / n
+    if pointInWall(x0 + dx * t, y0 + dy * t, z0 + dz * t) then return false end
+  end
+  return true
 end
 
 -- where the crosshair points, with a gentle snap onto an enemy that is almost in line
@@ -108,16 +166,21 @@ end
 function updateBullets(dt)
   for i = #bullets, 1, -1 do
     local b = bullets[i]
-    b.x = b.x + b.vx * dt
-    b.y = b.y + b.vy * dt
-    b.z = b.z + b.vz * dt
+    local ox, oy, oz = b.x, b.y, b.z
+    local hit = moveBullet(b, dt)
     b.life = b.life - dt
-    local gone = b.life <= 0 or b.y < groundHeight(b.x, b.z) - 0.1 or hitWall(b)
+    local gone = b.life <= 0 or hit or b.y < groundHeight(b.x, b.z) - 0.1
     if not gone then
+      local ex, ez = b.x - ox, b.z - oz
+      local seg2 = ex * ex + ez * ez + 0.0001
       for k = 1, NBOTS do
         local e = bots[k]
         if e ~= nil and not e.dead and e.hp > 0 then
-          local dx, dy, dz = e.x - b.x, e.y - b.y, e.z - b.z
+          -- closest point of this frame's path to the enemy (a fast bullet must not skip over it)
+          local t = ((e.x - ox) * ex + (e.z - oz) * ez) / seg2
+          if t < 0 then t = 0 elseif t > 1 then t = 1 end
+          local dx, dz = e.x - (ox + ex * t), e.z - (oz + ez * t)
+          local dy = e.y - (oy + (b.y - oy) * t)
           if dx * dx + dz * dz < 0.9 and math.abs(dy) < 1.1 then
             e.hp = e.hp - 25
             gone = true
@@ -239,11 +302,13 @@ function start()
   strafeT = 0
   bullets = {}
   walls = {}
+  grid = {}
   local i = 1
   while true do
     local w = find("Wall " .. i)
     if w == nil then break end
     walls[i] = w
+    addWall(w)
     i = i + 1
   end
   player = find("Player")
@@ -251,14 +316,70 @@ function start()
   home = { x = self.x, z = self.z }
 end
 
-function hitWall(b)
-  for i = 1, #walls do
-    local w = walls[i]
-    if math.abs(b.x - w.x) < w.sx / 2 and math.abs(b.y - w.y) < w.sy / 2 and math.abs(b.z - w.z) < w.sz / 2 then
+-- walls are put into a coarse grid once, so a bullet only tests the few walls near it
+CELL = 6
+
+function addWall(w)
+  local e = { x = w.x, y = w.y, z = w.z, hx = w.sx / 2, hy = w.sy / 2, hz = w.sz / 2 }
+  local x0 = math.floor((e.x - e.hx) / CELL)
+  local x1 = math.floor((e.x + e.hx) / CELL)
+  local z0 = math.floor((e.z - e.hz) / CELL)
+  local z1 = math.floor((e.z + e.hz) / CELL)
+  for cx = x0, x1 do
+    for cz = z0, z1 do
+      local k = cx * 100003 + cz
+      local c = grid[k]
+      if c == nil then
+        c = {}
+        grid[k] = c
+      end
+      c[#c + 1] = e
+    end
+  end
+end
+
+function pointInWall(x, y, z)
+  local c = grid[math.floor(x / CELL) * 100003 + math.floor(z / CELL)]
+  if c == nil then return false end
+  for i = 1, #c do
+    local w = c[i]
+    if math.abs(x - w.x) < w.hx and math.abs(y - w.y) < w.hy and math.abs(z - w.z) < w.hz then
       return true
     end
   end
   return false
+end
+
+-- moves a bullet in small steps so it cannot jump through a thin wall; true if it hit one
+function moveBullet(b, dt)
+  local dx, dy, dz = b.vx * dt, b.vy * dt, b.vz * dt
+  local n = math.ceil(math.sqrt(dx * dx + dy * dy + dz * dz) / 0.2)
+  if n < 1 then n = 1 end
+  if n > 40 then n = 40 end
+  local sx, sy, sz = dx / n, dy / n, dz / n
+  local x, y, z = b.x, b.y, b.z
+  for s = 1, n do
+    x = x + sx
+    y = y + sy
+    z = z + sz
+    if pointInWall(x, y, z) then
+      b.x, b.y, b.z = x, y, z
+      return true
+    end
+  end
+  b.x, b.y, b.z = x, y, z
+  return false
+end
+
+-- true when no wall is between the two points
+function lineClear(x0, y0, z0, x1, y1, z1)
+  local dx, dy, dz = x1 - x0, y1 - y0, z1 - z0
+  local n = math.ceil(math.sqrt(dx * dx + dy * dy + dz * dz) / 0.4)
+  for s = 1, n - 1 do
+    local t = s / n
+    if pointInWall(x0 + dx * t, y0 + dy * t, z0 + dz * t) then return false end
+  end
+  return true
 end
 
 function pickTarget()
@@ -300,13 +421,16 @@ end
 function updateBullets(dt)
   for i = #bullets, 1, -1 do
     local b = bullets[i]
-    b.x = b.x + b.vx * dt
-    b.y = b.y + b.vy * dt
-    b.z = b.z + b.vz * dt
+    local ox, oy, oz = b.x, b.y, b.z
+    local hit = moveBullet(b, dt)
     b.life = b.life - dt
-    local gone = b.life <= 0 or b.y < groundHeight(b.x, b.z) - 0.1 or hitWall(b)
+    local gone = b.life <= 0 or hit or b.y < groundHeight(b.x, b.z) - 0.1
     if not gone and not player.dead then
-      local dx, dy, dz = player.x - b.x, player.y - b.y, player.z - b.z
+      local ex, ez = b.x - ox, b.z - oz
+      local t = ((player.x - ox) * ex + (player.z - oz) * ez) / (ex * ex + ez * ez + 0.0001)
+      if t < 0 then t = 0 elseif t > 1 then t = 1 end
+      local dx, dz = player.x - (ox + ex * t), player.z - (oz + ez * t)
+      local dy = player.y - (oy + (b.y - oy) * t)
       if dx * dx + dz * dz < 0.8 and math.abs(dy) < 1.1 then
         player.hp = player.hp - DMG
         gone = true
@@ -356,8 +480,12 @@ function update(dt)
     end
     fireT = fireT - dt
     if fireT <= 0 then
-      fireT = 0.7 + math.random() * 0.6
-      botShoot(dx, dz, d)
+      if lineClear(self.x, self.y + 0.4, self.z, player.x, player.y + 0.4, player.z) then
+        fireT = 0.7 + math.random() * 0.6
+        botShoot(dx, dz, d)
+      else
+        fireT = 0.3   -- a wall is in the way: hold fire and look again soon
+      end
     end
   else
     -- wander
