@@ -196,7 +196,6 @@ class Scene {
         o.y = 1.5f
         o.sx = 3f; o.sy = 2.5f; o.sz = 0.05f
         o.color = floatArrayOf(0.9f, 0.95f, 1f)
-        o.shadow = false
         return o
     }
 
@@ -453,7 +452,7 @@ class Scene {
                 j.optDouble("sx", old).toFloat(), j.optDouble("sy", old).toFloat(), j.optDouble("sz", old).toFloat(),
                 floatArrayOf(j.getDouble("r").toFloat(), j.getDouble("g").toFloat(), j.getDouble("b").toFloat()),
                 model
-            ).also { it.script = j.optString("script", ""); it.collider = j.optInt("collider", 0); it.shadow = j.optBoolean("shadow", true)
+            ).also { it.script = j.optString("script", ""); it.collider = j.optInt("collider", 0); it.shadow = j.optBoolean("shadow", true) || it.shape == Shape.MIRROR   // mirrors saved before they could block light
                 it.spec = j.optDouble("spec", 0.25).toFloat(); it.gloss = j.optDouble("gloss", 0.5).toFloat()
                 it.emit = j.optDouble("emit", 0.0).toFloat(); it.opacity = j.optDouble("opacity", 1.0).toFloat()
                 it.pattern = j.optInt("pattern", 0)

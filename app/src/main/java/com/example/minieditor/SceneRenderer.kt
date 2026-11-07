@@ -1090,9 +1090,11 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
             Matrix.rotateM(shObj, 0, o.ry, 0f, 1f, 0f)
             Matrix.rotateM(shObj, 0, o.rx, 1f, 0f, 0f)
             Matrix.rotateM(shObj, 0, o.rz, 0f, 0f, 1f)
-            Matrix.scaleM(shObj, 0, o.sx, o.sy, o.sz)
+            val mirror = o.shape == Shape.MIRROR
+            Matrix.scaleM(shObj, 0, o.sx, o.sy, if (mirror) max(o.sz, 0.06f) else o.sz)
             Matrix.multiplyMM(shOut, 0, shM, 0, shObj, 0)
-            drawMesh(meshFor(o), vpc, shOut, black, false, 0, meshFor(o).count, alpha)
+            val sm = if (mirror) meshes.getValue(Shape.CUBE) else meshFor(o)
+            drawMesh(sm, vpc, shOut, black, false, 0, sm.count, alpha)
         }
     }
 
@@ -1350,6 +1352,8 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
             val data: FloatArray = when {
                 o.shape == Shape.TREE -> shTreeData.getOrPut(o.pattern.coerceIn(0, 1)) { Veg.both(o.pattern.coerceIn(0, 1)) }
                 md != null -> md.data
+                // a mirror is a flat pane, but for light it is a thin solid box
+                o.shape == Shape.MIRROR -> shShapeData.getOrPut(Shape.CUBE) { Meshes.dataFor(Shape.CUBE) ?: FloatArray(0) }
                 else -> shShapeData.getOrPut(o.shape) { Meshes.dataFor(o.shape) ?: FloatArray(0) }
             }
             val nv = data.size / 6 / 3 * 3
@@ -1361,7 +1365,7 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
                 Matrix.rotateM(m, 0, o.rx, 1f, 0f, 0f)
                 Matrix.rotateM(m, 0, o.rz, 0f, 0f, 1f)
             }
-            Matrix.scaleM(m, 0, o.sx, o.sy, o.sz)
+            Matrix.scaleM(m, 0, o.sx, o.sy, if (o.shape == Shape.MIRROR) max(o.sz, 0.06f) else o.sz)
             val out = FloatArray(nv * 3)
             for (v in 0 until nv) {
                 val x = data[v * 6]
