@@ -257,6 +257,13 @@ class ScriptEngine(private val scene: Scene, private val log: (String) -> Unit) 
         t.set("inWater", LuaValue.valueOf(wy != null && o.y < wy))
         if (wy != null) t.set("waterY", wy.toDouble()) else t.set("waterY", LuaValue.NIL)
     }
+    private fun num(t: LuaTable, k: String): Float? {
+        val v = t.get(k)
+        if (!v.isnumber()) return null
+        val f = v.tofloat()
+        return if (f.isNaN() || f.isInfinite()) null else f
+    }
+
     private fun pull(o: SceneObject, t: LuaTable) {
         num(t, "x")?.let { o.x = it }
         num(t, "y")?.let { o.y = it }
