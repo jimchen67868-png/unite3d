@@ -379,7 +379,7 @@ class ScriptEngine(private val scene: Scene, private val log: (String) -> Unit) 
     private fun pullWorld() {
         val s = settingsObj() ?: return
         num(world, "gravity")?.let { if (it != worldPushed[0]) s.x = it.coerceIn(0f, 100f) }
-        num(world, "fog")?.let { if (it != worldPushed[1]) s.y = it.coerceIn(0f, 500f) }
+        num(world, "fog")?.let { if (it != worldPushed[1]) s.y = it.coerceIn(0f, 3000f) }
         num(world, "ambient")?.let { if (it != worldPushed[2]) s.z = it.coerceIn(0f, 1f) }
         num(world, "timeScale")?.let { if (it != worldPushed[3]) s.sx = it.coerceIn(0f, 5f) }
         num(world, "wind")?.let { if (it != worldPushed[4]) s.wind = it.coerceIn(0f, 1f) }

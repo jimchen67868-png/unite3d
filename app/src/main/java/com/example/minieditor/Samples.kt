@@ -3,6 +3,57 @@ package com.example.minieditor
 /** Built-in sample scenes with Lua scripts attached. */
 object Samples {
 
+    /** A sliding door: opens when the player or a soldier comes close, closes when they leave. Bullets are blocked while it is shut. */
+    private val BR_DOOR = """-- DOOR: slides open when somebody is close, shuts when they walk away.
+local NBOTS = 8
+
+function start()
+  self.isOpen = false
+  closedX = self.x
+  amt = 0
+  want = 0
+  checkT = 0
+  slide = 1.85
+  player = find("Player")
+  bots = {}
+  for k = 1, NBOTS do
+    bots[k] = find("Bot " .. k)
+  end
+end
+
+function near(o)
+  if o == nil or o.dead then return false end
+  local dx, dz = o.x - self.x, o.z - self.z
+  return dx * dx + dz * dz < 9 and math.abs(o.y - self.y) < 2.5
+end
+
+function update(dt)
+  checkT = checkT - dt
+  if checkT <= 0 then
+    checkT = 0.15
+    local n = near(player)
+    if not n then
+      for k = 1, NBOTS do
+        if near(bots[k]) then
+          n = true
+          break
+        end
+      end
+    end
+    local target = 0
+    if n then target = 1 end
+    if target ~= want then
+      want = target
+      playSound("door", 0.6, 0.95 + math.random() * 0.1)
+    end
+  end
+  amt = amt + (want - amt) * math.min(1, dt * 5)
+  self.x = closedX - slide * amt
+  self.isOpen = amt > 0.6
+  if amt > 0.5 then self.collider = 0 else self.collider = 1 end
+end
+"""
+
     private val BR_PLAYER = """-- BATTLE ROYALE player.
 -- Joystick = move, drag the screen = look, hold FIRE = shoot, RELOAD, JUMP, VIEW = 1st / 3rd person.
 local NBOTS = 8
@@ -15,6 +66,10 @@ function start()
   self.reserveAdd = 0
   fx = {}
   findParts()
+  VM = { find("Player vgun"), find("Player vbar"), find("Player vhand"), find("Player vsleeve") }
+  vmOn = false
+  kick = 0
+  vmDip = 0
   aimT = 0
   fpWas = nil
   deadT = 0
@@ -37,6 +92,13 @@ function start()
   bullets = {}
   walls = {}
   grid = {}
+  local di = 1
+  while true do
+    local dd = find("Door " .. di)
+    if dd == nil then break end
+    addWall(dd, dd)
+    di = di + 1
+  end
   local i = 1
   while true do
     local w = find("Wall " .. i)
@@ -66,8 +128,8 @@ end
 -- walls are put into a coarse grid once, so a bullet only tests the few walls near it
 CELL = 6
 
-function addWall(w)
-  local e = { x = w.x, y = w.y, z = w.z, hx = w.sx / 2, hy = w.sy / 2, hz = w.sz / 2 }
+function addWall(w, door)
+  local e = { x = w.x, y = w.y, z = w.z, hx = w.sx / 2, hy = w.sy / 2, hz = w.sz / 2, door = door }
   local x0 = math.floor((e.x - e.hx) / CELL)
   local x1 = math.floor((e.x + e.hx) / CELL)
   local z0 = math.floor((e.z - e.hz) / CELL)
@@ -91,7 +153,7 @@ function pointInWall(x, y, z)
   for i = 1, #c do
     local w = c[i]
     if math.abs(x - w.x) < w.hx and math.abs(y - w.y) < w.hy and math.abs(z - w.z) < w.hz then
-      return true
+      if w.door == nil or not w.door.isOpen then return true end
     end
   end
   return false
@@ -165,6 +227,7 @@ function shoot()
   mag = mag - 1
   fireT = 0.12
   aimT = 0.7
+  kick = 1
   playSound("shot", 0.7)
   local fx, fy, fz = aimDir()
   local ok, b = pcall(spawn, "sphere", self.x + fx * 1.2, self.y + 0.5 + fy * 1.2, self.z + fz * 1.2)
@@ -219,29 +282,42 @@ function updateBullets(dt)
 end
 
 -- ===== watchtower stairs: the floor height under (x, z), or nil when there is no stair there =====
-function stairAt(px, pz)
+function stairAt(px, pz, feet)
+  local best = nil
+  local bd = 99
   for i = 1, #STAIRS do
     local st = STAIRS[i]
     if px >= st.x0 and px <= st.x1 and pz >= st.z0 and pz <= st.z1 then
-      local k = math.ceil((st.z1 - pz) / st.tread)
+      local k
+      if st.dir == 1 then
+        k = math.ceil((pz - st.z0) / st.tread)
+      else
+        k = math.ceil((st.z1 - pz) / st.tread)
+      end
       if k < 0 then k = 0 end
       if k > st.n then k = st.n end
-      return st.base + k * st.rise
+      local f = st.base + k * st.rise
+      local dd = math.abs(f - feet)
+      if dd < bd then
+        bd = dd
+        best = f
+      end
     end
   end
-  return nil
+  return best
 end
 
-function stairFloor(x, z)
-  local best = stairAt(x, z)
+-- the floor height the feet can stand on here (the highest of the spots around the body that is within reach)
+function stairFloor(x, z, feet)
+  local best = stairAt(x, z, feet)
   local r = 0.4
-  local a = stairAt(x + r, z)
+  local a = stairAt(x + r, z, feet)
   if a ~= nil and (best == nil or a > best) then best = a end
-  a = stairAt(x - r, z)
+  a = stairAt(x - r, z, feet)
   if a ~= nil and (best == nil or a > best) then best = a end
-  a = stairAt(x, z + r)
+  a = stairAt(x, z + r, feet)
   if a ~= nil and (best == nil or a > best) then best = a end
-  a = stairAt(x, z - r)
+  a = stairAt(x, z - r, feet)
   if a ~= nil and (best == nil or a > best) then best = a end
   return best
 end
@@ -290,6 +366,49 @@ function removeBody()
     if part ~= nil then destroy(part) end
   end
   destroy(self)
+end
+
+-- ===== first person: the rifle and arm stay in front of the camera =====
+function setVm(on)
+  local o = 0
+  if on then o = 1 end
+  for i = 1, #VM do
+    if VM[i] ~= nil then VM[i].opacity = o end
+  end
+end
+
+function placeVm(dt)
+  local yaw = math.rad(input.yaw)
+  local pit = math.rad(camera.pitch)
+  local fx, fy, fz = -math.cos(pit) * math.sin(yaw), -math.sin(pit), -math.cos(pit) * math.cos(yaw)
+  local rx, rz = math.cos(yaw), -math.sin(yaw)
+  local ux, uy, uz = -rz * fy, rz * fx - rx * fz, rx * fy
+  local ex, ey, ez = self.x, self.y + self.sy * 0.6, self.z
+  kick = math.max(0, kick - dt * 9)
+  local dipTo = 0
+  if reloadT > 0 then dipTo = 0.2 end
+  vmDip = vmDip + (dipTo - vmDip) * math.min(1, dt * 10)
+  local R, U, F = 0.2, -0.2 - vmDip, 0.55 - kick * 0.06
+  if aimT > 0 then R = 0.15; U = -0.17 - vmDip end
+  local bob = 0
+  if legAmp > 1 then
+    R = R + math.sin(walkT) * 0.01 * (legAmp / 38)
+    bob = math.sin(walkT * 2) * 0.012 * (legAmp / 38)
+  end
+  U = U + bob
+  local offs = { { 0, 0, 0 }, { 0, 0.005, 0.4 }, { 0.0, -0.09, 0.04 }, { 0.03, -0.11, -0.24 } }
+  for i = 1, #VM do
+    local p = VM[i]
+    if p ~= nil then
+      local o = offs[i]
+      local a, b, c = R + o[1], U + o[2], F + o[3]
+      p.x = ex + rx * a + ux * b + fx * c
+      p.y = ey + uy * b + fy * c
+      p.z = ez + rz * a + uz * b + fz * c
+      p.ry = input.yaw
+      p.rx = -camera.pitch + kick * 4
+    end
+  end
 end
 
 -- ===== water effects: ripples and splash drops (little see-through spheres) =====
@@ -457,7 +576,7 @@ function update(dt)
   -- stairs: walk up and down a watchtower stair (the steps are only looks, the floor comes from here)
   local onStairs = false
   if #STAIRS > 0 and not swimming and self.vy <= 0.1 then
-    local fl = stairFloor(self.x, self.z)
+    local fl = stairFloor(self.x, self.z, self.y - 0.9)
     if fl ~= nil then
       local feet = self.y - 0.9
       if feet > fl - 0.8 and feet < fl + 0.8 then
@@ -599,7 +718,16 @@ function update(dt)
     P.pack.opacity = o
     P.legL.opacity = o
     P.legR.opacity = o
+    P.armL.opacity = o
+    P.armR.opacity = o
+    P.gun.opacity = o
   end
+  local vmWant = fp and (not swimming) and (not self.dead)
+  if vmWant ~= vmOn then
+    vmOn = vmWant
+    setVm(vmWant)
+  end
+  if vmWant then placeVm(dt) end
   local leanTo = 0
   if swimming then
     leanTo = -70
@@ -630,6 +758,7 @@ function update(dt)
     for k, part in pairs(P) do
       if part ~= nil then part.opacity = 1 end
     end
+    setVm(false)
     log("YOU DIED.  Enemies left: " .. countAlive())
     return
   end
@@ -662,6 +791,13 @@ function start()
   bullets = {}
   walls = {}
   grid = {}
+  local di = 1
+  while true do
+    local dd = find("Door " .. di)
+    if dd == nil then break end
+    addWall(dd, dd)
+    di = di + 1
+  end
   local i = 1
   while true do
     local w = find("Wall " .. i)
@@ -675,6 +811,7 @@ function start()
   home = { x = self.x, z = self.z }
   findParts()
   deadT = -1
+  swimming = false
 end
 
 -- ===== the person: find the parts (they follow this body) and swing the arms and legs =====
@@ -726,8 +863,8 @@ end
 -- walls are put into a coarse grid once, so a bullet only tests the few walls near it
 CELL = 6
 
-function addWall(w)
-  local e = { x = w.x, y = w.y, z = w.z, hx = w.sx / 2, hy = w.sy / 2, hz = w.sz / 2 }
+function addWall(w, door)
+  local e = { x = w.x, y = w.y, z = w.z, hx = w.sx / 2, hy = w.sy / 2, hz = w.sz / 2, door = door }
   local x0 = math.floor((e.x - e.hx) / CELL)
   local x1 = math.floor((e.x + e.hx) / CELL)
   local z0 = math.floor((e.z - e.hz) / CELL)
@@ -751,7 +888,7 @@ function pointInWall(x, y, z)
   for i = 1, #c do
     local w = c[i]
     if math.abs(x - w.x) < w.hx and math.abs(y - w.y) < w.hy and math.abs(z - w.z) < w.hz then
-      return true
+      if w.door == nil or not w.door.isOpen then return true end
     end
   end
   return false
@@ -802,6 +939,24 @@ function pickTarget()
     tz = zone.z + zz / zd * zr
   end
   wanderT = 4 + math.random() * 4
+  -- now and then go for a swim: look for deep water close by
+  if math.random() < 0.3 then
+    for k = 1, 10 do
+      local a2 = math.random() * 6.28
+      local d2 = 8 + math.random() * 30
+      local px, pz = self.x + math.cos(a2) * d2, self.z + math.sin(a2) * d2
+      local w = waterHeight(px, pz)
+      if w ~= nil and w - groundHeight(px, pz) > 1.6 then
+        local zx2, zz2 = px - zone.x, pz - zone.z
+        if math.sqrt(zx2 * zx2 + zz2 * zz2) < (zone.radius or 30) - 3 then
+          tx = px
+          tz = pz
+          wanderT = 8
+          break
+        end
+      end
+    end
+  end
 end
 
 function botShoot(dx, dz, d)
@@ -867,6 +1022,13 @@ function update(dt)
     return
   end
 
+  -- deep water: swim on the surface
+  local ground = groundHeight(self.x, self.z)
+  local wy = self.waterY
+  local depth = 0
+  if wy ~= nil then depth = wy - ground end
+  if depth > 1.1 then swimming = true elseif depth < 0.7 then swimming = false end
+
   local dx, dz = player.x - self.x, player.z - self.z
   local d = math.sqrt(dx * dx + dz * dz) + 0.001
   local mx, mz = 0, 0
@@ -882,7 +1044,7 @@ function update(dt)
     self.ry = math.deg(math.atan2(-mx, -mz))
   elseif (not player.dead) and d < 30 then
     -- fight: keep a medium distance, strafe, shoot
-    aiming = true
+    aiming = not swimming
     self.ry = math.deg(math.atan2(-dx, -dz))
     if d > 16 then
       mx, mz = dx / d, dz / d
@@ -898,7 +1060,7 @@ function update(dt)
     end
     fireT = fireT - dt
     if fireT <= 0 then
-      if (player.diveDepth or 0) < 0.8 and lineClear(self.x, self.y + 0.4, self.z, player.x, player.y + 0.4, player.z) then
+      if (not swimming) and (player.diveDepth or 0) < 0.8 and lineClear(self.x, self.y + 0.4, self.z, player.x, player.y + 0.4, player.z) then
         fireT = 0.7 + math.random() * 0.6
         botShoot(dx, dz, d)
       else
@@ -916,20 +1078,40 @@ function update(dt)
   end
 
   local sp = spd
-  if self.inWater then sp = sp * 0.5 end
+  if swimming then sp = sp * 0.5 elseif self.inWater then sp = sp * 0.6 end
   self.x = self.x + mx * sp * dt
   self.z = self.z + mz * sp * dt
 
-  if self.grounded and self.vy < 0 then self.vy = 0 end
-  self.vy = self.vy - world.gravity * dt
-  self.y = self.y + self.vy * dt
+  if swimming then
+    self.vy = 0
+    local target = wy - 0.15 + math.sin(time * 3 + self.x) * 0.05
+    self.y = self.y + (target - self.y) * math.min(1, dt * 6)
+  else
+    if self.grounded and self.vy < 0 then self.vy = 0 end
+    self.vy = self.vy - world.gravity * dt
+    self.y = self.y + self.vy * dt
+  end
   if self.y < -8 then
     self.x = home.x
     self.z = home.z
     self.y = groundHeight(home.x, home.z) + 2
     self.vy = 0
   end
-  walkPose(dt, (mx ~= 0 or mz ~= 0) and self.grounded, sp, aiming)
+  local moving = (mx ~= 0 or mz ~= 0)
+  local leanTo = 0
+  if swimming then
+    -- front crawl, lying flat on the water
+    leanTo = -70
+    walkT = walkT + dt * (moving and 5 or 2)
+    local sw = math.sin(walkT + self.x)
+    P.armL.swing = 115 + 35 * sw
+    P.armR.swing = 115 - 35 * sw
+    P.legL.swing = 14 * math.sin(walkT * 2.2)
+    P.legR.swing = -14 * math.sin(walkT * 2.2)
+  else
+    walkPose(dt, moving and self.grounded, sp, aiming)
+  end
+  self.rx = self.rx + (leanTo - self.rx) * math.min(1, dt * 6)
   updateBullets(dt)
 end
 """
@@ -1409,16 +1591,21 @@ end
      */
     fun battleRoyale(scene: Scene, mode: Int = 0) {
         val large = mode >= 1
-        val huge = mode == 2
-        val map = if (huge) 500f else if (large) 300f else 70f
+        val huge = mode >= 2
+        val giant = mode == 3
+        val map = if (giant) 800f else if (huge) 500f else if (large) 300f else 70f
         val sp = map / 70f                       // everything that is a distance scales with the map
-        val relief = if (huge) 55f else if (large) 16f else 7f
+        val relief = if (giant) 70f else if (huge) 55f else if (large) 16f else 7f
         val slopeK = if (huge) 2.6f else 1f      // hills are steeper on the huge map, so house sites may be less flat
-        val nHouses = if (large) 16 else 5
-        val houseGap = if (huge) 40.0 else if (large) 32.0 else 16.0
-        val nTrees = if (huge) 110 else if (large) 130 else 40
-        val nBots = if (huge) 18 else if (large) 16 else 8
-        val nExtraLoot = if (huge) 24 else if (large) 14 else 6
+        val nHouses = if (giant) 14 else if (huge) 12 else if (large) 14 else 5
+        val houseGap = if (giant) 50.0 else if (huge) 40.0 else if (large) 32.0 else 16.0
+        val maxFloors = if (giant) 5 else if (huge) 4 else if (large) 2 else 1   // houses get a random number of floors up to this
+        val nTowers = 4
+        val towerGap = if (giant) 110.0 else 70.0
+        val nTrees = if (giant) 90 else if (huge) 100 else if (large) 120 else 40
+        val nBots = if (giant) 16 else if (huge) 16 else if (large) 14 else 8
+        val nExtraLoot = if (giant) 28 else if (huge) 22 else if (large) 14 else 6
+        val doorScript = BR_DOOR.replace("local NBOTS = 8", "local NBOTS = " + nBots)
         val playerScriptBase = BR_PLAYER.replace("local NBOTS = 8", "local NBOTS = " + nBots)
         val zoneScript = when (mode) {
             0 -> BR_ZONE
@@ -1430,6 +1617,15 @@ end
                 .replace("p.sy = 16", "p.sy = 60")
                 .replace("p.sx = 0.7", "p.sx = 1.2")
                 .replace("p.sz = 0.7", "p.sz = 1.2")
+                .replace("8 enemies on the island", nBots.toString() + " enemies on the island")
+            3 -> BR_ZONE
+                .replace("local NPOSTS = 40", "local NPOSTS = 96")
+                .replace("local stages = { { 35, 25, 22 }, { 30, 20, 12 }, { 25, 20, 5 } }", "local stages = { { 100, 90, 330 }, { 90, 80, 210 }, { 80, 70, 120 }, { 60, 50, 60 }, { 50, 40, 20 } }")
+                .replace("  r = 38\n", "  r = 440\n")
+                .replace("\"cube\", self.x, 8, self.z", "\"cube\", self.x, 80, self.z")
+                .replace("p.sy = 16", "p.sy = 200")
+                .replace("p.sx = 0.7", "p.sx = 2.2")
+                .replace("p.sz = 0.7", "p.sz = 2.2")
                 .replace("8 enemies on the island", nBots.toString() + " enemies on the island")
             else -> BR_ZONE
                 .replace("local NPOSTS = 40", "local NPOSTS = 72")
@@ -1445,7 +1641,7 @@ end
         scene.objects.clear()
         scene.selected = null
         scene.addSettings()?.let {
-            it.x = 12f; it.y = if (huge) 700f else if (large) 380f else 95f; it.z = 0.45f; it.ry = 0.55f; it.wind = 0.3f; it.windDir = 60f
+            it.x = 12f; it.y = if (giant) 1100f else if (huge) 700f else if (large) 380f else 95f; it.z = 0.45f; it.ry = 0.55f; it.wind = 0.3f; it.windDir = 60f
             it.color = floatArrayOf(0.55f, 0.75f, 0.92f)
         }
         scene.addLight(Shape.SUN)?.let { it.sx = 1.1f; it.sy = 0.4f }
@@ -1457,7 +1653,7 @@ end
         sea.sx = map * 1.3f; sea.sz = map * 1.3f; sea.y = relief * (if (huge) 0.34f else 0.3f); sea.sy = if (huge) 0.35f else 0.2f
         val seaY = sea.y
         val grass = scene.addGrass()
-        grass.x = 0f; grass.z = 0f; grass.y = 0f; grass.sx = if (huge) 140f else if (large) 100f else 50f; grass.sz = if (huge) 140f else if (large) 100f else 50f; grass.rx = 0.6f
+        grass.x = 0f; grass.z = 0f; grass.y = 0f; grass.sx = if (giant) 180f else if (huge) 140f else if (large) 100f else 50f; grass.sz = if (giant) 180f else if (huge) 140f else if (large) 100f else 50f; grass.rx = 0.6f
 
         val rnd = kotlin.random.Random(21)
         fun ground(x: Float, z: Float): Float? = TerrainGen.heightAt(land, x, z)
@@ -1475,8 +1671,18 @@ end
 
         if (huge) { grass.x = zcx; grass.z = zcz }
 
-        // ---- houses ----
-        val houses = ArrayList<FloatArray>()   // centre x, centre z, floor top y
+        // ---- houses: 1 to 5 floors, a stair inside, and a sliding door ----
+        val stairLua = StringBuilder("{")
+        var stairCount = 0
+        // one flight of stairs for the player script (it gives the floor height there); dir 0 = climbs towards -z, 1 = towards +z
+        fun addStair(x0: Float, x1: Float, z0: Float, z1: Float, tread: Float, n: Int, rise: Float, base: Float, dir: Int) {
+            if (stairCount++ > 0) stairLua.append(", ")
+            stairLua.append("{ x0 = ").append(x0).append(", x1 = ").append(x1).append(", z0 = ").append(z0).append(", z1 = ").append(z1)
+                .append(", tread = ").append(tread).append(", n = ").append(n).append(", rise = ").append(rise)
+                .append(", base = ").append(base).append(", dir = ").append(dir).append(" }")
+        }
+        val upperLoot = ArrayList<FloatArray>()
+        val houses = ArrayList<FloatArray>()   // centre x, centre z, floor top y, lowest ground, number of floors
         var tries = 0
         while (houses.size < nHouses && tries < 3000) {
             tries++
@@ -1492,7 +1698,9 @@ end
             val tol = (if (tries < 1500) 1.0f else 2.2f) * slopeK
             if (!ok || lo < seaY + 0.6f || hi - lo > tol) continue
             if (houses.any { Math.hypot((it[0] - hx).toDouble(), (it[1] - hz).toDouble()) < houseGap }) continue
-            houses.add(floatArrayOf(hx, hz, hi + 0.2f, lo))
+            val u = rnd.nextFloat()
+            val floors = minOf(maxFloors, if (u < 0.30f) 1 else if (u < 0.57f) 2 else if (u < 0.77f) 3 else if (u < 0.91f) 4 else 5)
+            houses.add(floatArrayOf(hx, hz, hi + 0.2f, lo, floors.toFloat()))
         }
         var wallN = 0
         // walls, roofs and decks all stop bullets (the scripts look for objects named "Wall n")
@@ -1502,33 +1710,76 @@ end
             o.collider = 1
         }
         var houseN = 0
+        var doorN = 0
+        val floorH = 3.2f                     // from one floor to the next
+        val wood = floatArrayOf(0.6f, 0.5f, 0.38f)
         for (h in houses) {
             houseN++
             val cx = h[0]
             val cz = h[1]
             val top = h[2]
             val lo = h[3]
+            val floors = h[4].toInt()
             val slabH = top - lo + 0.5f
             val slab = mk(scene, Shape.CUBE, "Floor " + houseN, cx, lo - 0.3f + slabH / 2f, cz, 8f, slabH, 8f, floatArrayOf(0.5f, 0.5f, 0.5f))
             slab.collider = 1
-            val wy = top + 1.5f
-            wall(cx, wy, cz - 3.5f, 7.3f, 3f, 0.3f)
-            wall(cx + 3.5f, wy, cz, 0.3f, 3f, 7f)
-            wall(cx - 3.5f, wy, cz, 0.3f, 3f, 7f)
-            wall(cx - 2.25f, wy, cz + 3.5f, 2.5f, 3f, 0.3f)
-            wall(cx + 2.25f, wy, cz + 3.5f, 2.5f, 3f, 0.3f)
-            wall(cx, top + 3.15f, cz, 7.8f, 0.3f, 7.8f, floatArrayOf(0.55f, 0.2f, 0.18f))
+            for (k in 0 until floors) {
+                val wy = top + k * floorH + 1.5f
+                wall(cx, wy, cz - 3.5f, 7.3f, 3f, 0.3f)
+                wall(cx + 3.5f, wy, cz, 0.3f, 3f, 7f)
+                wall(cx - 3.5f, wy, cz, 0.3f, 3f, 7f)
+                if (k == 0) {                                  // the ground floor has a doorway on the south side
+                    wall(cx - 2.25f, wy, cz + 3.5f, 2.5f, 3f, 0.3f)
+                    wall(cx + 2.25f, wy, cz + 3.5f, 2.5f, 3f, 0.3f)
+                } else {
+                    wall(cx, wy, cz + 3.5f, 7.3f, 3f, 0.3f)
+                }
+            }
+            // the door slides sideways in front of the wall when somebody comes close (see BR_DOOR)
+            doorN++
+            val door = mk(scene, Shape.CUBE, "Door " + doorN, cx, top + 1.5f, cz + 3.7f, 1.9f, 3f, 0.12f, floatArrayOf(0.45f, 0.28f, 0.14f), doorScript)
+            door.collider = 1
+            door.shadow = false
+            // upper floors: a slab with a hole where the stair comes up, and a stair for each floor
+            for (k in 1 until floors) {
+                val level = top + k * floorH
+                val westStrip = (k - 1) % 2 == 0          // the flight that arrives here: west side (going north) or east side (going south)
+                val sy = level - 0.1f
+                if (westStrip) {
+                    wall(cx + 1.975f, sy, cz, 5.35f, 0.2f, 7.3f, wood)            // everything east of the hole
+                    wall(cx - 2.675f, sy, cz - 3.225f, 1.95f, 0.2f, 0.85f, wood)   // the landing at the north end
+                } else {
+                    wall(cx - 0.975f, sy, cz, 5.35f, 0.2f, 7.3f, wood)
+                    wall(cx + 2.675f, sy, cz + 3.225f, 1.95f, 0.2f, 0.85f, wood)
+                }
+            }
+            for (j in 0 until floors - 1) {
+                val base = top + j * floorH
+                val n = 6
+                val tread = 1.0f
+                val rise = floorH / n
+                val west = j % 2 == 0
+                val sxc = if (west) cx - 2.55f else cx + 2.55f
+                for (i in 0 until n) {
+                    val hh = rise * (i + 1)
+                    val zc = if (west) (cz + 3.2f) - (i + 0.5f) * tread else (cz - 3.2f) + (i + 0.5f) * tread
+                    mk(scene, Shape.CUBE, "Step " + houseN + "-" + j + "-" + i, sxc, base + hh / 2f, zc, 1.5f, hh, tread, wood)
+                }
+                if (west) addStair(cx - 3.3f, cx - 1.8f, cz + 3.2f - n * tread, cz + 3.2f, tread, n, rise, base, 0)
+                else addStair(cx + 1.8f, cx + 3.3f, cz - 3.2f, cz - 3.2f + n * tread, tread, n, rise, base, 1)
+            }
+            wall(cx, top + (floors - 1) * floorH + 3.15f, cz, 7.8f, 0.3f, 7.8f, floatArrayOf(0.55f, 0.2f, 0.18f))
+            if (floors > 1) upperLoot.add(floatArrayOf(cx, top + (floors - 1) * floorH + 0.5f, cz))
         }
 
         // ---- watchtowers with a long stair up to the deck (huge map) ----
-        val stairLua = StringBuilder("{")
         val towerSpots = ArrayList<FloatArray>()
         if (huge) {
             val H = 10f          // deck height above the tower base
             val nSteps = 20
             val tread = 0.8f
             tries = 0
-            while (towerSpots.size < 5 && tries < 5000) {
+            while (towerSpots.size < nTowers && tries < 5000) {
                 tries++
                 val tx = (rnd.nextFloat() - 0.5f) * 0.7f * map
                 val tz = (rnd.nextFloat() - 0.5f) * 0.7f * map
@@ -1546,7 +1797,7 @@ end
                 if (g1 < seaY + 0.5f || g1 < topT - 3.5f || g1 > topT + 3.5f) continue
                 if (houses.any { Math.hypot((it[0] - tx).toDouble(), (it[1] - tz).toDouble()) < 26.0 }) continue
                 if (houses.any { Math.hypot((it[0] - tx).toDouble(), (it[1] - (tz + 12f)).toDouble()) < 14.0 }) continue
-                if (towerSpots.any { Math.hypot((it[0] - tx).toDouble(), (it[1] - tz).toDouble()) < 70.0 }) continue
+                if (towerSpots.any { Math.hypot((it[0] - tx).toDouble(), (it[1] - tz).toDouble()) < towerGap }) continue
                 towerSpots.add(floatArrayOf(tx, tz, topT, lo, g1))
             }
             var tn = 0
@@ -1582,11 +1833,7 @@ end
                     val h = top - bottom
                     mk(scene, Shape.CUBE, "Step " + tn + "-" + (i + 1), tx, bottom + h / 2f, zc, 2.2f, h, tread, floatArrayOf(0.72f, 0.62f, 0.45f))
                 }
-                if (tn > 1) stairLua.append(", ")
-                stairLua.append("{ x0 = ").append(tx - 1.1f).append(", x1 = ").append(tx + 1.1f)
-                    .append(", z0 = ").append(z0).append(", z1 = ").append(z1)
-                    .append(", tread = ").append(tread).append(", n = ").append(nSteps)
-                    .append(", rise = ").append(rise).append(", base = ").append(g1).append(" }")
+                addStair(tx - 1.1f, tx + 1.1f, z0, z1, tread, nSteps, rise, g1, 0)
             }
         }
         stairLua.append("}")
@@ -1627,6 +1874,9 @@ end
             medkit(h[0] - 1.8f, h[2] + 0.5f, h[1] - 1.6f)
             ammo(h[0] + 1.8f, h[2] + 0.5f, h[1] - 1.6f)
         }
+        for (u in upperLoot) {
+            if (rnd.nextBoolean()) medkit(u[0], u[1], u[2]) else ammo(u[0], u[1], u[2])
+        }
         for (t in towerSpots) {
             medkit(t[0] - 1.6f, t[2] + 10f + 0.5f, t[1] - 1.6f)
             ammo(t[0] + 1.6f, t[2] + 10f + 0.5f, t[1] - 1.6f)
@@ -1664,6 +1914,18 @@ end
             scene, "Player", px, pg + 1.2f, pz, playerScriptBase.replace("STAIRS = {}", "STAIRS = " + stairLua),
             floatArrayOf(0.22f, 0.42f, 0.78f), floatArrayOf(0.2f, 0.22f, 0.3f), floatArrayOf(0.2f, 0.3f, 0.5f)
         )
+        // the rifle and arm you see in first person: free objects the script keeps in front of the camera
+        val vmDark = floatArrayOf(0.14f, 0.14f, 0.16f)
+        for ((nm, size, col) in listOf(
+            Triple("Player vgun", floatArrayOf(0.07f, 0.09f, 0.55f), vmDark),
+            Triple("Player vbar", floatArrayOf(0.035f, 0.035f, 0.3f), vmDark),
+            Triple("Player vhand", floatArrayOf(0.09f, 0.09f, 0.3f), floatArrayOf(0.93f, 0.74f, 0.6f)),
+            Triple("Player vsleeve", floatArrayOf(0.13f, 0.13f, 0.5f), floatArrayOf(0.22f, 0.42f, 0.78f))
+        )) {
+            val vm = mk(scene, Shape.CUBE, nm, px, pg + 1.2f, pz, size[0], size[1], size[2], col)
+            vm.shadow = false
+            vm.opacity = 0.02f
+        }
 
         // ---- enemy soldiers ----
         var bots = 0

@@ -64,6 +64,7 @@ class MainActivity : Activity(), SensorEventListener {
     private lateinit var bottomPanel: LinearLayout
     private var gameMode = false
     private lateinit var moreRows: LinearLayout
+    private lateinit var crosshair: CrosshairView
     private var toolbarShowTab: (Int) -> Unit = {}   // opens a toolbar tab by number (1 = Play)
     private lateinit var transformRow: LinearLayout
     private lateinit var playButton: Button
@@ -518,6 +519,8 @@ end
             buttonViews.add(v)
             root.addView(v, FrameLayout.LayoutParams(dp(90), dp(90), Gravity.TOP or Gravity.START))
         }
+        crosshair = CrosshairView(this).apply { visibility = View.GONE }
+        root.addView(crosshair, FrameLayout.LayoutParams(dp(70), dp(70), Gravity.CENTER))
         root.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
             topScroll.maxHeightPx = (root.height * panelFrac).toInt()
             refreshJoystick()
@@ -750,6 +753,7 @@ end
         pm.menu.add(0, 15, 14, "Load sample game: Battle Royale (shooter)")
         pm.menu.add(0, 19, 14, "Load sample game: Battle Royale LARGE map (PUBG style)")
         pm.menu.add(0, 20, 14, "Load sample game: Battle Royale HUGE map (hills, towers, deep water)")
+        pm.menu.add(0, 21, 14, "Load sample game: Battle Royale GIANT map (800 x 800, houses with up to 5 floors, doors)")
         pm.menu.add(0, 16, 15, "Build game APK (CircleCI)...")
         pm.menu.add(0, 17, 15, "Sounds and music...")
         pm.menu.add(0, 18, 15, "Toolbar and panel size...")
@@ -776,6 +780,7 @@ end
                     15 -> loadBattleSample(0)
                     19 -> loadBattleSample(1)
                     20 -> loadBattleSample(2)
+                    21 -> loadBattleSample(3)
                     16 -> buildGameApk()
                     17 -> showSoundsDialog()
                     18 -> showLayoutDialog()
@@ -799,13 +804,13 @@ end
                 editor.renderer.target[0] = pl.x; editor.renderer.target[1] = pl.y; editor.renderer.target[2] = pl.z
             }
             editor.refresh()
-            toast((if (mode == 2) "Battle Royale HUGE (hills, watchtowers, deep lakes)" else if (large) "Battle Royale (large map, 20 enemies)" else "Battle Royale") + " loaded - tap Play. Joystick moves, drag the screen to look, hold Fire to shoot.")
+            toast((if (mode == 3) "Battle Royale GIANT (800 x 800, tall houses, doors, towers, lakes)" else if (mode == 2) "Battle Royale HUGE (hills, watchtowers, deep lakes)" else if (large) "Battle Royale (large map, 20 enemies)" else "Battle Royale") + " loaded - tap Play. Joystick moves, drag the screen to look, hold Fire to shoot.")
         }
         if (scene.objects.isEmpty()) {
             go()
         } else {
             AlertDialog.Builder(this)
-                .setTitle(if (mode == 2) "Load Battle Royale (HUGE map)?" else if (large) "Load Battle Royale (large map)?" else "Load Battle Royale?")
+                .setTitle(if (mode == 3) "Load Battle Royale (GIANT map)?" else if (mode == 2) "Load Battle Royale (HUGE map)?" else if (large) "Load Battle Royale (large map)?" else "Load Battle Royale?")
                 .setMessage("This replaces the current scene. Use File > Export scene zip first if you want to keep it.")
                 .setPositiveButton("Load") { _, _ -> go() }
                 .setNegativeButton("Cancel", null)
@@ -937,6 +942,8 @@ end
     private val frameCb = object : Choreographer.FrameCallback {
         override fun doFrame(frameTimeNanos: Long) {
             if (!playing) return
+            val wantCross = editor.renderer.fpMode
+            if ((crosshair.visibility == View.VISIBLE) != wantCross) crosshair.visibility = if (wantCross) View.VISIBLE else View.GONE
             val dt = if (lastFrame == 0L) 0.016f
             else ((frameTimeNanos - lastFrame) / 1_000_000_000f).coerceAtMost(0.1f)
             lastFrame = frameTimeNanos
@@ -1067,6 +1074,7 @@ end
         if (!playing) return
         playing = false
         editor.playing = false
+        crosshair.visibility = View.GONE
         joystick.reset()
         buttonViews.forEach { it.reset() }
         if (editor.renderer.fpMode) setFirstPerson(false)

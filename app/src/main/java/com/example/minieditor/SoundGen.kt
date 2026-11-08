@@ -157,6 +157,18 @@ object SoundGen {
         }
     }
 
+    /** A door sliding: a soft rumble with a low creak and a click at the start. */
+    private fun door(): ByteArray {
+        val r = Rng(8)
+        var lp = 0f
+        return wav(0.55f, 0.75f) { t, _ ->
+            lp += (r.next() - lp) * 0.08f
+            val env = sin(PI.toFloat() * t / 0.55f)
+            val creak = tone(95f + 70f * env, t) * 0.5f
+            (lp * 2.2f + creak) * env * env + (if (t < 0.02f) r.next() * 0.8f else 0f)
+        }
+    }
+
     /** A few bubbles blooping upwards. */
     private fun bubbleSnd(): ByteArray {
         return wav(0.55f, 0.7f) { t, _ ->
@@ -187,7 +199,7 @@ object SoundGen {
         val all = mapOf(
             "shot.wav" to shot(), "splash.wav" to splash(), "swim.wav" to swim(), "hurt.wav" to hurt(),
             "reload.wav" to reload(), "pickup.wav" to pickup(), "hit.wav" to hit(),
-            "bubble.wav" to bubbleSnd(), "gasp.wav" to gasp()
+            "bubble.wav" to bubbleSnd(), "gasp.wav" to gasp(), "door.wav" to door()
         )
         for ((name, bytes) in all) {
             try { File(dir, name).writeBytes(bytes) } catch (e: Throwable) { }
