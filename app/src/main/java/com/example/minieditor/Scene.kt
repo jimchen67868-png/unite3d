@@ -45,6 +45,7 @@ class SceneObject(
     var emit = 0f         // glow 0-1
     var opacity = 1f      // 1 = solid, lower = see-through
     var pattern = 0       // 0 none, 1 checker, 2 stripes
+    var cone = 0f         // Light: 0 = shines all around, otherwise a spot light with this half-angle (degrees), aimed straight down then rotated
     var soft = 0.4f       // Settings: shadow softness 0-1
     var wind = 0f         // Settings: wind strength 0-1 (trees and grass sway, smoke and flames lean)
     var windDir = 0f      // Settings: direction the wind blows toward, degrees (0 = +X, 90 = +Z)
@@ -60,6 +61,8 @@ class SceneObject(
 }
 
 class Scene {
+    /** Held by the renderer while it draws and by the script engine while it moves things, so a frame is never drawn half-moved. */
+    val lock = Any()
     val objects = CopyOnWriteArrayList<SceneObject>()
     @Volatile var selected: SceneObject? = null
 
@@ -291,7 +294,7 @@ class Scene {
         o.parentId = s.parentId
         o.rel = s.rel?.copyOf()
         o.spec = s.spec; o.gloss = s.gloss; o.emit = s.emit; o.opacity = s.opacity; o.pattern = s.pattern
-        o.soft = s.soft; o.tint = s.tint.copyOf()
+        o.soft = s.soft; o.cone = s.cone; o.tint = s.tint.copyOf()
         return o
     }
 
@@ -423,7 +426,7 @@ class Scene {
                 o.rel?.let { r -> put("rel", JSONArray().also { a -> for (v in r) a.put(v.toDouble()) }) }
             }
             put("wind", o.wind.toDouble()); put("windDir", o.windDir.toDouble())
-            put("photo", o.photo); put("soft", o.soft.toDouble()); put("tintR", o.tint[0].toDouble()); put("tintG", o.tint[1].toDouble()); put("tintB", o.tint[2].toDouble())
+            put("photo", o.photo); put("soft", o.soft.toDouble()); put("cone", o.cone.toDouble()); put("tintR", o.tint[0].toDouble()); put("tintG", o.tint[1].toDouble()); put("tintB", o.tint[2].toDouble())
             o.model?.let { put("model", it.key) }
             put("x", o.x.toDouble()); put("y", o.y.toDouble()); put("z", o.z.toDouble())
             put("rx", o.rx.toDouble()); put("ry", o.ry.toDouble()); put("rz", o.rz.toDouble())
@@ -457,6 +460,7 @@ class Scene {
                 it.emit = j.optDouble("emit", 0.0).toFloat(); it.opacity = j.optDouble("opacity", 1.0).toFloat()
                 it.pattern = j.optInt("pattern", 0)
                 it.soft = j.optDouble("soft", 0.4).toFloat()
+                it.cone = j.optDouble("cone", 0.0).toFloat()
                 it.wind = j.optDouble("wind", 0.0).toFloat()
                 it.windDir = j.optDouble("windDir", 0.0).toFloat()
                 it.photo = j.optString("photo", "")

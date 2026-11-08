@@ -116,9 +116,17 @@ object Rig {
             c.z = wm[14]
             // rotation order is Ry * Rx * Rz (column-major: element row i, col j = wm[j * 4 + i])
             val sinX = (-wm[9]).coerceIn(-1f, 1f)
-            c.rx = Math.toDegrees(asin(sinX).toDouble()).toFloat()
-            c.ry = Math.toDegrees(atan2(wm[8], wm[10]).toDouble()).toFloat()
-            c.rz = Math.toDegrees(atan2(wm[1], wm[5]).toDouble()).toFloat()
+            val cosX = Math.hypot(wm[8].toDouble(), wm[10].toDouble()).toFloat()
+            if (cosX < 0.02f) {
+                // pointing straight up or down: yaw and roll cannot be told apart, so keep all of it in yaw (no flicker)
+                c.rx = if (sinX > 0f) 90f else -90f
+                c.rz = 0f
+                c.ry = Math.toDegrees(atan2(-wm[2], wm[0]).toDouble()).toFloat()
+            } else {
+                c.rx = Math.toDegrees(asin(sinX).toDouble()).toFloat()
+                c.ry = Math.toDegrees(atan2(wm[8], wm[10]).toDouble()).toFloat()
+                c.rz = Math.toDegrees(atan2(wm[1], wm[5]).toDouble()).toFloat()
+            }
         }
     }
 }

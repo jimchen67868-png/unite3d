@@ -553,12 +553,16 @@ class ScriptEngine(private val scene: Scene, private val log: (String) -> Unit) 
             inst.globals.set("dt", dt.toDouble())
             callFn(inst, "update", dt.toDouble())
         }
-        pullAll()
-        pullWorld()
-        pullCamera()
-        flushSpawns()
-        Rig.apply(scene)
-        collide()
-        Rig.apply(scene)
+        // everything that moves objects happens under the same lock the renderer holds while drawing,
+        // so a frame is never drawn with the body moved but its parts still where they were
+        synchronized(scene.lock) {
+            pullAll()
+            pullWorld()
+            pullCamera()
+            flushSpawns()
+            Rig.apply(scene)
+            collide()
+            Rig.apply(scene)
+        }
     }
 }

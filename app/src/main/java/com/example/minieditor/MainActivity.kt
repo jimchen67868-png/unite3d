@@ -112,6 +112,8 @@ class MainActivity : Activity(), SensorEventListener {
     private lateinit var lightPanel: LinearLayout
     private lateinit var sliderA: SeekBar
     private lateinit var sliderB: SeekBar
+    private lateinit var sliderC: SeekBar
+    private lateinit var labelC: TextView
     private lateinit var labelA: TextView
     private lateinit var labelB: TextView
     private lateinit var skyRow: LinearLayout
@@ -1609,6 +1611,10 @@ end
             }
             sliderA = makeSlider(0)
             sliderB = makeSlider(1)
+            labelC = TextView(this@MainActivity).apply {
+                textSize = 12f; setTextColor(0xFFDDDDDD.toInt()); setPadding(dp(4), dp(6), dp(4), 0)
+            }
+            sliderC = makeSlider(2)
             lightPanel = LinearLayout(this@MainActivity).apply {
                 orientation = LinearLayout.VERTICAL
                 visibility = View.GONE
@@ -1616,6 +1622,8 @@ end
                 addView(sliderA)
                 addView(labelB)
                 addView(sliderB)
+                addView(labelC)
+                addView(sliderC)
             }
             catExtra.addView(lightPanel)
             shLabels = Array(3) {
@@ -1826,7 +1834,8 @@ end
     private fun applySlider(which: Int, p: Int) {
         val o = scene.selected ?: return
         if (!o.shape.isLight) return
-        if (which == 0) o.sx = p / 20f
+        if (which == 2) { if (o.shape == Shape.LIGHT) o.cone = if (p == 0) 0f else 8f + (p - 1) * 0.72f }
+        else if (which == 0) o.sx = p / 20f
         else if (o.shape == Shape.SUN) o.sy = p / 100f
         else o.sy = (1f + p).coerceAtMost(100f)
         editor.refresh()
@@ -2089,7 +2098,7 @@ end
                 grass -> i in 0..3 || i in 6..8
                 emitter -> i in 0..2 || i == 6 || i == 7 || (smokeSel && i == 3)
                 joy -> i == 0 || i == 1 || i == 6
-                light -> i in 0..2 || i == 6 || i == 7 || (sun && (i == 3 || i == 4))
+                light -> i in 0..2 || i == 6 || i == 7 || (sun && (i == 3 || i == 4)) || (!sun && i in 3..5)
                 else -> true
             }
         }
@@ -2121,6 +2130,14 @@ end
             else String.format(Locale.US, "Distance (how far the light reaches)   %.0f", o.sy)
             if (!sliderA.isPressed) sliderA.progress = (o.sx * 20f).toInt().coerceIn(0, 100)
             if (!sliderB.isPressed) sliderB.progress = (if (isSun) o.sy * 100f else o.sy - 1f).toInt().coerceIn(0, 100)
+            val spotable = o.shape == Shape.LIGHT
+            labelC.visibility = if (spotable) View.VISIBLE else View.GONE
+            sliderC.visibility = if (spotable) View.VISIBLE else View.GONE
+            if (spotable) {
+                labelC.text = if (o.cone <= 0.5f) "Spot angle   off (shines all around).  Move the slider to make a spot light"
+                else String.format(Locale.US, "Spot angle   %.0f deg each side.  It points down; turn it with Rot", o.cone)
+                if (!sliderC.isPressed) sliderC.progress = if (o.cone <= 0.5f) 0 else ((o.cone - 8f) / 0.72f + 1f).toInt().coerceIn(1, 100)
+            }
         }
         if (o.shape == Shape.WATER) {
             waveLabels[0].text = String.format(Locale.US, "Wave height   %.2f  (wind makes it bigger)", o.sy)

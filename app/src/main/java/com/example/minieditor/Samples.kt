@@ -277,10 +277,10 @@ end
 -- lying down when shot: the body tips over backwards and sinks to the ground
 function fallPose(t, groundY)
   local k = math.min(1, t / 0.6)
-  self.rx = 90 * k
+  self.rx = 84 * k
   self.y = groundY + 0.9 - 0.7 * k
-  P.legL.swing = 10 * k
-  P.legR.swing = -10 * k
+  P.legL.swing = 0
+  P.legR.swing = 0
   P.armL.swing = 55 + 80 * k
   P.armR.swing = 55 + 80 * k
 end
@@ -602,13 +602,13 @@ function update(dt)
   end
   local leanTo = 0
   if swimming then
-    leanTo = -80
+    leanTo = -70
     walkT = walkT + dt * (moving and 5 or 2)
     local s = math.sin(walkT)
-    P.armL.swing = 135 + 35 * s
-    P.armR.swing = 135 - 35 * s
-    P.legL.swing = 22 * math.sin(walkT * 2.2)
-    P.legR.swing = -22 * math.sin(walkT * 2.2)
+    P.armL.swing = 115 + 35 * s
+    P.armR.swing = 115 - 35 * s
+    P.legL.swing = 14 * math.sin(walkT * 2.2)
+    P.legR.swing = -14 * math.sin(walkT * 2.2)
   else
     walkPose(dt, moving and (self.grounded or onStairs), sp, aimT > 0)
   end
@@ -708,10 +708,10 @@ end
 -- lying down when shot: the body tips over backwards and sinks to the ground
 function fallPose(t, groundY)
   local k = math.min(1, t / 0.6)
-  self.rx = 90 * k
+  self.rx = 84 * k
   self.y = groundY + 0.9 - 0.7 * k
-  P.legL.swing = 10 * k
-  P.legR.swing = -10 * k
+  P.legL.swing = 0
+  P.legR.swing = 0
   P.armL.swing = 55 + 80 * k
   P.armR.swing = 55 + 80 * k
 end

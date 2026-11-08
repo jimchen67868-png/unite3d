@@ -46,6 +46,7 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
     private var aPos = 0; private var aNorm = 0
     private var uMVP = 0; private var uModel = 0; private var uColor = 0; private var uLit = 0
     private var uSunDir = 0; private var uSunCol = 0; private var uAmbient = 0
+    private var uLDir = 0
     private var uLPos = 0; private var uLCol = 0; private var uLCount = 0; private var uLVis = 0
     private val litPos = FloatArray(12)
     private var litCount = 0
@@ -242,6 +243,7 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         uniform vec3 uAmbient;
         uniform vec3 uLPos[4];
         uniform vec4 uLCol[4];
+        uniform vec4 uLDir[4];   // spot lights: xyz = where it points, w = cos of the half-angle (-2 = shines all around)
         uniform float uLVis[4];
         uniform int uLCount;
         uniform vec3 uEye;
@@ -391,6 +393,7 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
                         if (i >= uLCount) break;
                         float pd = length(uLPos[i] - vW);
                         float pa = clamp(1.0 - pd / max(uLCol[i].w, 0.001), 0.0, 1.0);
+                        if (uLDir[i].w > -1.5) pa *= smoothstep(uLDir[i].w, mix(uLDir[i].w, 1.0, 0.3), dot(normalize(vW - uLPos[i]), uLDir[i].xyz));
                         // a box or wall between the light and the smoke blocks it, like for everything else
                         if (uCubeOn > 0.5) pa *= lightVisAt(i, uLPos[i]);
                         sl += uLCol[i].rgb * pa * pa * 0.9;
@@ -444,6 +447,7 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
                 vec3 l = d / dist;
                 float att = clamp(1.0 - dist / uLCol[i].w, 0.0, 1.0);
                 att = att * att * uLVis[i];
+                if (uLDir[i].w > -1.5) att *= smoothstep(uLDir[i].w, mix(uLDir[i].w, 1.0, 0.3), dot(-l, uLDir[i].xyz));
                 if (uCubeOn > 0.5 && uTerrain < 0.5 && vIsGrass < 0.5) att *= lightVisAt(i, uLPos[i]);
                 float nl = max(dot(n, l), 0.0);
                 light += uLCol[i].rgb * nl * att * shPt;
@@ -563,6 +567,7 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         uAmbient = GLES20.glGetUniformLocation(prog, "uAmbient")
         uLPos = GLES20.glGetUniformLocation(prog, "uLPos[0]")
         uLCol = GLES20.glGetUniformLocation(prog, "uLCol[0]")
+        uLDir = GLES20.glGetUniformLocation(prog, "uLDir[0]")
         uLVis = GLES20.glGetUniformLocation(prog, "uLVis[0]")
         uLCount = GLES20.glGetUniformLocation(prog, "uLCount")
         uEye = GLES20.glGetUniformLocation(prog, "uEye")
@@ -610,6 +615,7 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         gridBuilt = 0
         gizmo = Meshes.gizmo()
         circle = Meshes.circle()
+        spotGizmo = null
         quad = Meshes.quad()
         waterMesh = Meshes.waterGrid()
         fireMesh = Meshes.particles(70)
@@ -730,8 +736,14 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         val pts = scene.objects.filter { it.shape == Shape.LIGHT || (it.shape == Shape.FIRE && it.emit > 0.01f) }.take(4)
         val pos = FloatArray(12)
         val col = FloatArray(16)
+        val dirs = FloatArray(16) { if (it % 4 == 3) -2f else 0f }
         val tt = Water.time()
         for ((i, o) in pts.withIndex()) {
+            if (o.shape == Shape.LIGHT && o.cone > 0.5f) {
+                val d = spotDir(o)
+                dirs[i * 4] = d[0]; dirs[i * 4 + 1] = d[1]; dirs[i * 4 + 2] = d[2]
+                dirs[i * 4 + 3] = cos(Math.toRadians(o.cone.coerceIn(3f, 85f).toDouble())).toFloat()
+            }
             val fireL = o.shape == Shape.FIRE
             pos[i * 3] = o.x
             pos[i * 3 + 1] = if (fireL) o.y + o.sy * 0.25f else o.y
@@ -755,6 +767,7 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         GLES20.glUniform1f(uCubeOn, if (visActive) 1f else 0f)
         GLES20.glUniform3fv(uLPos, 4, pos, 0)
         GLES20.glUniform4fv(uLCol, 4, col, 0)
+        GLES20.glUniform4fv(uLDir, 4, dirs, 0)
         GLES20.glUniform1i(uLCount, pts.size)
         val sky = st?.color ?: floatArrayOf(0.15f, 0.16f, 0.19f)
         GLES20.glUniform3f(uFogColor, sky[0], sky[1], sky[2])
@@ -767,6 +780,55 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         GLES20.glUniform3f(uWind, windX, windZ, windStr)
         Water.boost = 1f + windStr * 1.2f
         GLES20.glUniform1f(uTree, 0f)
+    }
+
+    /** Where a spot light points: straight down, turned by the light's own rotation. */
+    private fun spotDir(o: SceneObject): FloatArray {
+        val m = FloatArray(16)
+        Rig.worldMatrix(o, m)
+        val r = FloatArray(4)
+        Matrix.multiplyMV(r, 0, m, 0, floatArrayOf(0f, -1f, 0f, 0f), 0)
+        val l = sqrt(r[0] * r[0] + r[1] * r[1] + r[2] * r[2]).coerceAtLeast(0.0001f)
+        return floatArrayOf(r[0] / l, r[1] / l, r[2] / l)
+    }
+
+    private var spotGizmo: Mesh? = null
+
+    /** Editor-only: a line along the beam and four lines on the edge of the cone. */
+    private fun drawSpotGizmo(o: SceneObject, vpc: FloatArray, color: FloatArray) {
+        val d = spotDir(o)
+        val len = o.sy.coerceIn(1f, 8f)
+        val a = Math.toRadians(o.cone.coerceIn(3f, 85f).toDouble())
+        val cs = cos(a).toFloat()
+        val sn = kotlin.math.sin(a).toFloat()
+        // two directions at right angles to the beam
+        val up = if (kotlin.math.abs(d[1]) > 0.9f) floatArrayOf(1f, 0f, 0f) else floatArrayOf(0f, 1f, 0f)
+        var ux = d[1] * up[2] - d[2] * up[1]
+        var uy = d[2] * up[0] - d[0] * up[2]
+        var uz = d[0] * up[1] - d[1] * up[0]
+        val ul = sqrt(ux * ux + uy * uy + uz * uz).coerceAtLeast(0.0001f)
+        ux /= ul; uy /= ul; uz /= ul
+        val vx = d[1] * uz - d[2] * uy
+        val vy = d[2] * ux - d[0] * uz
+        val vz = d[0] * uy - d[1] * ux
+        val ends = ArrayList<FloatArray>()
+        ends.add(floatArrayOf(d[0] * len, d[1] * len, d[2] * len))
+        for (k in 0..3) {
+            val sgn = if (k % 2 == 0) 1f else -1f
+            val (ax, ay, az) = if (k < 2) Triple(ux, uy, uz) else Triple(vx, vy, vz)
+            ends.add(floatArrayOf((d[0] * cs + ax * sgn * sn) * len, (d[1] * cs + ay * sgn * sn) * len, (d[2] * cs + az * sgn * sn) * len))
+        }
+        val data = FloatArray(ends.size * 2 * 6)
+        for ((i, e) in ends.withIndex()) {
+            val b = i * 12
+            data[b] = o.x; data[b + 1] = o.y; data[b + 2] = o.z; data[b + 4] = 1f
+            data[b + 6] = o.x + e[0]; data[b + 7] = o.y + e[1]; data[b + 8] = o.z + e[2]; data[b + 10] = 1f
+        }
+        val g = spotGizmo ?: Mesh(data, GLES20.GL_LINES).also { spotGizmo = it }
+        g.update(data)
+        Matrix.setIdentityM(model, 0)
+        GLES20.glLineWidth(2f)
+        drawMesh(g, vpc, model, color, false)
     }
 
     /** Editor-only marker: a glowing ball whose on-screen size stays about the same at any zoom. */
@@ -795,6 +857,7 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
                 Matrix.scaleM(model, 0, rr, rr, rr)
                 drawMesh(circle, vpc, model, c, false)
             }
+            if (o.cone > 0.5f) drawSpotGizmo(o, vpc, c)
         }
         if (o.shape == Shape.SUN) {
             val g = max(1f, d * 0.12f)
@@ -1749,6 +1812,10 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
     }
 
     override fun onDrawFrame(gl: GL10?) {
+        synchronized(scene.lock) { drawFrameLocked() }
+    }
+
+    private fun drawFrameLocked() {
         onFrame?.invoke()
         val eyeC = FloatArray(3)
         val camAxes = FloatArray(6)
@@ -1956,6 +2023,7 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
             if (o.shape.isLight || o.shape == Shape.CAMERA || o.shape == Shape.BONE) continue
             if (mirror && o.shape == Shape.MIRROR) continue
             if (o.shape.isScreen || o.shape == Shape.SETTINGS || o === fpHide) continue
+            if (o.opacity <= 0.025f && o.shape != Shape.WATER && !o.shape.isEmitter) continue   // fully invisible (hidden parts, invisible body)
             if (o.shape.isEmitter) { emitters.add(o); continue }
             if (o.shape == Shape.WATER || o.opacity < 0.99f) { seeThrough.add(o); continue }
             drawObject(o, vpc, sel, 1f)
