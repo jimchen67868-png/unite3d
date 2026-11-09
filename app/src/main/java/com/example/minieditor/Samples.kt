@@ -13,7 +13,7 @@ function start()
   amt = 0
   want = 0
   checkT = 0
-  slide = 1.85
+  slide = 2.3
   player = find("Player")
   bots = {}
   for k = 1, NBOTS do
@@ -24,7 +24,7 @@ end
 function near(o)
   if o == nil or o.dead then return false end
   local dx, dz = o.x - self.x, o.z - self.z
-  return dx * dx + dz * dz < 9 and math.abs(o.y - self.y) < 2.5
+  return dx * dx + dz * dz < 12 and math.abs(o.y - self.y) < 3
 end
 
 function update(dt)
@@ -67,6 +67,9 @@ function start()
   fx = {}
   findParts()
   VM = { find("Player vgun"), find("Player vbar"), find("Player vhand"), find("Player vsleeve") }
+  for i = 1, #VM do
+    if VM[i] ~= nil then VM[i].hud = true end
+  end
   vmOn = false
   kick = 0
   vmDip = 0
@@ -378,35 +381,26 @@ function setVm(on)
 end
 
 function placeVm(dt)
-  local yaw = math.rad(input.yaw)
-  local pit = math.rad(camera.pitch)
-  local fx, fy, fz = -math.cos(pit) * math.sin(yaw), -math.sin(pit), -math.cos(pit) * math.cos(yaw)
-  local rx, rz = math.cos(yaw), -math.sin(yaw)
-  local ux, uy, uz = -rz * fy, rz * fx - rx * fz, rx * fy
-  local ex, ey, ez = self.x, self.y + self.sy * 0.6, self.z
+  -- the parts are measured from the camera (hud): x = right, y = up, -z = forward
   kick = math.max(0, kick - dt * 9)
   local dipTo = 0
   if reloadT > 0 then dipTo = 0.2 end
   vmDip = vmDip + (dipTo - vmDip) * math.min(1, dt * 10)
   local R, U, F = 0.2, -0.2 - vmDip, 0.55 - kick * 0.06
   if aimT > 0 then R = 0.15; U = -0.17 - vmDip end
-  local bob = 0
   if legAmp > 1 then
     R = R + math.sin(walkT) * 0.01 * (legAmp / 38)
-    bob = math.sin(walkT * 2) * 0.012 * (legAmp / 38)
+    U = U + math.sin(walkT * 2) * 0.012 * (legAmp / 38)
   end
-  U = U + bob
   local offs = { { 0, 0, 0 }, { 0, 0.005, 0.4 }, { 0.0, -0.09, 0.04 }, { 0.03, -0.11, -0.24 } }
   for i = 1, #VM do
     local p = VM[i]
     if p ~= nil then
       local o = offs[i]
-      local a, b, c = R + o[1], U + o[2], F + o[3]
-      p.x = ex + rx * a + ux * b + fx * c
-      p.y = ey + uy * b + fy * c
-      p.z = ez + rz * a + uz * b + fz * c
-      p.ry = input.yaw
-      p.rx = -camera.pitch + kick * 4
+      p.x = R + o[1]
+      p.y = U + o[2]
+      p.z = -(F + o[3])
+      p.rx = kick * 4
     end
   end
 end
@@ -1597,13 +1591,13 @@ end
         val sp = map / 70f                       // everything that is a distance scales with the map
         val relief = if (giant) 70f else if (huge) 55f else if (large) 16f else 7f
         val slopeK = if (huge) 2.6f else 1f      // hills are steeper on the huge map, so house sites may be less flat
-        val nHouses = if (giant) 14 else if (huge) 12 else if (large) 14 else 5
-        val houseGap = if (giant) 50.0 else if (huge) 40.0 else if (large) 32.0 else 16.0
+        val nHouses = if (giant) 9 else if (huge) 8 else if (large) 8 else 3
+        val houseGap = if (giant) 56.0 else if (huge) 48.0 else if (large) 40.0 else 24.0
         val maxFloors = if (giant) 5 else if (huge) 4 else if (large) 2 else 1   // houses get a random number of floors up to this
         val nTowers = 4
         val towerGap = if (giant) 110.0 else 70.0
-        val nTrees = if (giant) 90 else if (huge) 100 else if (large) 120 else 40
-        val nBots = if (giant) 16 else if (huge) 16 else if (large) 14 else 8
+        val nTrees = if (giant) 80 else if (huge) 90 else if (large) 110 else 40
+        val nBots = if (giant) 15 else if (huge) 15 else if (large) 14 else 8
         val nExtraLoot = if (giant) 28 else if (huge) 22 else if (large) 14 else 6
         val doorScript = BR_DOOR.replace("local NBOTS = 8", "local NBOTS = " + nBots)
         val playerScriptBase = BR_PLAYER.replace("local NBOTS = 8", "local NBOTS = " + nBots)
@@ -1671,7 +1665,8 @@ end
 
         if (huge) { grass.x = zcx; grass.z = zcz }
 
-        // ---- houses: 1 to 5 floors, a stair inside, and a sliding door ----
+        // ---- houses (like a real building): 14 x 11 metres, high ceilings, 1 to 5 floors, rooms inside,
+        //      a stair for each floor, a sliding front door and a ramp up to it when the house sits above the ground ----
         val stairLua = StringBuilder("{")
         var stairCount = 0
         // one flight of stairs for the player script (it gives the floor height there); dir 0 = climbs towards -z, 1 = towards +z
@@ -1684,18 +1679,18 @@ end
         val upperLoot = ArrayList<FloatArray>()
         val houses = ArrayList<FloatArray>()   // centre x, centre z, floor top y, lowest ground, number of floors
         var tries = 0
-        while (houses.size < nHouses && tries < 3000) {
+        while (houses.size < nHouses && tries < 4000) {
             tries++
-            val hx = (rnd.nextFloat() - 0.5f) * 0.74f * map
-            val hz = (rnd.nextFloat() - 0.5f) * 0.74f * map
+            val hx = (rnd.nextFloat() - 0.5f) * 0.72f * map
+            val hz = (rnd.nextFloat() - 0.5f) * 0.72f * map
             var lo = 1e9f
             var hi = -1e9f
             var ok = true
-            for (dx in intArrayOf(-4, 0, 4)) for (dz in intArrayOf(-4, 0, 4)) {
+            for (dx in intArrayOf(-6, 0, 6)) for (dz in intArrayOf(-5, 0, 5)) {
                 val h = ground(hx + dx, hz + dz)
                 if (h == null) ok = false else { lo = minOf(lo, h); hi = maxOf(hi, h) }
             }
-            val tol = (if (tries < 1500) 1.0f else 2.2f) * slopeK
+            val tol = (if (tries < 2000) 1.2f else 2.6f) * slopeK
             if (!ok || lo < seaY + 0.6f || hi - lo > tol) continue
             if (houses.any { Math.hypot((it[0] - hx).toDouble(), (it[1] - hz).toDouble()) < houseGap }) continue
             val u = rnd.nextFloat()
@@ -1711,8 +1706,10 @@ end
         }
         var houseN = 0
         var doorN = 0
-        val floorH = 3.2f                     // from one floor to the next
+        val floorH = 4.2f                     // from one floor to the next: 3.9 of room height and a 0.3 slab
+        val roomH = 3.9f
         val wood = floatArrayOf(0.6f, 0.5f, 0.38f)
+        val inner = floatArrayOf(0.88f, 0.84f, 0.76f)
         for (h in houses) {
             houseN++
             val cx = h[0]
@@ -1721,55 +1718,89 @@ end
             val lo = h[3]
             val floors = h[4].toInt()
             val slabH = top - lo + 0.5f
-            val slab = mk(scene, Shape.CUBE, "Floor " + houseN, cx, lo - 0.3f + slabH / 2f, cz, 8f, slabH, 8f, floatArrayOf(0.5f, 0.5f, 0.5f))
+            val slab = mk(scene, Shape.CUBE, "Floor " + houseN, cx, lo - 0.3f + slabH / 2f, cz, 14.6f, slabH, 11.6f, floatArrayOf(0.5f, 0.5f, 0.5f))
             slab.collider = 1
             for (k in 0 until floors) {
-                val wy = top + k * floorH + 1.5f
-                wall(cx, wy, cz - 3.5f, 7.3f, 3f, 0.3f)
-                wall(cx + 3.5f, wy, cz, 0.3f, 3f, 7f)
-                wall(cx - 3.5f, wy, cz, 0.3f, 3f, 7f)
-                if (k == 0) {                                  // the ground floor has a doorway on the south side
-                    wall(cx - 2.25f, wy, cz + 3.5f, 2.5f, 3f, 0.3f)
-                    wall(cx + 2.25f, wy, cz + 3.5f, 2.5f, 3f, 0.3f)
+                val base = top + k * floorH
+                val wy = base + roomH / 2f
+                // outside walls (the house is x -7..7, z -5.5..5.5)
+                wall(cx, wy, cz - 5.5f, 14.3f, roomH, 0.3f)
+                wall(cx + 6.85f, wy, cz, 0.3f, roomH, 11f)
+                wall(cx - 6.85f, wy, cz, 0.3f, roomH, 11f)
+                if (k == 0) {                                  // the ground floor has a doorway in the middle of the south wall
+                    wall(cx - 4.05f, wy, cz + 5.5f, 5.9f, roomH, 0.3f)
+                    wall(cx + 4.05f, wy, cz + 5.5f, 5.9f, roomH, 0.3f)
                 } else {
-                    wall(cx, wy, cz + 3.5f, 7.3f, 3f, 0.3f)
+                    wall(cx, wy, cz + 5.5f, 14.3f, roomH, 0.3f)
+                }
+                // rooms: a wall across the middle with a doorway (the sides stay open for the stairs) ...
+                wall(cx - 1.85f, wy, cz, 6.1f, roomH, 0.2f, inner)
+                wall(cx + 3.85f, wy, cz, 2.1f, roomH, 0.2f, inner)
+                // ... and on the ground floor another one splitting the back into two rooms, also with a doorway
+                if (k == 0) {
+                    wall(cx - 2.5f, wy, cz - 4.475f, 0.2f, roomH, 1.75f, inner)
+                    wall(cx - 2.5f, wy, cz - 1.0f, 0.2f, roomH, 1.9f, inner)
                 }
             }
-            // the door slides sideways in front of the wall when somebody comes close (see BR_DOOR)
+            // the front door slides sideways in front of the wall when somebody comes close (see BR_DOOR)
             doorN++
-            val door = mk(scene, Shape.CUBE, "Door " + doorN, cx, top + 1.5f, cz + 3.7f, 1.9f, 3f, 0.12f, floatArrayOf(0.45f, 0.28f, 0.14f), doorScript)
+            val door = mk(scene, Shape.CUBE, "Door " + doorN, cx, top + roomH / 2f, cz + 5.7f, 2.2f, roomH, 0.12f, floatArrayOf(0.45f, 0.28f, 0.14f), doorScript)
             door.collider = 1
             door.shadow = false
-            // upper floors: a slab with a hole where the stair comes up, and a stair for each floor
+            // a ramp of steps up to the door when the house stands higher than the ground in front of it
+            run {
+                var gd = ground(cx, cz + 8f) ?: top
+                var n = 1
+                for (pass in 0..2) {
+                    n = Math.ceil(((top - gd) / 0.4f).toDouble()).toInt().coerceIn(1, 9)
+                    gd = ground(cx, cz + 5.9f + n * 0.8f) ?: gd
+                }
+                val d = top - gd
+                if (d > 0.25f) {
+                    n = Math.ceil((d / 0.4f).toDouble()).toInt().coerceIn(1, 9)
+                    val rise = d / n
+                    val z0 = cz + 5.9f
+                    val z1 = z0 + n * 0.8f
+                    for (i in 0 until n) {
+                        val st = gd + rise * (i + 1)
+                        val zc = z1 - (i + 0.5f) * 0.8f
+                        val bottom = minOf(gd, top) - 0.8f
+                        mk(scene, Shape.CUBE, "Porch step " + houseN + "-" + i, cx, (bottom + st) / 2f, zc, 2.8f, st - bottom, 0.8f, floatArrayOf(0.72f, 0.66f, 0.55f))
+                    }
+                    addStair(cx - 1.4f, cx + 1.4f, z0, z1, 0.8f, n, rise, gd, 0)
+                }
+            }
+            // upper floors: a slab with a hole where the stair comes up
             for (k in 1 until floors) {
                 val level = top + k * floorH
                 val westStrip = (k - 1) % 2 == 0          // the flight that arrives here: west side (going north) or east side (going south)
-                val sy = level - 0.1f
+                val sy = level - 0.15f
                 if (westStrip) {
-                    wall(cx + 1.975f, sy, cz, 5.35f, 0.2f, 7.3f, wood)            // everything east of the hole
-                    wall(cx - 2.675f, sy, cz - 3.225f, 1.95f, 0.2f, 0.85f, wood)   // the landing at the north end
+                    wall(cx + 0.95f, sy, cz, 12.3f, 0.3f, 11.4f, wood)             // everything east of the hole
+                    wall(cx - 6.15f, sy, cz - 3.55f, 1.9f, 0.3f, 4.3f, wood)        // the landing at the north end
                 } else {
-                    wall(cx - 0.975f, sy, cz, 5.35f, 0.2f, 7.3f, wood)
-                    wall(cx + 2.675f, sy, cz + 3.225f, 1.95f, 0.2f, 0.85f, wood)
+                    wall(cx - 0.95f, sy, cz, 12.3f, 0.3f, 11.4f, wood)
+                    wall(cx + 6.15f, sy, cz + 3.55f, 1.9f, 0.3f, 4.3f, wood)
                 }
             }
+            // a flight of stairs from every floor to the next, along the west wall, then the east wall, and so on
             for (j in 0 until floors - 1) {
                 val base = top + j * floorH
-                val n = 6
-                val tread = 1.0f
+                val n = 7
+                val tread = 0.9f
                 val rise = floorH / n
                 val west = j % 2 == 0
-                val sxc = if (west) cx - 2.55f else cx + 2.55f
+                val sxc = if (west) cx - 6.05f else cx + 6.05f
                 for (i in 0 until n) {
                     val hh = rise * (i + 1)
-                    val zc = if (west) (cz + 3.2f) - (i + 0.5f) * tread else (cz - 3.2f) + (i + 0.5f) * tread
-                    mk(scene, Shape.CUBE, "Step " + houseN + "-" + j + "-" + i, sxc, base + hh / 2f, zc, 1.5f, hh, tread, wood)
+                    val zc = if (west) (cz + 5.0f) - (i + 0.5f) * tread else (cz - 5.0f) + (i + 0.5f) * tread
+                    mk(scene, Shape.CUBE, "Step " + houseN + "-" + j + "-" + i, sxc, base + hh / 2f, zc, 1.7f, hh, tread, wood)
                 }
-                if (west) addStair(cx - 3.3f, cx - 1.8f, cz + 3.2f - n * tread, cz + 3.2f, tread, n, rise, base, 0)
-                else addStair(cx + 1.8f, cx + 3.3f, cz - 3.2f, cz - 3.2f + n * tread, tread, n, rise, base, 1)
+                if (west) addStair(cx - 6.9f, cx - 5.2f, cz + 5.0f - n * tread, cz + 5.0f, tread, n, rise, base, 0)
+                else addStair(cx + 5.2f, cx + 6.9f, cz - 5.0f, cz - 5.0f + n * tread, tread, n, rise, base, 1)
             }
-            wall(cx, top + (floors - 1) * floorH + 3.15f, cz, 7.8f, 0.3f, 7.8f, floatArrayOf(0.55f, 0.2f, 0.18f))
-            if (floors > 1) upperLoot.add(floatArrayOf(cx, top + (floors - 1) * floorH + 0.5f, cz))
+            wall(cx, top + (floors - 1) * floorH + roomH + 0.15f, cz, 14.8f, 0.3f, 11.8f, floatArrayOf(0.55f, 0.2f, 0.18f))
+            if (floors > 1) upperLoot.add(floatArrayOf(cx + 1f, top + (floors - 1) * floorH + 0.5f, cz + 2.5f))
         }
 
         // ---- watchtowers with a long stair up to the deck (huge map) ----
@@ -1795,8 +1826,8 @@ end
                 val g1 = ground(tx, z1) ?: continue
                 val topT = hi + 0.2f
                 if (g1 < seaY + 0.5f || g1 < topT - 3.5f || g1 > topT + 3.5f) continue
-                if (houses.any { Math.hypot((it[0] - tx).toDouble(), (it[1] - tz).toDouble()) < 26.0 }) continue
-                if (houses.any { Math.hypot((it[0] - tx).toDouble(), (it[1] - (tz + 12f)).toDouble()) < 14.0 }) continue
+                if (houses.any { Math.hypot((it[0] - tx).toDouble(), (it[1] - tz).toDouble()) < 32.0 }) continue
+                if (houses.any { Math.hypot((it[0] - tx).toDouble(), (it[1] - (tz + 12f)).toDouble()) < 18.0 }) continue
                 if (towerSpots.any { Math.hypot((it[0] - tx).toDouble(), (it[1] - tz).toDouble()) < towerGap }) continue
                 towerSpots.add(floatArrayOf(tx, tz, topT, lo, g1))
             }
@@ -1847,7 +1878,7 @@ end
             val tz = (rnd.nextFloat() - 0.5f) * 0.91f * map
             val th = ground(tx, tz) ?: continue
             if (th < seaY + 0.4f || th > land.sy * 0.8f) continue
-            if (houses.any { Math.hypot((it[0] - tx).toDouble(), (it[1] - tz).toDouble()) < 7.0 }) continue
+            if (houses.any { Math.hypot((it[0] - tx).toDouble(), (it[1] - tz).toDouble()) < 11.0 }) continue
             if (towerSpots.any { Math.hypot((it[0] - tx).toDouble(), (it[1] - (tz + 10f)).toDouble()) < 16.0 }) continue
             val tr = scene.addTree(rnd.nextInt(2))
             val k = 0.8f + rnd.nextFloat() * 0.6f
@@ -1871,8 +1902,8 @@ end
             o.collider = 2; o.emit = 0.35f; o.shadow = false
         }
         for (h in houses) {
-            medkit(h[0] - 1.8f, h[2] + 0.5f, h[1] - 1.6f)
-            ammo(h[0] + 1.8f, h[2] + 0.5f, h[1] - 1.6f)
+            medkit(h[0] - 4.2f, h[2] + 0.5f, h[1] - 3.5f)     // back-left room
+            ammo(h[0] + 3.5f, h[2] + 0.5f, h[1] - 3.2f)       // back-right room
         }
         for (u in upperLoot) {
             if (rnd.nextBoolean()) medkit(u[0], u[1], u[2]) else ammo(u[0], u[1], u[2])
@@ -1906,7 +1937,7 @@ end
             val z = zcz + Math.sin(a.toDouble()).toFloat() * d
             val h = ground(x, z) ?: continue
             if (h < seaY + 0.8f) continue
-            if (houses.any { Math.hypot((it[0] - x).toDouble(), (it[1] - z).toDouble()) < 9.0 }) continue
+            if (houses.any { Math.hypot((it[0] - x).toDouble(), (it[1] - z).toDouble()) < 12.0 }) continue
             px = x; pz = z; pg = h
             break
         }
@@ -1937,7 +1968,7 @@ end
             val h = ground(x, z) ?: continue
             if (h < seaY + 0.6f) continue
             if (Math.hypot((x - px).toDouble(), (z - pz).toDouble()) < 16.0 * sp) continue
-            if (houses.any { Math.hypot((it[0] - x).toDouble(), (it[1] - z).toDouble()) < 9.0 }) continue
+            if (houses.any { Math.hypot((it[0] - x).toDouble(), (it[1] - z).toDouble()) < 12.0 }) continue
             bots++
             val shirts = arrayOf(floatArrayOf(0.7f, 0.2f, 0.18f), floatArrayOf(0.35f, 0.45f, 0.25f), floatArrayOf(0.55f, 0.45f, 0.25f), floatArrayOf(0.3f, 0.3f, 0.34f))
             val shirt = shirts[bots % shirts.size]

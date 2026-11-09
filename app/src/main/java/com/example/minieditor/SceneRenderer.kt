@@ -1090,6 +1090,19 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         GLES20.glUniform1f(uWater, 0f)
     }
 
+    private fun drawHud(o: SceneObject, vpc: FloatArray, inv: FloatArray) {
+        setLightVis(o)
+        System.arraycopy(inv, 0, model, 0, 16)
+        Matrix.translateM(model, 0, o.x, o.y, o.z)
+        Matrix.rotateM(model, 0, o.ry, 0f, 1f, 0f)
+        Matrix.rotateM(model, 0, o.rx, 1f, 0f, 0f)
+        Matrix.rotateM(model, 0, o.rz, 0f, 0f, 1f)
+        Matrix.scaleM(model, 0, o.sx, o.sy, o.sz)
+        setMaterial(o)
+        val mesh = meshFor(o)
+        drawMesh(mesh, vpc, model, o.color, true, 0, mesh.count, 1f)
+    }
+
     private fun drawObject(o: SceneObject, vpc: FloatArray, sel: SceneObject?, alpha: Float) {
         setLightVis(o)
         if (o.shape == Shape.WATER) { drawWater(o, vpc, sel, alpha); return }
@@ -2018,12 +2031,14 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         // Objects: solid ones first, then see-through ones (far to near) so they blend correctly
         val sel = scene.selected
         val seeThrough = ArrayList<SceneObject>()
+        val huds = ArrayList<SceneObject>()
         val emitters = ArrayList<SceneObject>()
         for (o in scene.objects) {
             if (o.shape.isLight || o.shape == Shape.CAMERA || o.shape == Shape.BONE) continue
             if (mirror && o.shape == Shape.MIRROR) continue
             if (o.shape.isScreen || o.shape == Shape.SETTINGS || o === fpHide) continue
             if (o.opacity <= 0.025f && o.shape != Shape.WATER && !o.shape.isEmitter) continue   // fully invisible (hidden parts, invisible body)
+            if (o.hud) { if (!mirror) huds.add(o); continue }
             if (o.shape.isEmitter) { emitters.add(o); continue }
             if (o.shape == Shape.WATER || o.opacity < 0.99f) { seeThrough.add(o); continue }
             drawObject(o, vpc, sel, 1f)
@@ -2049,6 +2064,15 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
             for (o in emitters) drawEmitter(o, vpc, camAxes)
             GLES20.glDepthMask(true)
             GLES20.glDisable(GLES20.GL_BLEND)
+        }
+
+        // things held in front of the camera (the first-person rifle): drawn last, on a cleared depth buffer, positioned
+        // from the camera as it is right now, so they never lag behind, shake, or sink into walls
+        if (huds.isNotEmpty()) {
+            GLES20.glClear(GLES20.GL_DEPTH_BUFFER_BIT)
+            val inv = FloatArray(16)
+            Matrix.invertM(inv, 0, view, 0)
+            for (o in huds) drawHud(o, vpc, inv)
         }
 
         GLES20.glUniform1fv(uLVis, 4, visOnes, 0)

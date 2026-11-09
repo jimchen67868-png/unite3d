@@ -41,27 +41,47 @@ class JoystickView(ctx: Context) : View(ctx) {
         c.drawCircle(cx + kx, cy + ky, r * 0.38f, knobPaint)
     }
 
+    private var pid = -1
+
+    private fun follow(e: MotionEvent, index: Int, down: Boolean) {
+        var dx = e.getX(index) - width / 2f
+        var dy = e.getY(index) - height / 2f
+        val maxR = radius() * 0.62f
+        val len = sqrt(dx * dx + dy * dy)
+        if (down) { downTime = e.eventTime; maxMove = 0f }
+        maxMove = maxOf(maxMove, len)
+        if (len > maxR) { dx = dx / len * maxR; dy = dy / len * maxR }
+        kx = dx; ky = dy
+        jx = dx / maxR
+        jy = -dy / maxR
+        active = true
+    }
+
     override fun onTouchEvent(e: MotionEvent): Boolean {
         if (!interactive) return false
         when (e.actionMasked) {
-            MotionEvent.ACTION_DOWN, MotionEvent.ACTION_MOVE -> {
-                var dx = e.x - width / 2f
-                var dy = e.y - height / 2f
-                val maxR = radius() * 0.62f
-                val len = sqrt(dx * dx + dy * dy)
-                if (e.actionMasked == MotionEvent.ACTION_DOWN) { downTime = e.eventTime; maxMove = 0f }
-                maxMove = maxOf(maxMove, len)
-                if (len > maxR) { dx = dx / len * maxR; dy = dy / len * maxR }
-                kx = dx; ky = dy
-                jx = dx / maxR
-                jy = -dy / maxR
-                active = true
+            MotionEvent.ACTION_DOWN -> {
+                parent?.requestDisallowInterceptTouchEvent(true)
+                pid = e.getPointerId(0)
+                follow(e, 0, true)
+            }
+            MotionEvent.ACTION_MOVE -> {
+                // follow only the finger that touched the stick, however many other fingers are down
+                val i = e.findPointerIndex(pid)
+                if (i >= 0) follow(e, i, false)
+            }
+            MotionEvent.ACTION_POINTER_UP -> {
+                if (e.getPointerId(e.actionIndex) == pid) {
+                    pid = -1
+                    reset()
+                }
             }
             MotionEvent.ACTION_UP -> {
                 if (e.eventTime - downTime < 250 && maxMove < radius() * 0.2f) tapLatched = true
+                pid = -1
                 reset()
             }
-            MotionEvent.ACTION_CANCEL -> reset()
+            MotionEvent.ACTION_CANCEL -> { pid = -1; reset() }
         }
         invalidate()
         return true

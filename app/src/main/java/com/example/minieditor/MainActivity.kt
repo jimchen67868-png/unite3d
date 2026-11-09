@@ -525,6 +525,20 @@ end
             topScroll.maxHeightPx = (root.height * panelFrac).toInt()
             refreshJoystick()
         }
+        // keep the phone's edge-swipe gestures (back / home) away from the joystick and buttons: they used to cancel
+        // the touch and the stick jumped back to the centre while the finger was still down
+        if (android.os.Build.VERSION.SDK_INT >= 29) {
+            root.addOnLayoutChangeListener { v, l, t, r, b, _, _, _, _ ->
+                val w = r - l
+                val h = b - t
+                val strip = dp(56)
+                val from = maxOf(0, h - dp(240))
+                v.systemGestureExclusionRects = listOf(
+                    android.graphics.Rect(0, from, strip, h),
+                    android.graphics.Rect(w - strip, from, w, h)
+                )
+            }
+        }
         setContentView(root)
 
         editor.onChange = { updateInfo() }
@@ -1083,7 +1097,7 @@ end
         engine = null
         audio?.release()
         audio = null
-        for (o in scene.objects) o.swing = 0f
+        for (o in scene.objects) { o.swing = 0f; o.hud = false }
         for (s in snaps) {
             val o = s.o; val v = s.v
             o.x = v[0]; o.y = v[1]; o.z = v[2]

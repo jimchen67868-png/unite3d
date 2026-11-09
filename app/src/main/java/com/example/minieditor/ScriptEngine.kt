@@ -233,14 +233,14 @@ class ScriptEngine(private val scene: Scene, private val log: (String) -> Unit) 
     private val pushCache = HashMap<SceneObject, FloatArray>()
 
     private fun push(o: SceneObject, t: LuaTable) {
-        val c = pushCache.getOrPut(o) { FloatArray(17) { Float.NaN } }
+        val c = pushCache.getOrPut(o) { FloatArray(18) { Float.NaN } }
         val scripted = instByObj.containsKey(o)
         var changed = false
         var moved = false
         fun chk(i: Int, v: Float) { if (c[i] != v) { c[i] = v; changed = true; if (i < 3) moved = true } }
         chk(0, o.x); chk(1, o.y); chk(2, o.z); chk(3, o.rx); chk(4, o.ry); chk(5, o.rz)
         chk(6, o.sx); chk(7, o.sy); chk(8, o.sz); chk(9, o.color[0]); chk(10, o.color[1]); chk(11, o.color[2])
-        chk(12, o.collider.toFloat()); chk(13, o.opacity); chk(14, o.emit); chk(15, if (o.shadow) 1f else 0f); chk(16, o.swing)
+        chk(12, o.collider.toFloat()); chk(13, o.opacity); chk(14, o.emit); chk(15, if (o.shadow) 1f else 0f); chk(16, o.swing); chk(17, if (o.hud) 1f else 0f)
         if (!changed && !scripted) return
         t.set("name", o.name)
         t.set("x", o.x.toDouble()); t.set("y", o.y.toDouble()); t.set("z", o.z.toDouble())
@@ -251,6 +251,7 @@ class ScriptEngine(private val scene: Scene, private val log: (String) -> Unit) 
         t.set("opacity", o.opacity.toDouble())
         t.set("emit", o.emit.toDouble())
         t.set("swing", o.swing.toDouble())
+        t.set("hud", LuaValue.valueOf(o.hud))
         t.set("shadow", LuaValue.valueOf(o.shadow))
         // water depth is only worked out for scripted objects and ones that just moved (it is the costly part)
         val wy = if (scripted || (o.collider != 0 && moved)) Water.surfaceAt(scene, o.x, o.z) else null
@@ -279,6 +280,7 @@ class ScriptEngine(private val scene: Scene, private val log: (String) -> Unit) 
         num(t, "emit")?.let { o.emit = it.coerceIn(0f, 1f) }
         num(t, "swing")?.let { o.swing = it.coerceIn(-170f, 170f) }
         t.get("shadow").let { if (it.isboolean()) o.shadow = it.toboolean() }
+        t.get("hud").let { if (it.isboolean()) o.hud = it.toboolean() }
         o.color = floatArrayOf(
             (num(t, "r") ?: o.color[0]).coerceIn(0f, 1f),
             (num(t, "g") ?: o.color[1]).coerceIn(0f, 1f),
