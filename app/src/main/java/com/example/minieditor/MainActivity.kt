@@ -2995,6 +2995,11 @@ end
 
     override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
 
+    override fun dispatchTouchEvent(ev: android.view.MotionEvent): Boolean {
+        joystick.rawTouch(ev)
+        return super.dispatchTouchEvent(ev)
+    }
+
     override fun onPause() {
         stopPlay()
         stopPreview()

@@ -42,50 +42,62 @@ class JoystickView(ctx: Context) : View(ctx) {
     }
 
     private var pid = -1
+    private val loc = IntArray(2)
 
-    private fun follow(e: MotionEvent, index: Int, down: Boolean) {
-        var dx = e.getX(index) - width / 2f
-        var dy = e.getY(index) - height / 2f
+    private fun follow(px: Float, py: Float, down: Boolean, time: Long) {
+        var dx = px - width / 2f
+        var dy = py - height / 2f
         val maxR = radius() * 0.62f
         val len = sqrt(dx * dx + dy * dy)
-        if (down) { downTime = e.eventTime; maxMove = 0f }
+        if (down) { downTime = time; maxMove = 0f }
         maxMove = maxOf(maxMove, len)
         if (len > maxR) { dx = dx / len * maxR; dy = dy / len * maxR }
         kx = dx; ky = dy
         jx = dx / maxR
         jy = -dy / maxR
         active = true
+        invalidate()
     }
 
-    override fun onTouchEvent(e: MotionEvent): Boolean {
-        if (!interactive) return false
+    private fun endTouch(time: Long, tapAllowed: Boolean) {
+        if (tapAllowed && time - downTime < 250 && maxMove < radius() * 0.2f) tapLatched = true
+        pid = -1
+        reset()
+    }
+
+    /**
+     * Called by the activity for EVERY touch event, before the views see it. The stick follows the one finger that
+     * started on it, however many other fingers touch FIRE / JUMP / the screen, and whatever the views do with those events.
+     */
+    fun rawTouch(e: MotionEvent) {
+        if (!interactive || visibility != View.VISIBLE) { if (pid != -1) { pid = -1; reset() }; return }
+        getLocationInWindow(loc)
         when (e.actionMasked) {
-            MotionEvent.ACTION_DOWN -> {
-                parent?.requestDisallowInterceptTouchEvent(true)
-                pid = e.getPointerId(0)
-                follow(e, 0, true)
-            }
-            MotionEvent.ACTION_MOVE -> {
-                // follow only the finger that touched the stick, however many other fingers are down
-                val i = e.findPointerIndex(pid)
-                if (i >= 0) follow(e, i, false)
-            }
-            MotionEvent.ACTION_POINTER_UP -> {
-                if (e.getPointerId(e.actionIndex) == pid) {
-                    pid = -1
-                    reset()
+            MotionEvent.ACTION_DOWN, MotionEvent.ACTION_POINTER_DOWN -> {
+                val i = e.actionIndex
+                val x = e.getX(i) - loc[0]
+                val y = e.getY(i) - loc[1]
+                if (pid == -1 && x >= 0f && y >= 0f && x <= width && y <= height) {
+                    pid = e.getPointerId(i)
+                    follow(x, y, true, e.eventTime)
                 }
             }
-            MotionEvent.ACTION_UP -> {
-                if (e.eventTime - downTime < 250 && maxMove < radius() * 0.2f) tapLatched = true
-                pid = -1
-                reset()
+            MotionEvent.ACTION_MOVE -> {
+                if (pid != -1) {
+                    val i = e.findPointerIndex(pid)
+                    if (i >= 0) follow(e.getX(i) - loc[0], e.getY(i) - loc[1], false, e.eventTime)
+                }
             }
-            MotionEvent.ACTION_CANCEL -> { pid = -1; reset() }
+            MotionEvent.ACTION_POINTER_UP -> {
+                if (pid != -1 && e.getPointerId(e.actionIndex) == pid) endTouch(e.eventTime, true)
+            }
+            MotionEvent.ACTION_UP -> { if (pid != -1) endTouch(e.eventTime, true) }
+            MotionEvent.ACTION_CANCEL -> { if (pid != -1) endTouch(e.eventTime, false) }
         }
-        invalidate()
-        return true
     }
+
+    // the touch itself is handled in rawTouch; this only keeps a finger that lands on the stick from also turning the camera
+    override fun onTouchEvent(e: MotionEvent): Boolean = interactive
 
     /** True once after a quick tap on the stick (touch and release without dragging). */
     fun consumeTap(): Boolean {
