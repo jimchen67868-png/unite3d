@@ -530,13 +530,22 @@ end
         if (android.os.Build.VERSION.SDK_INT >= 29) {
             root.addOnLayoutChangeListener { v, l, t, r, b, _, _, _, _ ->
                 val w = r - l
-                val h = b - t
-                val strip = dp(56)
-                val from = maxOf(0, h - dp(240))
-                v.systemGestureExclusionRects = listOf(
-                    android.graphics.Rect(0, from, strip, h),
-                    android.graphics.Rect(w - strip, from, w, h)
-                )
+                val pad = dp(10)
+                val near = dp(70)
+                val rects = ArrayList<android.graphics.Rect>()
+                // every on-screen control that sits near a screen edge: the whole band from the edge to the control is excluded,
+                // so the phone's back / home swipe cannot cancel the finger (the stick used to snap back to the centre)
+                val ctl = ArrayList<View>()
+                ctl.add(joystick)
+                ctl.addAll(buttonViews)
+                for (c in ctl) {
+                    if (c.visibility != View.VISIBLE || c.width == 0) continue
+                    val y0 = maxOf(0, c.top - pad)
+                    val y1 = c.bottom + pad
+                    if (c.left <= near) rects.add(android.graphics.Rect(0, y0, c.right + pad, y1))
+                    else if (w - c.right <= near) rects.add(android.graphics.Rect(c.left - pad, y0, w, y1))
+                }
+                v.systemGestureExclusionRects = rects
             }
         }
         setContentView(root)
