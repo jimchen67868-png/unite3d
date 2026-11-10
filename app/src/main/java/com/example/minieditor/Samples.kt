@@ -1791,7 +1791,7 @@ end
             val wc = look.first
             val wp = look.second
             val roofC = roofLooks[look.third]
-            val slabH = top - lo + 0.5f
+            val slabH = top - lo + 0.3f   // the floor surface is exactly at 'top' (no step at the door)
             val slab = mk(scene, Shape.CUBE, "Floor " + houseN, cx, lo - 0.3f + slabH / 2f, cz, W + 0.6f, slabH, D + 0.6f, woodC)
             slab.collider = 1
             slab.pattern = planks
@@ -1834,7 +1834,7 @@ end
             }
             // the front door slides sideways in front of the wall when somebody comes close (see BR_DOOR)
             doorN++
-            val door = mk(scene, Shape.CUBE, "Door " + doorN, cx, top + doorH / 2f, cz + hd + 0.2f, doorW, doorH, 0.12f, floatArrayOf(0.42f, 0.27f, 0.15f), doorScript)
+            val door = mk(scene, Shape.CUBE, "Door " + doorN, cx, top + doorH / 2f, cz + hd + 0.24f, doorW, doorH, 0.12f, floatArrayOf(0.42f, 0.27f, 0.15f), doorScript)
             door.collider = 1
             door.shadow = false
             door.pattern = planks
@@ -1860,7 +1860,7 @@ end
                         val ps = mk(scene, Shape.CUBE, "Porch step " + houseN + "-" + i, cx, (bottom + st) / 2f, zc, doorW + 0.6f, st - bottom, 0.8f, concreteC)
                         ps.pattern = concrete
                     }
-                    addStair(cx - doorW / 2f - 0.2f, cx + doorW / 2f + 0.2f, z0, z1, 0.8f, n, rise, gd, 0)
+                    addStair(cx - doorW / 2f - 0.2f, cx + doorW / 2f + 0.2f, z0 - 1.4f, z1, 0.8f, n, rise, gd, 0)   // the flat top reaches 1 m inside the doorway
                 }
             }
             // upper floors: a slab with a hole where the stair comes up

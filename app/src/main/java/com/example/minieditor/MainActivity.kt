@@ -512,7 +512,7 @@ end
         topScroll.addView(topPanel)
         root.addView(topScroll, FrameLayout.LayoutParams(-1, -2, Gravity.TOP))
         root.addView(bottom, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM))
-        joystick = JoystickView(this).apply { visibility = View.GONE }
+        joystick = JoystickView(this).apply { visibility = View.GONE; onNote = { msg -> if (playing) appendLog(msg) } }
         root.addView(joystick, FrameLayout.LayoutParams(dp(150), dp(150), Gravity.TOP or Gravity.START))
         for (i in 0 until 4) {
             val v = JumpButtonView(this).apply { visibility = View.GONE }

@@ -14,6 +14,7 @@ class JoystickView(ctx: Context) : View(ctx) {
     var jy = 0f
     var active = false
     var interactive = false
+    var onNote: ((String) -> Unit)? = null
 
     private var downTime = 0L
     private var maxMove = 0f
@@ -72,27 +73,38 @@ class JoystickView(ctx: Context) : View(ctx) {
     fun rawTouch(e: MotionEvent) {
         if (!interactive || visibility != View.VISIBLE) { if (pid != -1) { pid = -1; reset() }; return }
         getLocationInWindow(loc)
-        when (e.actionMasked) {
-            MotionEvent.ACTION_DOWN, MotionEvent.ACTION_POINTER_DOWN -> {
-                val i = e.actionIndex
-                val x = e.getX(i) - loc[0]
-                val y = e.getY(i) - loc[1]
-                if (pid == -1 && x >= 0f && y >= 0f && x <= width && y <= height) {
-                    pid = e.getPointerId(i)
-                    follow(x, y, true, e.eventTime)
-                }
+        val act = e.actionMasked
+        if (act == MotionEvent.ACTION_DOWN) {
+            // a brand new touch sequence: forget any stale finger
+            if (pid != -1) { pid = -1; reset() }
+        }
+        if (act == MotionEvent.ACTION_DOWN || act == MotionEvent.ACTION_POINTER_DOWN) {
+            val i = e.actionIndex
+            val x = e.getX(i) - loc[0]
+            val y = e.getY(i) - loc[1]
+            if (pid == -1 && x >= 0f && y >= 0f && x <= width && y <= height) {
+                pid = e.getPointerId(i)
+                follow(x, y, true, e.eventTime)
+                return
             }
-            MotionEvent.ACTION_MOVE -> {
-                if (pid != -1) {
-                    val i = e.findPointerIndex(pid)
-                    if (i >= 0) follow(e.getX(i) - loc[0], e.getY(i) - loc[1], false, e.eventTime)
-                }
+        }
+        if (pid == -1) return
+        val i = e.findPointerIndex(pid)
+        when (act) {
+            MotionEvent.ACTION_CANCEL -> {
+                onNote?.invoke("Stick: touch cancelled by the phone")
+                endTouch(e.eventTime, false)
             }
+            MotionEvent.ACTION_UP -> endTouch(e.eventTime, i >= 0)
             MotionEvent.ACTION_POINTER_UP -> {
-                if (pid != -1 && e.getPointerId(e.actionIndex) == pid) endTouch(e.eventTime, true)
+                if (e.getPointerId(e.actionIndex) == pid) endTouch(e.eventTime, true)
+                else if (i >= 0) follow(e.getX(i) - loc[0], e.getY(i) - loc[1], false, e.eventTime)
             }
-            MotionEvent.ACTION_UP -> { if (pid != -1) endTouch(e.eventTime, true) }
-            MotionEvent.ACTION_CANCEL -> { if (pid != -1) endTouch(e.eventTime, false) }
+            else -> {
+                // MOVE and any other event: keep following our finger; if it vanished, let go
+                if (i >= 0) follow(e.getX(i) - loc[0], e.getY(i) - loc[1], false, e.eventTime)
+                else endTouch(e.eventTime, false)
+            }
         }
     }
 
