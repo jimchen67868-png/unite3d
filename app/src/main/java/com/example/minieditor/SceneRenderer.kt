@@ -481,7 +481,7 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
             if (uUseTex > 0.5) {
                 base = texture2D(uTex, photoUV(vL, normalize(vLN))).rgb * uColor.rgb;
             }
-            if (uPattern > 0.5) {
+            if (uPattern > 0.5 && uPattern < 2.5) {
                 vec3 q = vL * uObjScale * 2.0;
                 float k = 0.0;
                 if (uPattern < 1.5) {
@@ -490,6 +490,49 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
                     k = step(0.5, fract((q.x + q.y + q.z) * 0.5));
                 }
                 base = mix(base, base * 0.45, k);
+            }
+            if (uPattern > 2.5) {
+                // building materials, laid out in metres (so a long wall gets as many bricks as it needs)
+                vec3 q3 = vL * uObjScale;
+                vec3 an3 = abs(normalize(vLN));
+                vec2 st = q3.xy;
+                if (an3.y > 0.7) st = q3.xz;
+                else if (an3.x > an3.z) st = q3.zy;
+                float shade = 1.0;
+                if (uPattern < 3.5) {
+                    // bricks 45 x 20 cm with mortar lines
+                    float brow = floor(st.y / 0.2);
+                    float bcol = st.x / 0.45 + mod(brow, 2.0) * 0.5;
+                    vec2 bcell = vec2(fract(bcol), fract(st.y / 0.2));
+                    float mortar = max(step(bcell.x, 0.05), step(bcell.y, 0.1));
+                    float bvar = hash31(vec3(floor(bcol), brow, 3.0));
+                    shade = mix(0.82 + 0.22 * bvar, 0.58, mortar);
+                } else if (uPattern < 4.5) {
+                    // wooden planks 20 cm wide
+                    float pk = st.y;
+                    if (an3.y < 0.7) pk = st.x;
+                    float pidx = floor(pk / 0.2);
+                    float pedge = step(fract(pk / 0.2), 0.045);
+                    shade = (0.82 + 0.25 * hash31(vec3(pidx, 1.0, 7.0))) * (1.0 - 0.4 * pedge);
+                    shade *= 0.96 + 0.04 * sin(st.x * 23.0 + pidx * 5.0 + st.y * 3.0);
+                } else if (uPattern < 5.5) {
+                    // roof tiles
+                    float trow = floor(st.y / 0.3);
+                    float tcol = st.x / 0.4 + mod(trow, 2.0) * 0.5;
+                    vec2 tcell = vec2(fract(tcol), fract(st.y / 0.3));
+                    float tvar = hash31(vec3(floor(tcol), trow, 5.0));
+                    shade = (0.72 + 0.3 * tvar) * (0.75 + 0.25 * smoothstep(0.0, 0.35, tcell.y)) * (1.0 - 0.3 * step(tcell.x, 0.04));
+                } else if (uPattern < 6.5) {
+                    // plaster: a fine grain
+                    shade = 0.93 + 0.1 * hash31(floor(q3 * 14.0)) + 0.04 * hash31(floor(q3 * 3.0));
+                } else {
+                    // concrete panels
+                    float panel = max(step(fract(st.x / 2.0), 0.012), step(fract(st.y / 1.5), 0.016));
+                    shade = (0.9 + 0.12 * hash31(floor(q3 * 5.0))) * (1.0 - 0.3 * panel);
+                }
+                // far away the fine detail would only shimmer, so fade it out
+                float detailK = 1.0 - smoothstep(25.0, 70.0, length(uEye - vW));
+                base *= mix(1.0, shade, detailK);
             }
             vec3 c = base * light + spec * uSpec + base * uEmit;
             float alpha = uColor.a;

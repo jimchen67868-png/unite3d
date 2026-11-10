@@ -1267,7 +1267,7 @@ end
         photoBtn = btn("Photo: none") { showPhotoMenu() }
         patternBtn = btn("Pattern: None") {
             val o = matTarget()
-            if (o != null) { o.pattern = (o.pattern + 1) % 3; editor.refresh() }
+            if (o != null) { o.pattern = (o.pattern + 1) % 8; editor.refresh() }
         }
         val boxLook = vbox().apply { addView(row(presetBtn, patternBtn, photoBtn)) }
         val boxShine = vbox().apply {
@@ -1354,7 +1354,7 @@ end
         matLabels[3].text = String.format(Locale.US, "Opacity   %d%% visible,  %d%% see-through", pct, 100 - pct)
         val vals = floatArrayOf(o.spec, o.gloss, o.emit, o.opacity)
         for (i in 0..3) if (!matSliders[i].isPressed) matSliders[i].progress = (vals[i] * 100f).toInt().coerceIn(0, 100)
-        patternBtn.text = "Pattern: " + arrayOf("None", "Checker", "Stripes")[o.pattern.coerceIn(0, 2)]
+        patternBtn.text = "Pattern: " + arrayOf("None", "Checker", "Stripes", "Brick", "Planks", "Roof tiles", "Plaster", "Concrete")[o.pattern.coerceIn(0, 7)]
         photoBtn.text = "Photo: " + (if (o.photo.isEmpty()) "none" else "on")
     }
 
