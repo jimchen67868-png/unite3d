@@ -457,7 +457,8 @@ class ScriptEngine(private val scene: Scene, private val log: (String) -> Unit) 
         // solid objects stand on the terrain surface
         for (i in 0 until n) {
             val a = cols[i]
-            if (a.collider != 1) continue
+            // only things that moved this frame are put back on the ground; still buildings (walls, floors) stay where they are
+            if (a.collider != 1 || !moved[i]) continue
             for (tr in terrains) {
                 val ex = 0.5f * a.sx * 0.7f
                 val ez = 0.5f * a.sz * 0.7f
@@ -547,6 +548,9 @@ class ScriptEngine(private val scene: Scene, private val log: (String) -> Unit) 
             val p = prev.getOrPut(o) { FloatArray(3) }
             p[0] = o.x; p[1] = o.y; p[2] = o.z
         }
+        if (watchFrame == 0) {
+            for ((o, _) in tables) if (o.collider != 0 && o.shape == Shape.CUBE && !instByObj.containsKey(o)) watchPos[o] = floatArrayOf(o.x, o.y, o.z)
+        }
         for ((o, t) in tables.entries.toList()) push(o, t)
         updateInput()
         pushWorld()
@@ -564,7 +568,43 @@ class ScriptEngine(private val scene: Scene, private val log: (String) -> Unit) 
             flushSpawns()
             Rig.apply(scene)
             collide()
+            keepStill()
             Rig.apply(scene)
+        }
+        watchFrame++
+        if (watchFrame == 10) reportStill()
+    }
+
+    private val watchPos = HashMap<SceneObject, FloatArray>()
+    private var watchFrame = 0
+
+    /** One line in the log: did any still solid (wall, floor...) end up somewhere else than where the scene put it? */
+    private fun reportStill() {
+        var n = 0
+        var m = 0
+        var first = ""
+        for ((o, p) in watchPos) {
+            n++
+            val d = maxOf(abs(o.x - p[0]), abs(o.y - p[1]), abs(o.z - p[2]))
+            if (d > 0.01f) { m++; if (m <= 3) first += "  " + o.name + " moved " + (o.y - p[1]) + " up" }
+        }
+        log("Still check: " + n + " solids, " + m + " moved." + first)
+    }
+
+    private var stillNotes = 0
+
+    /**
+     * Solid objects without a script (walls, floors, roofs...) only move when a script moves them.
+     * If the engine itself nudged one (pushing, terrain), put it straight back, so buildings never jump.
+     */
+    private fun keepStill() {
+        for ((o, t) in tables.entries) {
+            if (o.collider == 0 || o.script.isNotBlank() || instByObj.containsKey(o)) continue
+            val c = pushCache[o] ?: continue
+            if (o.x == c[0] && o.y == c[1] && o.z == c[2]) continue
+            if (num(t, "x") != c[0] || num(t, "y") != c[1] || num(t, "z") != c[2]) continue   // a script moved it on purpose
+            if (stillNotes < 4) { stillNotes++; log("Kept " + o.name + " in place (engine moved it " + (o.y - c[1]) + " up)") }
+            o.x = c[0]; o.y = c[1]; o.z = c[2]
         }
     }
 }
