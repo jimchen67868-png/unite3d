@@ -268,6 +268,7 @@ class EditorView(ctx: Context, val scene: Scene) : GLSurfaceView(ctx) {
     var isControlAt: ((Float, Float) -> Boolean)? = null
     var onNote: ((String) -> Unit)? = null
     private var lookId = -1
+    private var cancelAt = -10000L
     private val ignoredIds = HashSet<Int>()
     private val loc2 = IntArray(2)
 
@@ -284,6 +285,7 @@ class EditorView(ctx: Context, val scene: Scene) : GLSurfaceView(ctx) {
             val onControl = isControlAt?.invoke(e.getX(i) + loc2[0], e.getY(i) + loc2[1]) == true
             if (onControl) ignoredIds.add(id)
             else if (lookId == -1) {
+                if (e.eventTime - cancelAt < 400) onNote?.invoke("Look: touch came back")
                 lookId = id
                 lastX = e.getX(i); lastY = e.getY(i)
                 touchX = lastX; touchY = lastY
@@ -291,8 +293,10 @@ class EditorView(ctx: Context, val scene: Scene) : GLSurfaceView(ctx) {
                 onTouchStart?.invoke()
             }
         }
-        if (ignoredIds.isEmpty()) scaleDetector.onTouchEvent(e)
-        val pinching = ignoredIds.isEmpty() && scaleDetector.isInProgress
+        // no pinch zoom in first person; in 3rd person only when no finger is on a control
+        val usePinch = ignoredIds.isEmpty() && !renderer.fpMode
+        if (usePinch) scaleDetector.onTouchEvent(e)
+        val pinching = usePinch && scaleDetector.isInProgress
         when (act) {
             MotionEvent.ACTION_MOVE -> {
                 if (lookId != -1 && !pinching) {
@@ -323,6 +327,7 @@ class EditorView(ctx: Context, val scene: Scene) : GLSurfaceView(ctx) {
             }
             MotionEvent.ACTION_CANCEL -> {
                 if (lookId != -1) onNote?.invoke("Look: touch cancelled by the phone")
+                cancelAt = e.eventTime
                 lookId = -1; ignoredIds.clear(); touching = false
                 onTouchEnd?.invoke()
             }
