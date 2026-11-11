@@ -766,8 +766,17 @@ end
             scene.selected = null
             window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
             @Suppress("DEPRECATION")
-            window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_FULLSCREEN or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or
-                View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+            val immersive = View.SYSTEM_UI_FLAG_FULLSCREEN or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or
+                View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or View.SYSTEM_UI_FLAG_LAYOUT_STABLE or
+                View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+            window.decorView.systemUiVisibility = immersive
+            // if the phone shows its bars anyway, say so in the log and hide them again (the window never resizes)
+            window.decorView.setOnSystemUiVisibilityChangeListener { vis ->
+                if (vis and View.SYSTEM_UI_FLAG_HIDE_NAVIGATION == 0) {
+                    appendLog("System bars shown by the phone")
+                    window.decorView.systemUiVisibility = immersive
+                }
+            }
             true
         } catch (e: Throwable) {
             false

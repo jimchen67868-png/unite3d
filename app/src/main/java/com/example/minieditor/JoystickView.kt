@@ -92,7 +92,13 @@ class JoystickView(ctx: Context) : View(ctx) {
         val i = e.findPointerIndex(pid)
         when (act) {
             MotionEvent.ACTION_CANCEL -> {
-                onNote?.invoke("Stick: touch cancelled by the phone")
+                val sb = StringBuilder("Stick cancel: n=").append(e.pointerCount).append(" scr=")
+                    .append(resources.displayMetrics.widthPixels).append('x').append(resources.displayMetrics.heightPixels)
+                for (k in 0 until e.pointerCount) {
+                    sb.append(" [").append(e.getPointerId(k)).append(' ').append((e.getX(k) + 0f).toInt()).append(',')
+                        .append(e.getY(k).toInt()).append(" size=").append((e.getSize(k) * 100f).toInt()).append(']')
+                }
+                onNote?.invoke(sb.toString())
                 endTouch(e.eventTime, false)
             }
             MotionEvent.ACTION_UP -> endTouch(e.eventTime, i >= 0)
