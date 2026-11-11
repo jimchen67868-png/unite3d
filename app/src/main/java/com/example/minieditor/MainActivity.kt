@@ -552,15 +552,16 @@ end
                 val rects = ArrayList<android.graphics.Rect>()
                 // every on-screen control that sits near a screen edge: the whole band from the edge to the control is excluded,
                 // so the phone's back / home swipe cannot cancel the finger (the stick used to snap back to the centre)
-                val ctl = ArrayList<View>()
-                ctl.add(joystick)
-                ctl.addAll(buttonViews)
-                for (c in ctl) {
-                    if (c.visibility != View.VISIBLE || c.width == 0) continue
-                    val y0 = maxOf(0, c.top - pad)
-                    val y1 = c.bottom + pad
-                    if (c.left <= near) rects.add(android.graphics.Rect(0, y0, c.right + pad, y1))
-                    else if (w - c.right <= near) rects.add(android.graphics.Rect(c.left - pad, y0, w, y1))
+                val boxes = ArrayList<android.graphics.Rect>()
+                if (joystick.visibility == View.VISIBLE && joystick.width > 0) boxes.add(joystick.ringRect())
+                for (c in buttonViews) {
+                    if (c.visibility == View.VISIBLE && c.width > 0) boxes.add(android.graphics.Rect(c.left, c.top, c.right, c.bottom))
+                }
+                for (bx in boxes) {
+                    val y0 = maxOf(0, bx.top - pad)
+                    val y1 = bx.bottom + pad
+                    if (bx.left <= near) rects.add(android.graphics.Rect(0, y0, bx.right + pad, y1))
+                    else if (w - bx.right <= near) rects.add(android.graphics.Rect(bx.left - pad, y0, w, y1))
                 }
                 v.systemGestureExclusionRects = rects
             }
@@ -2315,7 +2316,7 @@ end
             joystick.visibility = View.VISIBLE
             joystick.interactive = playing
             joystick.alpha = if (playing) 1f else 0.45f
-            placeControl(joystick, j, 150)
+            placeControl(joystick, j, (150 * JoystickView.ZONE).toInt())
         }
         val bs = scene.objects.filter { o -> o.shape == Shape.BUTTON }.take(4)
         for (i in 0 until 4) {

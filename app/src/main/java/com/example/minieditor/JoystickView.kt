@@ -8,8 +8,14 @@ import android.view.MotionEvent
 import android.view.View
 import kotlin.math.sqrt
 
-/** On-screen virtual joystick. jx: right = +1, jy: up = +1. */
+/**
+ * On-screen virtual joystick. jx: right = +1, jy: up = +1.
+ * The touch area is ZONE times bigger than the ring. The ring appears under the finger that touches it and follows the
+ * thumb when it goes past the edge, so the thumb never has to stretch far (a stretched, flat thumb can make the phone cancel the touch).
+ */
 class JoystickView(ctx: Context) : View(ctx) {
+    companion object { const val ZONE = 1.9f }
+
     var jx = 0f
     var jy = 0f
     var active = false
@@ -21,6 +27,10 @@ class JoystickView(ctx: Context) : View(ctx) {
     private var tapLatched = false
     private var kx = 0f
     private var ky = 0f
+    private var ax = 0f          // ring centre while a finger is down (view coordinates)
+    private var ay = 0f
+    private var dnx = 0f         // where the finger first landed
+    private var dny = 0f
     private val basePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.argb(70, 255, 255, 255); style = Paint.Style.FILL
     }
@@ -31,12 +41,20 @@ class JoystickView(ctx: Context) : View(ctx) {
         color = Color.argb(210, 255, 255, 255); style = Paint.Style.FILL
     }
 
-    private fun radius() = minOf(width, height) / 2f - 4f
+    private fun radius() = minOf(width, height) / ZONE / 2f - 4f
+
+    /** The resting ring in the parent's coordinates (used to keep the phone's edge gestures away from it). */
+    fun ringRect(): android.graphics.Rect {
+        val r = radius().toInt() + 4
+        val cx = left + width / 2
+        val cy = top + height / 2
+        return android.graphics.Rect(cx - r, cy - r, cx + r, cy + r)
+    }
 
     override fun onDraw(c: Canvas) {
-        val cx = width / 2f
-        val cy = height / 2f
         val r = radius()
+        val cx = if (active) ax else width / 2f
+        val cy = if (active) ay else height / 2f
         c.drawCircle(cx, cy, r, basePaint)
         c.drawCircle(cx, cy, r, ringPaint)
         c.drawCircle(cx + kx, cy + ky, r * 0.38f, knobPaint)
@@ -46,13 +64,30 @@ class JoystickView(ctx: Context) : View(ctx) {
     private val loc = IntArray(2)
 
     private fun follow(px: Float, py: Float, down: Boolean, time: Long) {
-        var dx = px - width / 2f
-        var dy = py - height / 2f
+        val r = radius() + 4f
         val maxR = radius() * 0.62f
-        val len = sqrt(dx * dx + dy * dy)
-        if (down) { downTime = time; maxMove = 0f }
-        maxMove = maxOf(maxMove, len)
-        if (len > maxR) { dx = dx / len * maxR; dy = dy / len * maxR }
+        if (down) {
+            // the ring appears under the finger (kept inside the touch area)
+            ax = px.coerceIn(minOf(r, width / 2f), maxOf(width - r, width / 2f))
+            ay = py.coerceIn(minOf(r, height / 2f), maxOf(height - r, height / 2f))
+            dnx = px; dny = py
+            downTime = time; maxMove = 0f
+        }
+        var dx = px - ax
+        var dy = py - ay
+        var len = sqrt(dx * dx + dy * dy)
+        maxMove = maxOf(maxMove, sqrt((px - dnx) * (px - dnx) + (py - dny) * (py - dny)))
+        if (len > maxR) {
+            // drag the ring along with the finger
+            val ex = len - maxR
+            ax += dx / len * ex
+            ay += dy / len * ex
+            ax = ax.coerceIn(minOf(r, width / 2f), maxOf(width - r, width / 2f))
+            ay = ay.coerceIn(minOf(r, height / 2f), maxOf(height - r, height / 2f))
+            dx = px - ax; dy = py - ay
+            len = sqrt(dx * dx + dy * dy)
+            if (len > maxR) { dx = dx / len * maxR; dy = dy / len * maxR }
+        }
         kx = dx; ky = dy
         jx = dx / maxR
         jy = -dy / maxR
