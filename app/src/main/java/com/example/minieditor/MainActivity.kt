@@ -247,6 +247,7 @@ end
 
     /** True if the window point is on the stick or a button, so that finger is not used to look around. */
     private fun controlAt(x: Float, y: Float): Boolean {
+        if (joystick.justClaimed(x, y)) return true
         val l = IntArray(2)
         val pad = dp(4)
         val all = ArrayList<View>()
@@ -2333,12 +2334,18 @@ end
         }
     }
 
-    private fun placeControl(v: View, o: SceneObject, baseDp: Int) {
+    private fun placeControl(v: View, o: SceneObject, baseDp: Int, keepFromEdge: Boolean = false) {
         val w = root.width
         val h = root.height
         if (w == 0 || h == 0) return
         val size = (dp(baseDp) * o.sx.coerceIn(0.4f, 2.5f)).toInt()
-        val left = (o.x.coerceIn(0f, 100f) / 100f * w - size / 2f).toInt()
+        var left = (o.x.coerceIn(0f, 100f) / 100f * w - size / 2f).toInt()
+        if (keepFromEdge) {
+            // the thumb on the stick stays well away from the screen edge (a thumb at the bezel is taken for a palm and the phone cancels the touch)
+            val minC = minOf(w * 0.30f, dp(190).toFloat())
+            val c = (left + size / 2f).coerceIn(minC, maxOf(minC, w - minC))
+            left = (c - size / 2f).toInt()
+        }
         val top = (o.y.coerceIn(0f, 100f) / 100f * h - size / 2f).toInt()
         val lp = v.layoutParams as FrameLayout.LayoutParams
         if (lp.width != size || lp.height != size || lp.leftMargin != left || lp.topMargin != top) {

@@ -10,6 +10,8 @@ local NBOTS = 8
 function start()
   self.isOpen = false
   closedX = self.x
+  closedY = self.y
+  closedZ = self.z
   amt = 0
   want = 0
   checkT = 0
@@ -49,6 +51,8 @@ function update(dt)
   end
   amt = amt + (want - amt) * math.min(1, dt * 5)
   self.x = closedX - slide * amt
+  self.y = closedY
+  self.z = closedZ
   self.isOpen = amt > 0.6
   if amt > 0.5 then self.collider = 0 else self.collider = 1 end
 end

@@ -4,23 +4,41 @@ import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
+import android.os.SystemClock
 import android.view.MotionEvent
 import android.view.View
+import kotlin.math.abs
 import kotlin.math.sqrt
 
-/**
- * On-screen virtual joystick. jx: right = +1, jy: up = +1.
- * The touch area is ZONE times bigger than the ring. The ring appears under the finger that touches it and follows the
- * thumb when it goes past the edge, so the thumb never has to stretch far (a stretched, flat thumb can make the phone cancel the touch).
- */
+/** On-screen virtual joystick with a fixed ring. jx: right = +1, jy: up = +1. */
 class JoystickView(ctx: Context) : View(ctx) {
-    companion object { const val ZONE = 1.9f }
+    companion object { const val ZONE = 1.0f }
 
-    var jx = 0f
-    var jy = 0f
-    var active = false
+    private var vjx = 0f
+    private var vjy = 0f
+    private var vactive = false
+    val jx: Float get() { expireLimbo(); return vjx }
+    val jy: Float get() { expireLimbo(); return vjy }
+    val active: Boolean get() { expireLimbo(); return vactive }
+
+    // When the phone cancels the touch, the stick keeps its last push for a moment and waits for the finger to come back.
+    private var limbo = false
+    private var limboUntil = 0L
+    private var lastWx = 0f
+    private var lastWy = 0f
+    private var claimX = -999f
+    private var claimY = -999f
+    private var claimTime = 0L
+    private fun expireLimbo() {
+        if (limbo && SystemClock.uptimeMillis() > limboUntil) { limbo = false; reset() }
+    }
+    /** True if a finger that has just landed at this window point was taken back by the stick (so the camera must not use it). */
+    fun justClaimed(wx: Float, wy: Float): Boolean =
+        SystemClock.uptimeMillis() - claimTime < 80 && abs(wx - claimX) < 6f && abs(wy - claimY) < 6f
     var interactive = false
     var onNote: ((String) -> Unit)? = null
+    /** Pixels kept free between a thumb on the stick and the screen edge (a thumb at the bezel can be taken for a palm). */
+    var edgeKeep = 0f
 
     private var downTime = 0L
     private var maxMove = 0f
@@ -53,8 +71,8 @@ class JoystickView(ctx: Context) : View(ctx) {
 
     override fun onDraw(c: Canvas) {
         val r = radius()
-        val cx = if (active) ax else width / 2f
-        val cy = if (active) ay else height / 2f
+        val cx = if (vactive) ax else width / 2f
+        val cy = if (vactive) ay else height / 2f
         c.drawCircle(cx, cy, r, basePaint)
         c.drawCircle(cx, cy, r, ringPaint)
         c.drawCircle(cx + kx, cy + ky, r * 0.38f, knobPaint)
@@ -64,34 +82,25 @@ class JoystickView(ctx: Context) : View(ctx) {
     private val loc = IntArray(2)
 
     private fun follow(px: Float, py: Float, down: Boolean, time: Long) {
-        val r = radius() + 4f
         val maxR = radius() * 0.62f
+        // the ring stays where it is; only the knob moves
+        ax = width / 2f
+        ay = height / 2f
         if (down) {
-            // the ring appears under the finger (kept inside the touch area)
-            ax = px.coerceIn(minOf(r, width / 2f), maxOf(width - r, width / 2f))
-            ay = py.coerceIn(minOf(r, height / 2f), maxOf(height - r, height / 2f))
             dnx = px; dny = py
             downTime = time; maxMove = 0f
         }
         var dx = px - ax
         var dy = py - ay
-        var len = sqrt(dx * dx + dy * dy)
+        val len = sqrt(dx * dx + dy * dy)
         maxMove = maxOf(maxMove, sqrt((px - dnx) * (px - dnx) + (py - dny) * (py - dny)))
-        if (len > maxR) {
-            // drag the ring along with the finger
-            val ex = len - maxR
-            ax += dx / len * ex
-            ay += dy / len * ex
-            ax = ax.coerceIn(minOf(r, width / 2f), maxOf(width - r, width / 2f))
-            ay = ay.coerceIn(minOf(r, height / 2f), maxOf(height - r, height / 2f))
-            dx = px - ax; dy = py - ay
-            len = sqrt(dx * dx + dy * dy)
-            if (len > maxR) { dx = dx / len * maxR; dy = dy / len * maxR }
-        }
+        if (len > maxR) { dx = dx / len * maxR; dy = dy / len * maxR }
         kx = dx; ky = dy
-        jx = dx / maxR
-        jy = -dy / maxR
-        active = true
+        vjx = dx / maxR
+        vjy = -dy / maxR
+        vactive = true
+        lastWx = px + loc[0]
+        lastWy = py + loc[1]
         invalidate()
     }
 
@@ -115,14 +124,28 @@ class JoystickView(ctx: Context) : View(ctx) {
         }
         if (act == MotionEvent.ACTION_DOWN || act == MotionEvent.ACTION_POINTER_DOWN) {
             val i = e.actionIndex
-            val x = e.getX(i) - loc[0]
-            val y = e.getY(i) - loc[1]
-            if (pid == -1 && x >= 0f && y >= 0f && x <= width && y <= height) {
-                pid = e.getPointerId(i)
-                follow(x, y, true, e.eventTime)
-                return
+            val wx = e.getX(i)
+            val wy = e.getY(i)
+            val x = wx - loc[0]
+            val y = wy - loc[1]
+            if (pid == -1) {
+                val inside = x >= 0f && y >= 0f && x <= width && y <= height
+                val dxl = wx - lastWx
+                val dyl = wy - lastWy
+                val back = limbo && e.eventTime <= limboUntil && sqrt(dxl * dxl + dyl * dyl) <= maxOf(width, height) * 1.5f
+                if (inside || back) {
+                    if (back) {
+                        onNote?.invoke("Stick: touch came back")
+                        claimX = wx; claimY = wy; claimTime = SystemClock.uptimeMillis()
+                    }
+                    limbo = false
+                    pid = e.getPointerId(i)
+                    follow(x, y, !back, e.eventTime)
+                    return
+                }
             }
         }
+        if (limbo && act == MotionEvent.ACTION_UP) { limbo = false; reset() }   // every finger is gone
         if (pid == -1) return
         val i = e.findPointerIndex(pid)
         when (act) {
@@ -131,10 +154,16 @@ class JoystickView(ctx: Context) : View(ctx) {
                     .append(resources.displayMetrics.widthPixels).append('x').append(resources.displayMetrics.heightPixels)
                 for (k in 0 until e.pointerCount) {
                     sb.append(" [").append(e.getPointerId(k)).append(' ').append((e.getX(k) + 0f).toInt()).append(',')
-                        .append(e.getY(k).toInt()).append(" size=").append((e.getSize(k) * 100f).toInt()).append(']')
+                        .append(e.getY(k).toInt()).append(" size=").append((e.getSize(k) * 100f).toInt())
+                        .append(" maj=").append(e.getTouchMajor(k).toInt()).append(" pr=").append((e.getPressure(k) * 100f).toInt())
+                        .append(" tool=").append(e.getToolType(k)).append(']')
                 }
+                sb.append(" flags=").append(e.flags).append(" src=").append(e.source)
                 onNote?.invoke(sb.toString())
-                endTouch(e.eventTime, false)
+                // keep the last push for a moment: if the phone gives the finger back, the stick carries on
+                pid = -1
+                limbo = true
+                limboUntil = e.eventTime + 400
             }
             MotionEvent.ACTION_UP -> endTouch(e.eventTime, i >= 0)
             MotionEvent.ACTION_POINTER_UP -> {
@@ -160,7 +189,7 @@ class JoystickView(ctx: Context) : View(ctx) {
     }
 
     fun reset() {
-        kx = 0f; ky = 0f; jx = 0f; jy = 0f; active = false
-        invalidate()
+        kx = 0f; ky = 0f; vjx = 0f; vjy = 0f; vactive = false; limbo = false
+        postInvalidate()
     }
 }
