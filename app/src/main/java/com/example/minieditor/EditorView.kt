@@ -264,7 +264,74 @@ class EditorView(ctx: Context, val scene: Scene) : GLSurfaceView(ctx) {
         Rig.editing = null
     }
 
+    /** Set by the activity: true if this window point is on the stick or a button (that finger is not a look finger). */
+    var isControlAt: ((Float, Float) -> Boolean)? = null
+    var onNote: ((String) -> Unit)? = null
+    private var lookId = -1
+    private val ignoredIds = HashSet<Int>()
+    private val loc2 = IntArray(2)
+
+    /** Play mode: every finger is tracked by id, so a finger on the stick never disturbs looking around. */
+    private fun playTouch(e: MotionEvent): Boolean {
+        val act = e.actionMasked
+        getLocationInWindow(loc2)
+        if (act == MotionEvent.ACTION_DOWN) {
+            lookId = -1; ignoredIds.clear(); multi = false; touching = false
+        }
+        if (act == MotionEvent.ACTION_DOWN || act == MotionEvent.ACTION_POINTER_DOWN) {
+            val i = e.actionIndex
+            val id = e.getPointerId(i)
+            val onControl = isControlAt?.invoke(e.getX(i) + loc2[0], e.getY(i) + loc2[1]) == true
+            if (onControl) ignoredIds.add(id)
+            else if (lookId == -1) {
+                lookId = id
+                lastX = e.getX(i); lastY = e.getY(i)
+                touchX = lastX; touchY = lastY
+                touching = true
+                onTouchStart?.invoke()
+            }
+        }
+        if (ignoredIds.isEmpty()) scaleDetector.onTouchEvent(e)
+        val pinching = ignoredIds.isEmpty() && scaleDetector.isInProgress
+        when (act) {
+            MotionEvent.ACTION_MOVE -> {
+                if (lookId != -1 && !pinching) {
+                    val i = e.findPointerIndex(lookId)
+                    if (i >= 0) {
+                        val x = e.getX(i)
+                        val y = e.getY(i)
+                        val dx = x - lastX
+                        val dy = y - lastY
+                        lastX = x; lastY = y
+                        touchX = x; touchY = y
+                        if (abs(dx) > 0f || abs(dy) > 0f) {
+                            renderer.yaw -= dx * 0.4f
+                            val fp = renderer.fpMode
+                            renderer.pitch = (renderer.pitch + dy * 0.4f).coerceIn(if (fp) -80f else 5f, if (fp) 80f else 85f)
+                            requestRender()
+                        }
+                    }
+                }
+            }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP -> {
+                val id = e.getPointerId(e.actionIndex)
+                ignoredIds.remove(id)
+                val wasLook = id == lookId || act == MotionEvent.ACTION_UP
+                if (id == lookId) { lookId = -1; touching = false }
+                if (act == MotionEvent.ACTION_UP) { lookId = -1; ignoredIds.clear(); touching = false }
+                if (wasLook) onTouchEnd?.invoke()
+            }
+            MotionEvent.ACTION_CANCEL -> {
+                if (lookId != -1) onNote?.invoke("Look: touch cancelled by the phone")
+                lookId = -1; ignoredIds.clear(); touching = false
+                onTouchEnd?.invoke()
+            }
+        }
+        return true
+    }
+
     override fun onTouchEvent(e: MotionEvent): Boolean {
+        if (playing) return playTouch(e)
         scaleDetector.onTouchEvent(e)
         if (e.pointerCount > 1 || scaleDetector.isInProgress) {
             if (!multi) cancelGesture(e.eventTime)

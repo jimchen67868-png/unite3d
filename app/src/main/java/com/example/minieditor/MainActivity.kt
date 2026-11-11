@@ -244,6 +244,21 @@ end
 """
 
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
+
+    /** True if the window point is on the stick or a button, so that finger is not used to look around. */
+    private fun controlAt(x: Float, y: Float): Boolean {
+        val l = IntArray(2)
+        val pad = dp(4)
+        val all = ArrayList<View>()
+        all.add(joystick)
+        all.addAll(buttonViews)
+        for (c in all) {
+            if (c.visibility != View.VISIBLE || c.width == 0) continue
+            c.getLocationInWindow(l)
+            if (x >= l[0] - pad && x <= l[0] + c.width + pad && y >= l[1] - pad && y <= l[1] + c.height + pad) return true
+        }
+        return false
+    }
     private fun toast(s: String) = Toast.makeText(this, s, Toast.LENGTH_SHORT).show()
 
     // ---------- Groups ----------
@@ -370,6 +385,8 @@ end
         super.onCreate(savedInstanceState)
         window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING)
         editor = EditorView(this, scene)
+        editor.isControlAt = { x, y -> controlAt(x, y) }
+        editor.onNote = { msg -> appendLog(msg) }
         editor.onTouchStart = { clearFieldFocus(); record() }
         editor.onTouchEnd = { record() }
 
