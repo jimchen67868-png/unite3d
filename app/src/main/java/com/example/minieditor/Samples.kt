@@ -1602,10 +1602,10 @@ end
         val maxW = if (giant) 68f else if (huge) 56f else if (large) 42f else 14f
         val minD = if (large) 28f else 11f
         val maxD = if (giant) 57f else if (huge) 48f else if (large) 36f else 11f
-        val minH = if (large) 5f else 3.9f
-        val maxH = if (giant) 15f else if (huge) 11f else if (large) 8f else 3.9f
+        val minH = 4f
+        val maxH = 5f                                // every floor has a ceiling 4 to 5 metres high
         val houseGap = if (giant) 56.0 else if (huge) 48.0 else if (large) 40.0 else 24.0
-        val maxFloors = if (giant) 5 else if (huge) 4 else if (large) 2 else 1   // houses get a random number of floors up to this
+        val maxFloors = 5                            // every house gets 1 to 5 floors at random
         val nTowers = 4
         val towerGap = if (giant) 110.0 else 70.0
         val nTrees = if (giant) 80 else if (huge) 90 else if (large) 110 else 40
@@ -1677,8 +1677,8 @@ end
 
         if (huge) { grass.x = zcx; grass.z = zcz }
 
-        // ---- houses (like a real building): 14 x 11 metres, high ceilings, 1 to 5 floors, rooms inside,
-        //      a stair for each floor, a sliding front door and a ramp up to it when the house sits above the ground ----
+        // ---- houses (like a real building): random size, ceilings 4 to 5 metres on every floor, 1 to 5 floors, rooms inside,
+        //      a stair for each floor and a sliding front door; the ground under the house is levelled, so you just walk in ----
         val stairLua = StringBuilder("{")
         var stairCount = 0
         // one flight of stairs for the player script (it gives the floor height there); dir 0 = climbs towards -z, 1 = towards +z
@@ -1689,6 +1689,28 @@ end
                 .append(", base = ").append(base).append(", dir = ").append(dir).append(", smooth = ").append(smooth).append(" }")
         }
         val houseLoot = ArrayList<FloatArray>()      // x, y, z, 0 = medkit / 1 = ammo box
+        // level the ground under a house (and a little beyond), so the door is simply walked into: no stairs, no steps
+        fun flattenPad(cx: Float, cz: Float, hw: Float, hd: Float, level: Float) {
+            val hs = land.heights ?: return
+            val n = TerrainGen.N
+            val vv = n + 1
+            val tgt = ((level - land.y) / maxOf(land.sy, 0.001f)).coerceIn(0f, 1f)
+            val u0 = (cx - hw - 0.6f - land.x) / land.sx + 0.5f
+            val u1 = (cx + hw + 0.6f - land.x) / land.sx + 0.5f
+            val v0 = (cz - hd - 0.6f - land.z) / land.sz + 0.5f
+            val v1 = (cz + hd + 0.6f - land.z) / land.sz + 0.5f
+            val i0 = Math.floor((u0 * n).toDouble()).toInt()
+            val i1 = Math.ceil((u1 * n).toDouble()).toInt()
+            val j0 = Math.floor((v0 * n).toDouble()).toInt()
+            val j1 = Math.ceil((v1 * n).toDouble()).toInt()
+            for (j in (j0 - 1)..(j1 + 1)) for (i in (i0 - 1)..(i1 + 1)) {
+                if (i < 0 || j < 0 || i > n || j > n) continue
+                val core = i in i0..i1 && j in j0..j1
+                val k = j * vv + i
+                hs[k] = if (core) tgt else (hs[k] + tgt) / 2f
+            }
+            land.hVersion++
+        }
         val houses = ArrayList<FloatArray>()         // centre x, centre z, floor top y, lowest ground, floors, width, depth, room height
         var tries = 0
         while (houses.size < nHouses && tries < 4000) {
@@ -1700,20 +1722,22 @@ end
             val hz = (rnd.nextFloat() - 0.5f) * 0.7f * map
             var lo = 1e9f
             var hi = -1e9f
+            var sum = 0f
             var ok = true
             for (fx in floatArrayOf(-0.46f, 0f, 0.46f)) for (fz in floatArrayOf(-0.46f, 0f, 0.46f)) {
                 val g = ground(hx + fx * hw, hz + fz * hd)
-                if (g == null) ok = false else { lo = minOf(lo, g); hi = maxOf(hi, g) }
+                if (g == null) ok = false else { lo = minOf(lo, g); hi = maxOf(hi, g); sum += g }
             }
             // a big building may stand on a podium: the foundation reaches down to the lowest ground
             val tol = (2.5f + 0.06f * maxOf(hw, hd)) * (if (tries < 2000) 1f else 1.8f)
             if (!ok || lo < seaY + 0.6f || hi - lo > tol) continue
             val reach = 0.5f * maxOf(hw, hd)
-            if (houses.any { Math.hypot((it[0] - hx).toDouble(), (it[1] - hz).toDouble()) < reach + 0.5f * maxOf(it[5], it[6]) + 14.0 }) continue
-            val u = rnd.nextFloat()
-            var floors = minOf(maxFloors, if (u < 0.30f) 1 else if (u < 0.57f) 2 else if (u < 0.77f) 3 else if (u < 0.91f) 4 else 5)
+            if (houses.any { Math.hypot((it[0] - hx).toDouble(), (it[1] - hz).toDouble()) < reach + 0.5f * maxOf(it[5], it[6]) + 14.0 + 2.0 * (map / TerrainGen.N) }) continue
+            var floors = 1 + rnd.nextInt(maxFloors)
             floors = minOf(floors, maxOf(1, (36f / (hr + 0.3f)).toInt()))     // very high rooms: fewer floors
-            houses.add(floatArrayOf(hx, hz, hi + 0.2f, lo, floors.toFloat(), hw, hd, hr))
+            val lvl = sum / 9f
+            flattenPad(hx, hz, hw, hd, lvl)
+            houses.add(floatArrayOf(hx, hz, lvl + 0.02f, lvl, floors.toFloat(), hw, hd, hr))
         }
         var wallN = 0
         // walls, roofs and decks all stop bullets (the scripts look for objects named "Wall n")
@@ -1842,31 +1866,8 @@ end
             door.collider = 1
             door.shadow = false
             door.pattern = planks
-            // a ramp of steps up to the door whenever the house stands even a little above the ground in front of it
-            // (a step the player cannot climb, however small, would block the doorway)
-            run {
-                val z0 = cz + hd + 0.4f
-                var gd = ground(cx, z0 + 3f) ?: top
-                var n = 1
-                for (pass in 0..2) {
-                    n = Math.ceil(((top - gd) / 0.4f).toDouble()).toInt().coerceIn(1, 12)
-                    gd = ground(cx, z0 + n * 0.8f) ?: gd
-                }
-                val d = top - gd
-                if (d > 0.03f) {
-                    n = Math.ceil((d / 0.4f).toDouble()).toInt().coerceIn(1, 12)
-                    val rise = d / n
-                    val z1 = z0 + n * 0.8f
-                    for (i in 0 until n) {
-                        val st = gd + rise * (i + 1)
-                        val zc = z1 - (i + 0.5f) * 0.8f
-                        val bottom = minOf(gd, top) - 0.8f
-                        val ps = mk(scene, Shape.CUBE, "Porch step " + houseN + "-" + i, cx, (bottom + st) / 2f, zc, doorW + 0.6f, st - bottom, 0.8f, concreteC)
-                        ps.pattern = concrete
-                    }
-                    addStair(cx - doorW / 2f - 0.2f, cx + doorW / 2f + 0.2f, z0 - 1.4f, z1, 0.8f, n, rise, gd, 0)   // the flat top reaches 1 m inside the doorway
-                }
-            }
+            // no steps outside: the ground is levelled, you just walk in. A flat landing through the doorway lifts the player over the 2 cm sill.
+            addStair(cx - doorW / 2f - 0.2f, cx + doorW / 2f + 0.2f, cz + hd - 1.0f, cz + hd + 1.6f, 0.8f, 1, 0f, top, 0)
             // upper floors: a slab with a hole where the stair comes up
             val zS = cz + hd - 1.0f                      // where a flight going north starts (south end)
             val zN = cz - hd + 1.0f                      // where a flight going south starts (north end)
