@@ -1082,6 +1082,20 @@ end
         consoleView.visibility = if (logLines.isEmpty()) View.GONE else View.VISIBLE
     }
 
+    /** One log line about Android accessibility features: their touch filters can cancel two-finger touches. */
+    private fun reportAccessibility() {
+        try {
+            val am = getSystemService(android.content.Context.ACCESSIBILITY_SERVICE) as android.view.accessibility.AccessibilityManager
+            val list = am.getEnabledAccessibilityServiceList(android.accessibilityservice.AccessibilityServiceInfo.FEEDBACK_ALL_MASK)
+            val names = StringBuilder()
+            for (s in list) { if (names.isNotEmpty()) names.append(", "); names.append(s.id) }
+            appendLog("Accessibility: " + (if (list.isEmpty()) "no service on" else names.toString()) +
+                (if (am.isTouchExplorationEnabled) " | touch exploration ON" else ""))
+        } catch (e: Exception) {
+            appendLog("Accessibility check failed: " + e.message)
+        }
+    }
+
     private fun togglePlay() { if (playing) stopPlay() else startPlay() }
 
     private fun startPlay() {
@@ -1094,6 +1108,7 @@ end
         logLines.clear(); showLog()
         playing = true
         editor.playing = true
+        reportAccessibility()
         joystick.reset()
         buttonViews.forEach { it.reset() }
         playButton.text = "Stop"
