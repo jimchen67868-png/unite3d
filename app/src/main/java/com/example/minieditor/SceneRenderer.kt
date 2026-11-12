@@ -29,6 +29,10 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
     @Volatile var fpY = 0f
     @Volatile var fpZ = 0f
     @Volatile var fpHide: SceneObject? = null
+    /** Play mode, 3rd person: the object the over-the-shoulder camera follows (null = free orbit camera as in the editor). */
+    @Volatile var tpFollow: SceneObject? = null
+    @Volatile var tpDist = 3.6f
+    fun eyeAt(i: Int): Float = eye[i]
     val target = floatArrayOf(0f, 0.5f, 0f)
 
     private val lock = Any()
@@ -691,9 +695,18 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
                 Matrix.setLookAtM(view, 0, cam.x, cam.y, cam.z, cam.x + cdx, cam.y + cdy, cam.z + cdz, 0f, 1f, 0f)
                 eye[0] = cam.x; eye[1] = cam.y; eye[2] = cam.z
             } else {
-                val ex = target[0] + dist * (cos(p) * sin(y)).toFloat()
-                val ey = target[1] + dist * sin(p).toFloat()
-                val ez = target[2] + dist * (cos(p) * cos(y)).toFloat()
+                val tf = tpFollow
+                val d: Float
+                if (playing && tf != null) {
+                    // over the shoulder (like PUBG): the pivot is above and to the right of the player, so the player stands left of the crosshair
+                    target[0] = tf.x + cos(y).toFloat() * 0.65f
+                    target[1] = tf.y + 0.3f * tf.sy + 0.15f
+                    target[2] = tf.z - sin(y).toFloat() * 0.65f
+                    d = tpDist
+                } else d = dist
+                val ex = target[0] + d * (cos(p) * sin(y)).toFloat()
+                val ey = target[1] + d * sin(p).toFloat()
+                val ez = target[2] + d * (cos(p) * cos(y)).toFloat()
                 Matrix.setLookAtM(view, 0, ex, ey, ez, target[0], target[1], target[2], 0f, 1f, 0f)
                 eye[0] = ex; eye[1] = ey; eye[2] = ez
             }
@@ -2133,7 +2146,7 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         }
 
         // Gizmo on selection
-        if (!mirror && sel != null && !sel.shape.isScreen && sel.shape != Shape.SETTINGS) {
+        if (!mirror && !playing && sel != null && !sel.shape.isScreen && sel.shape != Shape.SETTINGS) {
             GLES20.glDisable(GLES20.GL_DEPTH_TEST)
             GLES20.glLineWidth(4f)
             Matrix.setIdentityM(model, 0)

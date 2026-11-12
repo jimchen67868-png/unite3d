@@ -55,7 +55,10 @@ class EditorView(ctx: Context, val scene: Scene) : GLSurfaceView(ctx) {
 
     private val scaleDetector = ScaleGestureDetector(ctx, object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
         override fun onScale(d: ScaleGestureDetector): Boolean {
-            if (!renderer.fpMode) renderer.dist = (renderer.dist / d.scaleFactor).coerceIn(2f, 1500f)
+            if (!renderer.fpMode) {
+                if (renderer.playing && renderer.tpFollow != null) renderer.tpDist = (renderer.tpDist / d.scaleFactor).coerceIn(1.8f, 9f)
+                else renderer.dist = (renderer.dist / d.scaleFactor).coerceIn(2f, 1500f)
+            }
             requestRender()
             return true
         }
@@ -311,7 +314,7 @@ class EditorView(ctx: Context, val scene: Scene) : GLSurfaceView(ctx) {
                         if (abs(dx) > 0f || abs(dy) > 0f) {
                             renderer.yaw -= dx * 0.4f
                             val fp = renderer.fpMode
-                            renderer.pitch = (renderer.pitch + dy * 0.4f).coerceIn(if (fp) -80f else 5f, if (fp) 80f else 85f)
+                            renderer.pitch = (renderer.pitch + dy * 0.4f).coerceIn(if (fp) -80f else -15f, if (fp) 80f else 70f)
                             requestRender()
                         }
                     }

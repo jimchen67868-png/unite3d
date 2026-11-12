@@ -993,7 +993,7 @@ end
     private val frameCb = object : Choreographer.FrameCallback {
         override fun doFrame(frameTimeNanos: Long) {
             if (!playing) return
-            val wantCross = editor.renderer.fpMode
+            val wantCross = true   // the crosshair is shown in 1st and 3rd person
             if ((crosshair.visibility == View.VISIBLE) != wantCross) crosshair.visibility = if (wantCross) View.VISIBLE else View.GONE
             val dt = if (lastFrame == 0L) 0.016f
             else ((frameTimeNanos - lastFrame) / 1_000_000_000f).coerceAtMost(0.1f)
@@ -1015,6 +1015,7 @@ end
                 it.camPitch = editor.renderer.pitch
                 it.fpOn = editor.renderer.fpMode
                 it.camTargetName = camTargetName
+                it.camX = editor.renderer.eyeAt(0); it.camY = editor.renderer.eyeAt(1); it.camZ = editor.renderer.eyeAt(2)
                 it.joyTap = joystick.consumeTap()
                 it.update(dt)
                 camTargetName = it.camTargetName
@@ -1028,10 +1029,11 @@ end
                 }
                 it.pitchOut?.let { pv ->
                     val fp = editor.renderer.fpMode
-                    editor.renderer.pitch = pv.coerceIn(if (fp) -80f else 5f, if (fp) 80f else 85f)
+                    editor.renderer.pitch = pv.coerceIn(if (fp) -80f else -15f, if (fp) 80f else 70f)
                     it.pitchOut = null
                 }
             }
+            editor.renderer.tpFollow = if (editor.renderer.fpMode) null else findCamTarget()   // 3rd person: over-the-shoulder camera
             if (editor.renderer.fpMode) {
                 val t = fpTarget
                 if (t == null || !scene.objects.contains(t)) {
@@ -1091,6 +1093,7 @@ end
             for (s in list) { if (names.isNotEmpty()) names.append(", "); names.append(s.id) }
             appendLog("Accessibility: " + (if (list.isEmpty()) "no service on" else names.toString()) +
                 (if (am.isTouchExplorationEnabled) " | touch exploration ON" else ""))
+            if (list.isNotEmpty()) appendLog("Tip: accessibility services (auto clickers, assistant menu) can cancel your touches. Turn them off in Settings > Accessibility while playing.")
         } catch (e: Exception) {
             appendLog("Accessibility check failed: " + e.message)
         }
@@ -1144,6 +1147,7 @@ end
         joystick.reset()
         buttonViews.forEach { it.reset() }
         if (editor.renderer.fpMode) setFirstPerson(false)
+        editor.renderer.tpFollow = null
         camTargetName = "Player"
         Choreographer.getInstance().removeFrameCallback(frameCb)
         engine = null

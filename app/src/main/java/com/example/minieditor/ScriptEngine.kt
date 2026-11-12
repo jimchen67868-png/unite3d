@@ -73,6 +73,10 @@ class ScriptEngine(private val scene: Scene, private val log: (String) -> Unit) 
     var camPitch = 30f
     var fpOn = false
     var camTargetName = "Player"
+    /** Where the camera is (read only for scripts: camera.x, camera.y, camera.z). */
+    var camX = 0f
+    var camY = 0f
+    var camZ = 0f
     var fpRequest: Boolean? = null
     var yawOut: Float? = null
     var pitchOut: Float? = null
@@ -348,6 +352,9 @@ class ScriptEngine(private val scene: Scene, private val log: (String) -> Unit) 
         camera.set("target", camTargetName)
         camera.set("yaw", camYaw.toDouble())
         camera.set("pitch", camPitch.toDouble())
+        camera.set("x", camX.toDouble())
+        camera.set("y", camY.toDouble())
+        camera.set("z", camZ.toDouble())
     }
 
     private fun pullCamera() {

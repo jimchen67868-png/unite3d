@@ -91,7 +91,6 @@ function start()
   uwK = 0
   rippleT = 0
   strokeT = 0
-  hurtSndT = 0
   mag = 30
   reserve = 90
   reloadT = 0
@@ -201,11 +200,18 @@ end
 -- where the crosshair points, with a gentle snap onto an enemy that is almost in line
 function aimDir()
   local yaw = math.rad(input.yaw)
-  local p = 0
-  if camera.firstPerson then p = math.rad(camera.pitch) end
+  local p = math.rad(camera.pitch)
   local fx = -math.cos(p) * math.sin(yaw)
   local fy = -math.sin(p)
   local fz = -math.cos(p) * math.cos(yaw)
+  if not camera.firstPerson and camera.x ~= nil then
+    -- 3rd person: the bullet flies from the player to the point the crosshair looks at
+    local ax, ay, az = camera.x + fx * 45, camera.y + fy * 45, camera.z + fz * 45
+    local mx, my, mz = self.x, self.y + 0.4, self.z
+    local ddx, ddy, ddz = ax - mx, ay - my, az - mz
+    local dl = math.sqrt(ddx * ddx + ddy * ddy + ddz * ddz)
+    if dl > 0.1 then fx, fy, fz = ddx / dl, ddy / dl, ddz / dl end
+  end
   local best = nil
   local bd = 0.97
   for k = 1, NBOTS do
@@ -744,11 +750,6 @@ function update(dt)
   -- health
   if self.hp < lastHp and math.floor(self.hp / 10) < math.floor(lastHp / 10) then
     log("HP " .. math.max(0, math.floor(self.hp)))
-  end
-  hurtSndT = hurtSndT - dt
-  if self.hp < lastHp - 0.5 and hurtSndT <= 0 then
-    playSound("hurt", 1, 0.92 + math.random() * 0.16)
-    hurtSndT = 0.35
   end
   lastHp = self.hp
   if self.hp <= 0 then
