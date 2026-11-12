@@ -9,7 +9,7 @@ import kotlin.math.sin
 
 /**
  * Small synthesized sound effects (WAV) for the sample games, so they have sound without any file to import.
- * Names: shot, splash, swim, hurt, reload, pickup, hit, bubble, gasp.
+ * Names: shot, splash, swim, reload, pickup, hit, bubble, gasp, door.
  */
 object SoundGen {
     private const val RATE = 22050
@@ -100,35 +100,6 @@ object SoundGen {
         }
     }
 
-    /** Getting shot: a dull body thump, a flesh slap, and a short male "ugh" grunt. */
-    private fun hurt(): ByteArray {
-        val r = Rng(4)
-        var slapLp = 0f
-        var phase = 0f
-        val f1 = Formant(620f, 140f)
-        val f2 = Formant(1080f, 190f)
-        val f3 = Formant(2500f, 300f)
-        return wav(0.42f, 0.9f) { t, _ ->
-            // thump: low body hit, pitch dropping
-            val thump = tone(78f - 40f * t, t) * exp(-t * 17f) * 1.0f
-            // slap: short dull noise burst
-            slapLp += (r.next() - slapLp) * 0.28f
-            val slap = slapLp * exp(-t * 55f) * 0.9f
-            // grunt: buzzing voice (pitch falls 125 -> 85 Hz) shaped by vowel resonances
-            val u = t - 0.025f
-            var grunt = 0f
-            if (u > 0f) {
-                val f0 = 125f - 160f * u
-                phase += max(f0, 70f) / RATE
-                val saw = (phase % 1f) * 2f - 1f
-                val src = saw * 0.8f + r.next() * 0.2f
-                val v = f1.run(src) * 1.0f + f2.run(src) * 0.7f + f3.run(src) * 0.25f
-                grunt = v * 6.5f * min(1f, u / 0.012f) * exp(-u * 8f) * (0.6f + 0.4f * exp(-u * 14f))
-            }
-            thump + slap + grunt * 0.55f
-        }
-    }
-
     private fun reload(): ByteArray {
         val r = Rng(5)
         return wav(0.55f) { t, _ ->
@@ -197,12 +168,14 @@ object SoundGen {
     fun install(dir: File) {
         dir.mkdirs()
         val all = mapOf(
-            "shot.wav" to shot(), "splash.wav" to splash(), "swim.wav" to swim(), "hurt.wav" to hurt(),
+            "shot.wav" to shot(), "splash.wav" to splash(), "swim.wav" to swim(),
             "reload.wav" to reload(), "pickup.wav" to pickup(), "hit.wav" to hit(),
             "bubble.wav" to bubbleSnd(), "gasp.wav" to gasp(), "door.wav" to door()
         )
         for ((name, bytes) in all) {
             try { File(dir, name).writeBytes(bytes) } catch (e: Throwable) { }
         }
+        // the hurt sound is gone: remove the file an older version left behind
+        try { File(dir, "hurt.wav").delete() } catch (e: Throwable) { }
     }
 }
