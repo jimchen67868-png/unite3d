@@ -848,7 +848,7 @@ end
     private fun loadBattleSample(mode: Int) {
         val large = mode >= 1
         val go = {
-            Samples.battleRoyale(scene, mode)
+            Samples.battleRoyale(scene, mode, wheelModel())
             SoundGen.install(soundsDir())
             val pl = scene.objects.firstOrNull { it.name == "Player" }
             editor.renderer.dist = 7f
@@ -2547,6 +2547,40 @@ end
     // ---------- Save / load ----------
 
     private fun modelsDir() = File(filesDir, "models").apply { mkdirs() }
+
+    /** A round wheel (a 20-sided cylinder, 1 x 1 x 1) for the cars; the .obj file is written once into the models folder. */
+    private fun wheelModel(): ModelData? {
+        return try {
+            val key = "wheel.obj"
+            modelCache[key]?.let { return it }
+            val n = 20
+            val sb = StringBuilder("# wheel\n")
+            for (i in 0 until n) {
+                val a = 2.0 * Math.PI * i / n
+                sb.append("v ").append(Math.cos(a) * 0.5).append(" 0.5 ").append(Math.sin(a) * 0.5).append("\n")
+            }
+            for (i in 0 until n) {
+                val a = 2.0 * Math.PI * i / n
+                sb.append("v ").append(Math.cos(a) * 0.5).append(" -0.5 ").append(Math.sin(a) * 0.5).append("\n")
+            }
+            sb.append("v 0 0.5 0\nv 0 -0.5 0\n")
+            for (i in 0 until n) {
+                val j = (i + 1) % n
+                val t0 = i + 1
+                val t1 = j + 1
+                val b0 = n + i + 1
+                val b1 = n + j + 1
+                sb.append("f ").append(t0).append(' ').append(b1).append(' ').append(b0).append('\n')
+                sb.append("f ").append(t0).append(' ').append(t1).append(' ').append(b1).append('\n')
+                sb.append("f ").append(2 * n + 1).append(' ').append(t1).append(' ').append(t0).append('\n')
+                sb.append("f ").append(2 * n + 2).append(' ').append(b0).append(' ').append(b1).append('\n')
+            }
+            val bytes = sb.toString().toByteArray()
+            File(modelsDir(), key).writeBytes(bytes)
+            ModelData(key, ModelLoader.load(key, bytes)).also { modelCache[key] = it }
+        } catch (e: Throwable) { null }
+    }
+
 
     private fun loadModel(key: String): ModelData? = modelCache[key] ?: try {
         ModelData(key, ModelLoader.load(key, File(modelsDir(), key).readBytes())).also { modelCache[key] = it }

@@ -62,6 +62,7 @@ end
 -- Joystick = move, drag the screen = look, hold FIRE = shoot, RELOAD, JUMP, VIEW = 1st / 3rd person.
 local NBOTS = 8
 STAIRS = {}
+SEATS = { { -0.45, 0.1 }, { 0.45, 0.1 }, { -0.45, 1.1 }, { 0.45, 1.1 } }   -- driver, front passenger, rear left, rear right
 
 function start()
   self.hp = 100
@@ -132,16 +133,14 @@ function start()
   over = false
 end
 
--- cars: tap DRIVE next to a car to get in, tap it again to get out
-function setBodyVisible(on)
+-- cars. DRIVE: driver seat (or get out of the driver seat). SEAT: a passenger seat, then the next seat. JUMP: get out.
+function setGunVisible(on)
   local v = 0
   if on then v = 1 end
-  for _, p in pairs(P) do
-    if type(p) == "table" and p.x ~= nil then p.opacity = v end
-  end
+  if P.gun ~= nil then P.gun.opacity = v end
 end
 
-function tryEnterCar()
+function nearestCar()
   local best = nil
   local bd = 5.5
   for i = 1, #cars do
@@ -150,35 +149,50 @@ function tryEnterCar()
     local d = math.sqrt(dx * dx + dz * dz)
     if d < bd and math.abs(c.y - self.y) < 3 then best = c; bd = d end
   end
-  if best == nil then
-    log("No car close enough - walk up to a car and tap DRIVE")
-    return
-  end
-  self.car = best.name
-  carObj = best
+  return best
+end
+
+function seatName(n)
+  if n == 1 then return "driver seat" end
+  if n == 2 then return "front passenger seat" end
+  if n == 3 then return "rear left seat" end
+  return "rear right seat"
+end
+
+function enterCar(c, seat)
+  self.car = c.name
+  carObj = c
+  self.seat = seat
   self.collider = 0
   self.vy = 0
   swimming = false
-  setBodyVisible(false)
+  setGunVisible(false)
   setVm(false)
   camera.dist = 6.5
   playSound("door", 0.8, 0.8)
-  log("Driving: joystick up = gas, down = brake / reverse, left and right = steer. Tap DRIVE to get out")
+  if seat == 1 then
+    log("Driver seat: joystick up = gas, down = brake / reverse, left and right = steer. DRIVE = get out, SEAT = other seat, JUMP = jump out")
+  else
+    log("Sitting in the " .. seatName(seat) .. ". SEAT = next seat, DRIVE = driver seat, JUMP = get out")
+  end
 end
 
 function leaveCar()
   local c = carObj
   if c ~= nil then
     local r = math.rad(c.ry)
-    self.x = c.x + math.cos(r) * 3
-    self.z = c.z - math.sin(r) * 3
+    local side = 3
+    if SEATS[self.seat or 1][1] < 0 then side = -3 end
+    self.x = c.x + math.cos(r) * side
+    self.z = c.z - math.sin(r) * side
     self.y = groundHeight(self.x, self.z) + 1.2
   end
   self.vy = 0
   self.car = nil
+  self.seat = nil
   carObj = nil
   self.collider = 1
-  setBodyVisible(true)
+  setGunVisible(true)
   camera.dist = 3.6
 end
 
@@ -188,11 +202,21 @@ function carRide(dt)
     leaveCar()
     return
   end
-  self.x = c.x
-  self.z = c.z
-  self.y = c.y + 0.55
+  local st = SEATS[self.seat or 1]
+  local r = math.rad(c.ry)
+  self.x = c.x + math.cos(r) * st[1] + math.sin(r) * st[2]
+  self.z = c.z - math.sin(r) * st[1] + math.cos(r) * st[2]
+  self.y = c.y + 0.43
   self.vy = 0
   self.ry = c.ry
+  -- sitting: legs forward, hands on the wheel (driver) or in the lap (passengers)
+  local arm = 15
+  if self.seat == 1 then arm = 70 end
+  if P.legL ~= nil then P.legL.swing = 80 end
+  if P.legR ~= nil then P.legR.swing = 80 end
+  if P.armL ~= nil then P.armL.swing = arm end
+  if P.armR ~= nil then P.armR.swing = arm end
+  setGunVisible(false)
   -- the camera swings round behind the car while you drive (unless you drag the screen)
   if not input.touching and math.abs(c.speed or 0) > 1 then
     local d = ((c.ry - input.yaw + 540) % 360) - 180
@@ -592,9 +616,27 @@ function update(dt)
     return
   end
 
-  -- DRIVE button: get into the nearest car, or out of the car you drive
+  -- cars: DRIVE = driver seat, SEAT = passenger seats, JUMP = get out
   if input.buttonsPressed["Drive"] then
-    if self.car ~= nil then leaveCar() else tryEnterCar() end
+    if self.car == nil then
+      local c = nearestCar()
+      if c ~= nil then enterCar(c, 1) else log("No car close enough - walk up to a car and tap DRIVE or SEAT") end
+    elseif self.seat == 1 then
+      leaveCar()
+    else
+      self.seat = 1
+      log("Driver seat")
+    end
+  elseif input.buttonsPressed["Seat"] then
+    if self.car == nil then
+      local c = nearestCar()
+      if c ~= nil then enterCar(c, 2) else log("No car close enough - walk up to a car and tap DRIVE or SEAT") end
+    else
+      self.seat = self.seat % 4 + 1
+      log("Now in the " .. seatName(self.seat))
+    end
+  elseif input.jumpPressed and self.car ~= nil then
+    leaveCar()
   end
   if self.car ~= nil then
     if self.hp <= 0 then leaveCar() else carRide(dt) return end
@@ -1212,7 +1254,7 @@ end
 
 function update(dt)
   local pl = find("Player")
-  local driven = pl ~= nil and pl.car == self.name
+  local driven = pl ~= nil and pl.car == self.name and pl.seat == 1
   self.driven = driven
   local throttle = 0
   local steer = 0
@@ -1738,7 +1780,7 @@ end
      * Battle Royale. mode 0 = small island, 1 = large map (300 x 300, 16 houses, 20 enemies),
      * 2 = HUGE map (500 x 500, tall hills, deep lakes, watchtowers with stairs, 22 enemies).
      */
-    fun battleRoyale(scene: Scene, mode: Int = 0) {
+    fun battleRoyale(scene: Scene, mode: Int = 0, wheel: ModelData? = null) {
         val large = mode >= 1
         val huge = mode >= 2
         val giant = mode >= 3
@@ -2301,9 +2343,10 @@ end
             carN++
             val col = carCols[rnd.nextInt(carCols.size)]
             val y = g + 0.55f
-            val body = mk(scene, Shape.CUBE, "Car " + carN, x, y, z, 1.9f, 0.7f, 4.2f, col, BR_CAR)
+            val body = mk(scene, Shape.CUBE, "Car " + carN, x, y, z, 1.9f, 0.5f, 4.2f, col, BR_CAR)
             body.collider = 1
             val dark = floatArrayOf(0.07f, 0.07f, 0.08f)
+            val fabric = floatArrayOf(0.35f, 0.33f, 0.30f)
             val parts = ArrayList<SceneObject>()
             fun carPart(dx: Float, dy: Float, dz: Float, psx: Float, psy: Float, psz: Float, c: FloatArray): SceneObject {
                 val p = mk(scene, Shape.CUBE, "Car " + carN + " part", x + dx, y + dy, z + dz, psx, psy, psz, c)
@@ -2311,10 +2354,25 @@ end
                 parts.add(p)
                 return p
             }
-            carPart(0f, 0.62f, 0.4f, 1.7f, 0.58f, 2.1f, floatArrayOf(col[0] * 0.8f, col[1] * 0.8f, col[2] * 0.8f))   // cabin
-            carPart(0f, 0.68f, 0.4f, 1.74f, 0.32f, 1.7f, floatArrayOf(0.12f, 0.16f, 0.20f))                          // windows
-            for (wx in floatArrayOf(-1f, 1f)) for (wz in floatArrayOf(-1.35f, 1.35f)) carPart(wx * 0.98f, -0.2f, wz, 0.3f, 0.7f, 0.7f, dark)   // wheels
-            for (lx in floatArrayOf(-0.65f, 0.65f)) carPart(lx, 0.1f, -2.12f, 0.4f, 0.2f, 0.08f, floatArrayOf(1f, 0.95f, 0.7f)).emit = 0.8f   // headlights (the front is -z)
+            // glass cabin: you can see the seats and the people sitting in them
+            carPart(0f, 0.8f, 0.45f, 1.8f, 1.1f, 2.3f, floatArrayOf(0.55f, 0.68f, 0.78f)).opacity = 0.28f
+            carPart(0f, 1.39f, 0.45f, 1.86f, 0.08f, 2.36f, floatArrayOf(col[0] * 0.8f, col[1] * 0.8f, col[2] * 0.8f))   // roof
+            carPart(0f, 0.36f, -0.55f, 1.7f, 0.22f, 0.35f, dark)                                                      // dashboard
+            for (sx in floatArrayOf(-0.45f, 0.45f)) {                                                                // the two front seats
+                carPart(sx, 0.29f, 0.1f, 0.5f, 0.08f, 0.5f, fabric)
+                carPart(sx, 0.61f, 0.4f, 0.5f, 0.56f, 0.1f, fabric)
+            }
+            carPart(0f, 0.29f, 1.1f, 1.5f, 0.08f, 0.5f, fabric)                                                       // the back seat
+            carPart(0f, 0.61f, 1.4f, 1.5f, 0.56f, 0.1f, fabric)
+            for (wx in floatArrayOf(-0.98f, 0.98f)) for (wz in floatArrayOf(-1.35f, 1.35f)) {                        // round wheels
+                val w = if (wheel != null) scene.add(Shape.MODEL, wheel, "Car " + carN + " wheel") else scene.add(Shape.SPHERE, null, "Car " + carN + " wheel")
+                w.x = x + wx; w.y = y - 0.15f; w.z = z + wz
+                if (wheel != null) { w.sx = 0.8f; w.sy = 0.34f; w.sz = 0.8f; w.rz = 90f } else { w.sx = 0.34f; w.sy = 0.8f; w.sz = 0.8f }
+                w.color = dark
+                w.shadow = false
+                parts.add(w)
+            }
+            for (lx in floatArrayOf(-0.65f, 0.65f)) carPart(lx, 0.05f, -2.12f, 0.4f, 0.2f, 0.08f, floatArrayOf(1f, 0.95f, 0.7f)).emit = 0.8f   // headlights (front is -z)
             for (p in parts) Rig.bind(p, body)
             body.ry = yawDeg
         }
@@ -2390,7 +2448,7 @@ end
                 }
             }
             // cars parked beside the road
-            val nCars = if (mega) 9 else if (giant) 6 else if (huge) 4 else 3
+            val nCars = if (mega) 7 else if (giant) 5 else if (huge) 4 else 3
             val carSpots = ArrayList<FloatArray>()
             var carTries = 0
             while (carSpots.size < nCars && carTries++ < 300 && roadPieces.isNotEmpty()) {
@@ -2523,6 +2581,7 @@ end
         scene.addButton()?.let { it.name = "Reload"; it.x = 62f; it.y = 70f; it.sx = 0.9f }
         scene.addButton()?.let { it.name = "View"; it.x = 62f; it.y = 52f; it.sx = 0.8f }
         scene.addButton()?.let { it.name = "Drive"; it.x = 90f; it.y = 30f; it.sx = 0.9f }
+        scene.addButton()?.let { it.name = "Seat"; it.x = 75f; it.y = 34f; it.sx = 0.8f }
         Rig.apply(scene)
         scene.selected = null
     }
