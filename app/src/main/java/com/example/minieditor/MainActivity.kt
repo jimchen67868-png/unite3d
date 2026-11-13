@@ -805,6 +805,7 @@ end
         pm.menu.add(0, 19, 14, "Load sample game: Battle Royale LARGE map (PUBG style)")
         pm.menu.add(0, 20, 14, "Load sample game: Battle Royale HUGE map (hills, towers, deep water)")
         pm.menu.add(0, 21, 14, "Load sample game: Battle Royale GIANT map (800 x 800, houses with up to 5 floors, doors)")
+        pm.menu.add(0, 22, 14, "Load sample game: Battle Royale MEGA map (1400 x 1400, roads, cars to drive)")
         pm.menu.add(0, 16, 15, "Build game APK (CircleCI)...")
         pm.menu.add(0, 17, 15, "Sounds and music...")
         pm.menu.add(0, 18, 15, "Toolbar and panel size...")
@@ -832,6 +833,7 @@ end
                     19 -> loadBattleSample(1)
                     20 -> loadBattleSample(2)
                     21 -> loadBattleSample(3)
+                    22 -> loadBattleSample(4)
                     16 -> buildGameApk()
                     17 -> showSoundsDialog()
                     18 -> showLayoutDialog()
@@ -855,13 +857,13 @@ end
                 editor.renderer.target[0] = pl.x; editor.renderer.target[1] = pl.y; editor.renderer.target[2] = pl.z
             }
             editor.refresh()
-            toast((if (mode == 3) "Battle Royale GIANT (800 x 800, tall houses, doors, towers, lakes)" else if (mode == 2) "Battle Royale HUGE (hills, watchtowers, deep lakes)" else if (large) "Battle Royale (large map, 20 enemies)" else "Battle Royale") + " loaded - tap Play. Joystick moves, drag the screen to look, hold Fire to shoot.")
+            toast((if (mode == 4) "Battle Royale MEGA (1400 x 1400, roads and cars: stand next to a car and tap DRIVE)" else if (mode == 3) "Battle Royale GIANT (800 x 800, tall houses, doors, towers, lakes)" else if (mode == 2) "Battle Royale HUGE (hills, watchtowers, deep lakes)" else if (large) "Battle Royale (large map, 20 enemies)" else "Battle Royale") + " loaded - tap Play. Joystick moves, drag the screen to look, hold Fire to shoot.")
         }
         if (scene.objects.isEmpty()) {
             go()
         } else {
             AlertDialog.Builder(this)
-                .setTitle(if (mode == 3) "Load Battle Royale (GIANT map)?" else if (mode == 2) "Load Battle Royale (HUGE map)?" else if (large) "Load Battle Royale (large map)?" else "Load Battle Royale?")
+                .setTitle(if (mode == 4) "Load Battle Royale (MEGA map)?" else if (mode == 3) "Load Battle Royale (GIANT map)?" else if (mode == 2) "Load Battle Royale (HUGE map)?" else if (large) "Load Battle Royale (large map)?" else "Load Battle Royale?")
                 .setMessage("This replaces the current scene. Use File > Export scene zip first if you want to keep it.")
                 .setPositiveButton("Load") { _, _ -> go() }
                 .setNegativeButton("Cancel", null)
@@ -1023,6 +1025,10 @@ end
                     it.fpRequest = null
                     if (want != editor.renderer.fpMode) setFirstPerson(want)
                 }
+                it.distOut?.let { dv ->
+                    editor.renderer.tpDist = dv.coerceIn(1.8f, 12f)
+                    it.distOut = null
+                }
                 it.yawOut?.let { yv ->
                     editor.renderer.yaw = yv
                     it.yawOut = null
@@ -1148,6 +1154,7 @@ end
         buttonViews.forEach { it.reset() }
         if (editor.renderer.fpMode) setFirstPerson(false)
         editor.renderer.tpFollow = null
+        editor.renderer.tpDist = 3.6f
         camTargetName = "Player"
         Choreographer.getInstance().removeFrameCallback(frameCb)
         engine = null

@@ -117,9 +117,87 @@ function start()
   for k = 1, NBOTS do bots[k] = find("Bot " .. k) end
   zone = find("Zone")
   home = { x = self.x, z = self.z }
+  cars = {}
+  local ci = 1
+  while true do
+    local cc = find("Car " .. ci)
+    if cc == nil then break end
+    cars[ci] = cc
+    ci = ci + 1
+  end
+  self.car = nil
+  carObj = nil
   lastHp = 100
   statT = 8
   over = false
+end
+
+-- cars: tap DRIVE next to a car to get in, tap it again to get out
+function setBodyVisible(on)
+  local v = 0
+  if on then v = 1 end
+  for _, p in pairs(P) do
+    if type(p) == "table" and p.x ~= nil then p.opacity = v end
+  end
+end
+
+function tryEnterCar()
+  local best = nil
+  local bd = 5.5
+  for i = 1, #cars do
+    local c = cars[i]
+    local dx, dz = c.x - self.x, c.z - self.z
+    local d = math.sqrt(dx * dx + dz * dz)
+    if d < bd and math.abs(c.y - self.y) < 3 then best = c; bd = d end
+  end
+  if best == nil then
+    log("No car close enough - walk up to a car and tap DRIVE")
+    return
+  end
+  self.car = best.name
+  carObj = best
+  self.collider = 0
+  self.vy = 0
+  swimming = false
+  setBodyVisible(false)
+  setVm(false)
+  camera.dist = 6.5
+  playSound("door", 0.8, 0.8)
+  log("Driving: joystick up = gas, down = brake / reverse, left and right = steer. Tap DRIVE to get out")
+end
+
+function leaveCar()
+  local c = carObj
+  if c ~= nil then
+    local r = math.rad(c.ry)
+    self.x = c.x + math.cos(r) * 3
+    self.z = c.z - math.sin(r) * 3
+    self.y = groundHeight(self.x, self.z) + 1.2
+  end
+  self.vy = 0
+  self.car = nil
+  carObj = nil
+  self.collider = 1
+  setBodyVisible(true)
+  camera.dist = 3.6
+end
+
+function carRide(dt)
+  local c = carObj
+  if c == nil then
+    leaveCar()
+    return
+  end
+  self.x = c.x
+  self.z = c.z
+  self.y = c.y + 0.55
+  self.vy = 0
+  self.ry = c.ry
+  -- the camera swings round behind the car while you drive (unless you drag the screen)
+  if not input.touching and math.abs(c.speed or 0) > 1 then
+    local d = ((c.ry - input.yaw + 540) % 360) - 180
+    camera.yaw = input.yaw + d * math.min(1, dt * 2.2)
+  end
 end
 
 function countAlive()
@@ -512,6 +590,14 @@ function update(dt)
     if camera.firstPerson then camera.firstPerson = false end
     fallPose(deadT, deadG or groundHeight(self.x, self.z))
     return
+  end
+
+  -- DRIVE button: get into the nearest car, or out of the car you drive
+  if input.buttonsPressed["Drive"] then
+    if self.car ~= nil then leaveCar() else tryEnterCar() end
+  end
+  if self.car ~= nil then
+    if self.hp <= 0 then leaveCar() else carRide(dt) return end
   end
 
   -- move
@@ -1116,6 +1202,69 @@ function update(dt)
 end
 """
 
+    private val BR_CAR = """-- A car you can drive. Walk up to it and tap DRIVE. Joystick: up = gas, down = brake and reverse, left / right = steer.
+function start()
+  speed = 0
+  heading = self.ry
+  self.speed = 0
+  self.driven = false
+end
+
+function update(dt)
+  local pl = find("Player")
+  local driven = pl ~= nil and pl.car == self.name
+  self.driven = driven
+  local throttle = 0
+  local steer = 0
+  if driven and input.joyActive then
+    throttle = input.joyY
+    steer = input.joyX
+  end
+  if throttle > 0.1 then
+    local a = 15 * throttle
+    if speed < 0 then a = a + 14 end
+    speed = speed + a * dt
+  elseif throttle < -0.1 then
+    if speed > 0.5 then
+      speed = speed - 24 * dt
+    else
+      speed = speed + 11 * throttle * dt
+    end
+  else
+    local drag = 7 * dt
+    if speed > 0 then speed = math.max(0, speed - drag) else speed = math.min(0, speed + drag) end
+  end
+  speed = math.max(-9, math.min(30, speed))
+  local dir = 1
+  if speed < 0 then dir = -1 end
+  heading = heading - steer * 62 * math.min(1, math.abs(speed) / 7) * dir * dt
+  self.ry = heading
+  local r = math.rad(heading)
+  local fx = -math.sin(r)
+  local fz = -math.cos(r)
+  local nx = self.x + fx * speed * dt
+  local nz = self.z + fz * speed * dt
+  local gF = groundHeight(nx + fx * 1.9, nz + fz * 1.9)
+  local gB = groundHeight(nx - fx * 1.9, nz - fz * 1.9)
+  local g = groundHeight(nx, nz)
+  if gF ~= nil and gB ~= nil and g ~= nil then
+    self.rx = math.deg(math.atan2(gF - gB, 3.8))
+    self.y = math.max(g, (gF + gB) / 2) + 0.55
+  end
+  self.x = nx
+  self.z = nz
+  self.speed = speed
+  if self.waterY ~= nil and self.y < self.waterY then speed = speed * (1 - 1.5 * dt) end
+end
+
+function oncollide(other)
+  if math.abs(speed) > 3 then
+    if self.driven and math.abs(speed) > 7 and other.hp ~= nil then other.hp = other.hp - 40 end
+    speed = speed * 0.4
+  end
+end
+"""
+
     private val BR_ZONE = """-- The storm: a ring of blue posts that closes in. Standing outside it hurts.
 local NPOSTS = 40
 local stages = { { 35, 25, 22 }, { 30, 20, 12 }, { 25, 20, 5 } }
@@ -1592,12 +1741,13 @@ end
     fun battleRoyale(scene: Scene, mode: Int = 0) {
         val large = mode >= 1
         val huge = mode >= 2
-        val giant = mode == 3
-        val map = if (giant) 800f else if (huge) 500f else if (large) 300f else 70f
+        val giant = mode >= 3
+        val mega = mode == 4
+        val map = if (mega) 1400f else if (giant) 800f else if (huge) 500f else if (large) 300f else 70f
         val sp = map / 70f                       // everything that is a distance scales with the map
-        val relief = if (giant) 70f else if (huge) 55f else if (large) 16f else 7f
+        val relief = if (mega) 95f else if (giant) 70f else if (huge) 55f else if (large) 16f else 7f
         val slopeK = if (huge) 2.6f else 1f      // hills are steeper on the huge map, so house sites may be less flat
-        val nHouses = if (giant) 6 else if (huge) 5 else if (large) 4 else 3
+        val nHouses = if (mega) 8 else if (giant) 6 else if (huge) 5 else if (large) 4 else 3
         // every house gets its own random size: width, depth and ceiling height
         val minW = if (large) 31f else 14f
         val maxW = if (giant) 68f else if (huge) 56f else if (large) 42f else 14f
@@ -1605,13 +1755,13 @@ end
         val maxD = if (giant) 57f else if (huge) 48f else if (large) 36f else 11f
         val minH = 4f
         val maxH = 5f                                // every floor has a ceiling 4 to 5 metres high
-        val houseGap = if (giant) 56.0 else if (huge) 48.0 else if (large) 40.0 else 24.0
+        val houseGap = if (mega) 70.0 else if (giant) 56.0 else if (huge) 48.0 else if (large) 40.0 else 24.0
         val maxFloors = 5                            // every house gets 1 to 5 floors at random
-        val nTowers = 4
-        val towerGap = if (giant) 110.0 else 70.0
-        val nTrees = if (giant) 80 else if (huge) 90 else if (large) 110 else 40
-        val nBots = if (giant) 15 else if (huge) 15 else if (large) 14 else 8
-        val nExtraLoot = if (giant) 28 else if (huge) 22 else if (large) 14 else 6
+        val nTowers = if (mega) 6 else 4
+        val towerGap = if (mega) 150.0 else if (giant) 110.0 else 70.0
+        val nTrees = if (mega) 110 else if (giant) 80 else if (huge) 90 else if (large) 110 else 40
+        val nBots = if (mega) 16 else if (giant) 15 else if (huge) 15 else if (large) 14 else 8
+        val nExtraLoot = if (mega) 40 else if (giant) 28 else if (huge) 22 else if (large) 14 else 6
         val doorScript = BR_DOOR.replace("local NBOTS = 8", "local NBOTS = " + nBots)
         val playerScriptBase = BR_PLAYER.replace("local NBOTS = 8", "local NBOTS = " + nBots)
         val zoneScript = when (mode) {
@@ -1624,6 +1774,15 @@ end
                 .replace("p.sy = 16", "p.sy = 60")
                 .replace("p.sx = 0.7", "p.sx = 1.2")
                 .replace("p.sz = 0.7", "p.sz = 1.2")
+                .replace("8 enemies on the island", nBots.toString() + " enemies on the island")
+            4 -> BR_ZONE
+                .replace("local NPOSTS = 40", "local NPOSTS = 130")
+                .replace("local stages = { { 35, 25, 22 }, { 30, 20, 12 }, { 25, 20, 5 } }", "local stages = { { 150, 130, 580 }, { 135, 115, 370 }, { 120, 100, 210 }, { 90, 75, 110 }, { 70, 55, 40 } }")
+                .replace("  r = 38\n", "  r = 770\n")
+                .replace("\"cube\", self.x, 8, self.z", "\"cube\", self.x, 120, self.z")
+                .replace("p.sy = 16", "p.sy = 340")
+                .replace("p.sx = 0.7", "p.sx = 3.0")
+                .replace("p.sz = 0.7", "p.sz = 3.0")
                 .replace("8 enemies on the island", nBots.toString() + " enemies on the island")
             3 -> BR_ZONE
                 .replace("local NPOSTS = 40", "local NPOSTS = 96")
@@ -1648,7 +1807,7 @@ end
         scene.objects.clear()
         scene.selected = null
         scene.addSettings()?.let {
-            it.x = 12f; it.y = if (giant) 1100f else if (huge) 700f else if (large) 380f else 95f; it.z = 0.45f; it.ry = 0.55f; it.wind = 0.3f; it.windDir = 60f
+            it.x = 12f; it.y = if (mega) 1900f else if (giant) 1100f else if (huge) 700f else if (large) 380f else 95f; it.z = 0.45f; it.ry = 0.55f; it.wind = 0.3f; it.windDir = 60f
             it.color = floatArrayOf(0.55f, 0.75f, 0.92f)
         }
         scene.addLight(Shape.SUN)?.let { it.sx = 1.1f; it.sy = 0.4f }
@@ -1800,6 +1959,87 @@ end
             }
             wz(base, x, zz, b, 0f, rh, th, c, pat)
         }
+        // ---- furniture for the houses: tables with chairs, beds, sofas, shelves, wardrobes, kitchen counters, TVs, crates ----
+        class Fp(val ox: Float, val oz: Float, val pw: Float, val pd: Float, val y0: Float, val ph: Float, val col: FloatArray, val pat: Int, val solid: Boolean)
+        class Fitem(val w: Float, val d: Float, val parts: List<Fp>)
+        val fDark = floatArrayOf(0.30f, 0.19f, 0.11f)
+        val fLight = floatArrayOf(0.64f, 0.48f, 0.30f)
+        val fWhite = floatArrayOf(0.88f, 0.88f, 0.85f)
+        val fBlack = floatArrayOf(0.06f, 0.06f, 0.07f)
+        val fCrate = floatArrayOf(0.55f, 0.42f, 0.22f)
+        val fabrics = arrayOf(
+            floatArrayOf(0.45f, 0.47f, 0.50f), floatArrayOf(0.60f, 0.20f, 0.18f), floatArrayOf(0.20f, 0.32f, 0.55f),
+            floatArrayOf(0.25f, 0.45f, 0.30f), floatArrayOf(0.78f, 0.70f, 0.52f)
+        )
+        var furnN = 0
+        val withFurniture = false                    // furniture is switched off (the code stays here)
+        // a chair at (cx, cz) whose back is on side 0 = +z, 1 = -z, 2 = +x, 3 = -x
+        fun chairParts(cx: Float, cz: Float, back: Int): List<Fp> {
+            val bx = floatArrayOf(0f, 0f, 0.2f, -0.2f)[back]
+            val bz = floatArrayOf(0.2f, -0.2f, 0f, 0f)[back]
+            val sideBack = back >= 2
+            return listOf(
+                Fp(cx, cz, 0.3f, 0.3f, 0f, 0.42f, fDark, planks, false),
+                Fp(cx, cz, 0.5f, 0.5f, 0.42f, 0.06f, fLight, planks, false),
+                Fp(cx + bx, cz + bz, if (sideBack) 0.06f else 0.5f, if (sideBack) 0.5f else 0.06f, 0.48f, 0.45f, fLight, planks, false)
+            )
+        }
+        // kinds: 0 bed, 1 sofa, 2 bookshelf, 3 wardrobe, 4 kitchen counter, 5 fridge, 6 TV on a cabinet, 7 crate, 8 table with 4 chairs, 9 table with 2 chairs, 10 dresser
+        fun makeFurniture(kind: Int): Fitem {
+            val fab = fabrics[rnd.nextInt(fabrics.size)]
+            return when (kind) {
+                0 -> Fitem(1.1f, 2.1f, listOf(
+                    Fp(0f, 0f, 1.1f, 2.1f, 0f, 0.35f, fDark, planks, true),
+                    Fp(0f, 0.02f, 1.0f, 1.95f, 0.35f, 0.2f, fab, 0, true),
+                    Fp(0f, -0.82f, 0.8f, 0.35f, 0.55f, 0.12f, fWhite, 0, false)))
+                1 -> Fitem(2.0f, 0.95f, listOf(
+                    Fp(0f, 0.05f, 2.0f, 0.85f, 0f, 0.45f, fab, 0, true),
+                    Fp(0f, -0.38f, 2.0f, 0.2f, 0.45f, 0.5f, fab, 0, true)))
+                2 -> Fitem(1.3f, 0.4f, listOf(Fp(0f, 0f, 1.3f, 0.4f, 0f, 2.0f, fDark, planks, true)))
+                3 -> Fitem(1.0f, 0.6f, listOf(Fp(0f, 0f, 1.0f, 0.6f, 0f, 2.2f, fLight, planks, true)))
+                4 -> Fitem(2.4f, 0.7f, listOf(
+                    Fp(0f, 0f, 2.4f, 0.7f, 0f, 0.88f, fWhite, 0, true),
+                    Fp(0f, 0f, 2.5f, 0.78f, 0.88f, 0.05f, fDark, planks, true)))
+                5 -> Fitem(0.8f, 0.7f, listOf(Fp(0f, 0f, 0.8f, 0.7f, 0f, 1.8f, fWhite, 0, true)))
+                6 -> Fitem(1.4f, 0.45f, listOf(
+                    Fp(0f, 0f, 1.4f, 0.45f, 0f, 0.5f, fDark, planks, true),
+                    Fp(0f, -0.1f, 1.0f, 0.07f, 0.55f, 0.6f, fBlack, 0, false)))
+                7 -> Fitem(0.9f, 0.9f, listOf(Fp(0f, 0f, 0.9f, 0.9f, 0f, 0.9f, fCrate, planks, true)))
+                10 -> Fitem(1.2f, 0.5f, listOf(Fp(0f, 0f, 1.2f, 0.5f, 0f, 0.85f, fLight, planks, true)))
+                else -> {
+                    val four = kind == 8
+                    val parts = ArrayList<Fp>()
+                    parts.add(Fp(0f, 0f, 1.6f, 0.9f, 0.72f, 0.08f, fLight, planks, true))
+                    parts.add(Fp(-0.62f, 0f, 0.1f, 0.75f, 0f, 0.72f, fDark, planks, true))
+                    parts.add(Fp(0.62f, 0f, 0.1f, 0.75f, 0f, 0.72f, fDark, planks, true))
+                    parts.addAll(chairParts(0f, 0.8f, 0))
+                    parts.addAll(chairParts(0f, -0.8f, 1))
+                    if (four) {
+                        parts.addAll(chairParts(1.15f, 0f, 2))
+                        parts.addAll(chairParts(-1.15f, 0f, 3))
+                    }
+                    Fitem(if (four) 2.8f else 1.6f, 2.1f, parts)
+                }
+            }
+        }
+        // puts a piece down: facing 0 = front towards +z, 1 = -z, 2 = +x, 3 = -x
+        fun placeFurniture(item: Fitem, facing: Int, px: Float, pz: Float, base: Float, house: Int) {
+            val fx = floatArrayOf(0f, 0f, 1f, -1f)[facing]
+            val fz = floatArrayOf(1f, -1f, 0f, 0f)[facing]
+            val rx = floatArrayOf(1f, -1f, 0f, 0f)[facing]
+            val rz = floatArrayOf(0f, 0f, -1f, 1f)[facing]
+            for (p in item.parts) {
+                val wx = px + rx * p.ox + fx * p.oz
+                val wz = pz + rz * p.ox + fz * p.oz
+                val sxw = Math.abs(rx) * p.pw + Math.abs(fx) * p.pd
+                val szw = Math.abs(rz) * p.pw + Math.abs(fz) * p.pd
+                furnN++
+                val o = mk(scene, Shape.CUBE, "Furniture " + house + "-" + furnN, wx, base + p.y0 + p.ph / 2f, wz, sxw, p.ph, szw, p.col)
+                o.pattern = p.pat
+                o.collider = if (p.solid) 1 else 0
+                o.shadow = false
+            }
+        }
         for (h in houses) {
             houseN++
             val cx = h[0]
@@ -1915,6 +2155,71 @@ end
             for (k in 1 until floors) {
                 houseLoot.add(floatArrayOf(cx + W * 0.12f, top + k * floorH + 0.5f, cz + hd * 0.2f, if (k % 2 == 0) 1f else 0f))
             }
+            // furniture on every floor: between the two stair strips, along the walls or free in the room, never in a doorway or on a loot spot
+            if (withFurniture) run {
+                val ix0 = cx - hw + sw + 0.7f
+                val ix1 = cx + hw - sw - 0.7f
+                val iz0 = cz - hd + 0.2f
+                val iz1 = cz + hd - 0.2f
+                val cnt = ((ix1 - ix0) * (iz1 - iz0) / 45f).toInt().coerceIn(2, 6)
+                val kinds = intArrayOf(0, 0, 1, 2, 2, 3, 4, 5, 6, 7, 8, 9, 10)
+                val pl2 = cx - hw + sw + 0.4f
+                val pr2 = cx + hw - sw - 0.4f
+                for (k in 0 until floors) {
+                    val base = top + k * floorH
+                    val bad = ArrayList<FloatArray>()      // rectangles that stay empty: minX, maxX, minZ, maxZ
+                    bad.add(floatArrayOf(pl2 - 0.1f, pr2 + 0.1f, cz - 0.1f, cz + 0.1f))          // the wall across the middle
+                    bad.add(floatArrayOf(cx - 2.1f, cx + 2.1f, cz - 1.3f, cz + 1.3f))            // and its doorway
+                    if (k == 0) {
+                        bad.add(floatArrayOf(cx - doorW / 2f - 1.2f, cx + doorW / 2f + 1.2f, cz + hd - 3.4f, cz + hd))   // in front of the door
+                        for (px in floatArrayOf(cx - W * 0.17f, cx + W * 0.17f)) {
+                            val dz = cz - hd * 0.5f
+                            bad.add(floatArrayOf(px - 0.1f, px + 0.1f, cz - hd, cz - 0.1f))       // the walls across the back
+                            bad.add(floatArrayOf(px - 1.3f, px + 1.3f, dz - 1.9f, dz + 1.9f))     // and their doorways
+                        }
+                        val lx = floatArrayOf(cx - W * 0.34f, cx, cx + W * 0.34f, cx - W * 0.1f)
+                        val lz = floatArrayOf(cz - hd * 0.7f, cz - hd * 0.7f, cz - hd * 0.7f, cz + hd * 0.5f)
+                        for (q in 0 until 4) bad.add(floatArrayOf(lx[q] - 1.0f, lx[q] + 1.0f, lz[q] - 1.0f, lz[q] + 1.0f))   // the loot
+                    } else {
+                        bad.add(floatArrayOf(cx + W * 0.12f - 1.0f, cx + W * 0.12f + 1.0f, cz + hd * 0.2f - 1.0f, cz + hd * 0.2f + 1.0f))
+                    }
+                    val placed = ArrayList<FloatArray>()
+                    var n = 0
+                    var tries = 0
+                    while (n < cnt && tries < 80) {
+                        tries++
+                        val kind = kinds[rnd.nextInt(kinds.size)]
+                        val item = makeFurniture(kind)
+                        val freeStanding = kind == 7 || kind == 8 || kind == 9
+                        var facing = 0
+                        var pz = 0f
+                        if (!freeStanding) {
+                            when (rnd.nextInt(4)) {
+                                0 -> { facing = 0; pz = cz - hd + 0.15f + 0.08f + item.d / 2f }           // the back wall
+                                1 -> { facing = 0; pz = cz + 0.1f + 0.06f + item.d / 2f }                 // the middle wall, south face
+                                2 -> { facing = 1; pz = cz - 0.1f - 0.06f - item.d / 2f }                 // the middle wall, north face
+                                else -> { facing = 1; pz = cz + hd - 0.15f - 0.08f - item.d / 2f }        // the front wall
+                            }
+                        } else {
+                            facing = rnd.nextInt(2)
+                            pz = iz0 + item.d / 2f + rnd.nextFloat() * maxOf(0f, (iz1 - iz0) - item.d)
+                        }
+                        val px = ix0 + item.w / 2f + rnd.nextFloat() * maxOf(0f, (ix1 - ix0) - item.w)
+                        val x0 = px - item.w / 2f
+                        val x1 = px + item.w / 2f
+                        val z0 = pz - item.d / 2f
+                        val z1 = pz + item.d / 2f
+                        if (x0 < ix0 - 0.01f || x1 > ix1 + 0.01f || z0 < iz0 - 0.01f || z1 > iz1 + 0.01f) continue
+                        var ok = true
+                        for (b in bad) if (x0 < b[1] && x1 > b[0] && z0 < b[3] && z1 > b[2]) { ok = false; break }
+                        if (ok) for (b in placed) if (x0 - 0.25f < b[1] && x1 + 0.25f > b[0] && z0 - 0.25f < b[3] && z1 + 0.25f > b[2]) { ok = false; break }
+                        if (!ok) continue
+                        placeFurniture(item, facing, px, pz, base, houseN)
+                        placed.add(floatArrayOf(x0, x1, z0, z1))
+                        n++
+                    }
+                }
+            }
         }
 
         // ---- watchtowers with a long stair up to the deck (huge map) ----
@@ -1984,6 +2289,122 @@ end
         }
         stairLua.append("}")
 
+        // ---- cars you can drive (walk up to one and tap DRIVE) ----
+        var carN = 0
+        val carCols = arrayOf(
+            floatArrayOf(0.75f, 0.12f, 0.10f), floatArrayOf(0.12f, 0.25f, 0.70f), floatArrayOf(0.90f, 0.90f, 0.88f),
+            floatArrayOf(0.15f, 0.15f, 0.16f), floatArrayOf(0.85f, 0.70f, 0.10f), floatArrayOf(0.15f, 0.50f, 0.25f)
+        )
+        fun buildCar(x: Float, z: Float, yawDeg: Float) {
+            val g = ground(x, z) ?: return
+            if (g < seaY + 0.3f) return
+            carN++
+            val col = carCols[rnd.nextInt(carCols.size)]
+            val y = g + 0.55f
+            val body = mk(scene, Shape.CUBE, "Car " + carN, x, y, z, 1.9f, 0.7f, 4.2f, col, BR_CAR)
+            body.collider = 1
+            val dark = floatArrayOf(0.07f, 0.07f, 0.08f)
+            val parts = ArrayList<SceneObject>()
+            fun carPart(dx: Float, dy: Float, dz: Float, psx: Float, psy: Float, psz: Float, c: FloatArray): SceneObject {
+                val p = mk(scene, Shape.CUBE, "Car " + carN + " part", x + dx, y + dy, z + dz, psx, psy, psz, c)
+                p.shadow = false
+                parts.add(p)
+                return p
+            }
+            carPart(0f, 0.62f, 0.4f, 1.7f, 0.58f, 2.1f, floatArrayOf(col[0] * 0.8f, col[1] * 0.8f, col[2] * 0.8f))   // cabin
+            carPart(0f, 0.68f, 0.4f, 1.74f, 0.32f, 1.7f, floatArrayOf(0.12f, 0.16f, 0.20f))                          // windows
+            for (wx in floatArrayOf(-1f, 1f)) for (wz in floatArrayOf(-1.35f, 1.35f)) carPart(wx * 0.98f, -0.2f, wz, 0.3f, 0.7f, 0.7f, dark)   // wheels
+            for (lx in floatArrayOf(-0.65f, 0.65f)) carPart(lx, 0.1f, -2.12f, 0.4f, 0.2f, 0.08f, floatArrayOf(1f, 0.95f, 0.7f)).emit = 0.8f   // headlights (the front is -z)
+            for (p in parts) Rig.bind(p, body)
+            body.ry = yawDeg
+        }
+
+        // ---- roads between the houses ----
+        class RoadSeg(val x0: Float, val z0: Float, val x1: Float, val z1: Float)
+        val roadSegs = ArrayList<RoadSeg>()
+        val roadPieces = ArrayList<FloatArray>()      // x, z and heading (degrees) of every road piece: cars are parked on them
+        fun nearRoad(x: Float, z: Float, margin: Float): Boolean {
+            for (sg in roadSegs) {
+                val dx = sg.x1 - sg.x0
+                val dz = sg.z1 - sg.z0
+                val l2 = dx * dx + dz * dz
+                var t = if (l2 < 0.001f) 0f else ((x - sg.x0) * dx + (z - sg.z0) * dz) / l2
+                t = t.coerceIn(0f, 1f)
+                val ex = sg.x0 + dx * t - x
+                val ez = sg.z0 + dz * t - z
+                if (ex * ex + ez * ez < margin * margin) return true
+            }
+            return false
+        }
+        if (large) {
+            val roadW = if (huge) 7f else 6f
+            val asphalt = floatArrayOf(0.17f, 0.17f, 0.18f)
+            // one road end in front of every house door, then join them: always the closest house that is not on the network yet
+            val nodes = ArrayList<FloatArray>()
+            for (h in houses) nodes.add(floatArrayOf(h[0], h[1] + h[6] * 0.5f + 9f))
+            val joined = BooleanArray(nodes.size)
+            if (nodes.isNotEmpty()) joined[0] = true
+            val edges = ArrayList<FloatArray>()
+            var guard = 0
+            while (joined.any { !it } && guard++ < 100) {
+                var bi = -1
+                var bj = -1
+                var bd = 1e9
+                for (i in nodes.indices) if (!joined[i]) for (j in nodes.indices) if (joined[j]) {
+                    val d = Math.hypot((nodes[i][0] - nodes[j][0]).toDouble(), (nodes[i][1] - nodes[j][1]).toDouble())
+                    if (d < bd) { bd = d; bi = i; bj = j }
+                }
+                if (bi < 0) break
+                joined[bi] = true
+                edges.add(floatArrayOf(nodes[bj][0], nodes[bj][1], nodes[bi][0], nodes[bi][1]))
+            }
+            var totalLen = 0.0
+            for (e in edges) totalLen += Math.hypot((e[2] - e[0]).toDouble(), (e[3] - e[1]).toDouble())
+            val pieceLen = maxOf(12f, (totalLen / 200.0).toFloat())      // at most about 200 road pieces
+            for (e in edges) {
+                roadSegs.add(RoadSeg(e[0], e[1], e[2], e[3]))
+                val dx = e[2] - e[0]
+                val dz = e[3] - e[1]
+                val len = Math.hypot(dx.toDouble(), dz.toDouble()).toFloat()
+                val n = Math.ceil((len / pieceLen).toDouble()).toInt().coerceAtLeast(1)
+                val yaw = Math.toDegrees(Math.atan2(dx.toDouble(), dz.toDouble())).toFloat()
+                val seg = len / n
+                for (i in 0 until n) {
+                    val ax = e[0] + dx * i / n
+                    val az = e[1] + dz * i / n
+                    val bx = e[0] + dx * (i + 1) / n
+                    val bz = e[1] + dz * (i + 1) / n
+                    val mx = (ax + bx) / 2f
+                    val mz = (az + bz) / 2f
+                    val ga = ground(ax, az) ?: continue
+                    val gb = ground(bx, bz) ?: continue
+                    val gm = ground(mx, mz) ?: continue
+                    if (minOf(ga, gb, gm) < seaY + 0.5f) continue                      // no road through the lakes
+                    if (houses.any { Math.abs(it[0] - mx) < it[5] / 2f + 5f && Math.abs(it[1] - mz) < it[6] / 2f + 5f }) continue   // none through a house
+                    val y = maxOf((ga + gb) / 2f, gm) + 0.14f
+                    val rd = mk(scene, Shape.CUBE, "Road", mx, y, mz, roadW, 0.25f, seg + 0.8f, asphalt)
+                    rd.ry = yaw
+                    rd.rx = -Math.toDegrees(Math.atan2((gb - ga).toDouble(), seg.toDouble())).toFloat()
+                    rd.shadow = false
+                    roadPieces.add(floatArrayOf(mx, mz, yaw))
+                }
+            }
+            // cars parked beside the road
+            val nCars = if (mega) 9 else if (giant) 6 else if (huge) 4 else 3
+            val carSpots = ArrayList<FloatArray>()
+            var carTries = 0
+            while (carSpots.size < nCars && carTries++ < 300 && roadPieces.isNotEmpty()) {
+                val rp = roadPieces[rnd.nextInt(roadPieces.size)]
+                val rr = Math.toRadians(rp[2].toDouble())
+                val side = if (rnd.nextBoolean()) 1f else -1f
+                val cx2 = rp[0] + Math.cos(rr).toFloat() * 1.9f * side
+                val cz2 = rp[1] - Math.sin(rr).toFloat() * 1.9f * side
+                if (carSpots.any { Math.hypot((it[0] - cx2).toDouble(), (it[1] - cz2).toDouble()) < 25.0 }) continue
+                carSpots.add(floatArrayOf(cx2, cz2))
+                buildCar(cx2, cz2, rp[2] + (if (rnd.nextBoolean()) 0f else 180f))
+            }
+        }
+
         // ---- trees (away from houses and water) ----
         var trees = 0
         tries = 0
@@ -1995,6 +2416,7 @@ end
             if (th < seaY + 0.4f || th > land.sy * 0.8f) continue
             if (houses.any { Math.hypot((it[0] - tx).toDouble(), (it[1] - tz).toDouble()) < 0.5 * maxOf(it[5], it[6]) + 8.0 }) continue
             if (towerSpots.any { Math.hypot((it[0] - tx).toDouble(), (it[1] - (tz + 10f)).toDouble()) < 16.0 }) continue
+            if (nearRoad(tx, tz, 7f)) continue
             val tr = scene.addTree(rnd.nextInt(2))
             val k = 0.8f + rnd.nextFloat() * 0.6f
             tr.x = tx; tr.z = tz; tr.y = th - 0.05f
@@ -2069,6 +2491,8 @@ end
             vm.opacity = 0.02f
         }
 
+        if (large) buildCar(px + 7f, pz, 0f)     // a car close to where you start
+
         // ---- enemy soldiers ----
         var bots = 0
         tries = 0
@@ -2098,6 +2522,8 @@ end
         scene.addButton()?.let { it.name = "Fire"; it.x = 78f; it.y = 66f; it.sx = 1.3f }
         scene.addButton()?.let { it.name = "Reload"; it.x = 62f; it.y = 70f; it.sx = 0.9f }
         scene.addButton()?.let { it.name = "View"; it.x = 62f; it.y = 52f; it.sx = 0.8f }
+        scene.addButton()?.let { it.name = "Drive"; it.x = 90f; it.y = 30f; it.sx = 0.9f }
+        Rig.apply(scene)
         scene.selected = null
     }
 }

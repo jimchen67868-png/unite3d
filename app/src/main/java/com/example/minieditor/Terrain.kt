@@ -12,7 +12,7 @@ import kotlin.math.sqrt
  * sx = width, sy = tallest height, sz = depth. The terrain is centred on x/z and sits on y.
  */
 object TerrainGen {
-    const val N = 48            // cells per side
+    const val N = 96            // cells per side (scenes saved with 48 cells are stretched when loaded)
     private const val V = N + 1  // vertices per side
 
     private fun hash(ix: Int, iy: Int, seed: Int): Float {
@@ -218,7 +218,28 @@ object TerrainGen {
 
     fun decode(s: String): FloatArray? {
         val b = try { Base64.decode(s, Base64.DEFAULT) } catch (e: Exception) { return null }
-        if (b.size != V * V * 2) return null
-        return FloatArray(V * V) { i -> ((b[2 * i].toInt() and 0xFF) or ((b[2 * i + 1].toInt() and 0xFF) shl 8)) / 65535f }
+        if (b.size == V * V * 2) {
+            return FloatArray(V * V) { i -> ((b[2 * i].toInt() and 0xFF) or ((b[2 * i + 1].toInt() and 0xFF) shl 8)) / 65535f }
+        }
+        val ov = 49   // the old grid: 48 cells
+        if (b.size == ov * ov * 2) {
+            val old = FloatArray(ov * ov) { i -> ((b[2 * i].toInt() and 0xFF) or ((b[2 * i + 1].toInt() and 0xFF) shl 8)) / 65535f }
+            val out = FloatArray(V * V)
+            for (j in 0 until V) for (i in 0 until V) {
+                val u = i.toFloat() / (V - 1) * (ov - 1)
+                val w = j.toFloat() / (V - 1) * (ov - 1)
+                val i0 = u.toInt().coerceIn(0, ov - 2)
+                val j0 = w.toInt().coerceIn(0, ov - 2)
+                val fu = u - i0
+                val fw = w - j0
+                val a = old[j0 * ov + i0]
+                val bb = old[j0 * ov + i0 + 1]
+                val c = old[(j0 + 1) * ov + i0]
+                val d = old[(j0 + 1) * ov + i0 + 1]
+                out[j * V + i] = (a * (1 - fu) + bb * fu) * (1 - fw) + (c * (1 - fu) + d * fu) * fw
+            }
+            return out
+        }
+        return null
     }
 }
