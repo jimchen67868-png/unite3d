@@ -128,6 +128,10 @@ function start()
   end
   self.car = nil
   carObj = nil
+  driveBtn = find("Drive")
+  seatBtn = find("Seat")
+  if driveBtn ~= nil then driveBtn.opacity = 0 end
+  if seatBtn ~= nil then seatBtn.opacity = 0 end
   lastHp = 100
   statT = 8
   over = false
@@ -138,6 +142,16 @@ function setGunVisible(on)
   local v = 0
   if on then v = 1 end
   if P.gun ~= nil then P.gun.opacity = v end
+end
+
+-- the DRIVE and SEAT buttons only show next to a car (or while you sit in one)
+function updateCarButtons()
+  local show = self.car ~= nil
+  if not show then show = nearestCar() ~= nil end
+  local v = 0
+  if show then v = 1 end
+  if driveBtn ~= nil then driveBtn.opacity = v end
+  if seatBtn ~= nil then seatBtn.opacity = v end
 end
 
 function nearestCar()
@@ -617,6 +631,7 @@ function update(dt)
   end
 
   -- cars: DRIVE = driver seat, SEAT = passenger seats, JUMP = get out
+  updateCarButtons()
   if input.buttonsPressed["Drive"] then
     if self.car == nil then
       local c = nearestCar()

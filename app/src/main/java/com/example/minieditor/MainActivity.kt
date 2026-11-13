@@ -532,7 +532,7 @@ end
         root.addView(bottom, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM))
         joystick = JoystickView(this).apply { visibility = View.GONE; onNote = { msg -> if (playing) appendLog(msg) } }
         root.addView(joystick, FrameLayout.LayoutParams(dp(150), dp(150), Gravity.TOP or Gravity.START))
-        for (i in 0 until 4) {
+        for (i in 0 until 6) {
             val v = JumpButtonView(this).apply { visibility = View.GONE }
             buttonViews.add(v)
             root.addView(v, FrameLayout.LayoutParams(dp(90), dp(90), Gravity.TOP or Gravity.START))
@@ -1000,6 +1000,7 @@ end
             val dt = if (lastFrame == 0L) 0.016f
             else ((frameTimeNanos - lastFrame) / 1_000_000_000f).coerceAtMost(0.1f)
             lastFrame = frameTimeNanos
+            if (playing) updateButtonVisibility()
             readButtons()
             engine?.let {
                 it.ax = if (tiltOn) fax - bax else 0f
@@ -1058,9 +1059,20 @@ end
         }
     }
 
+    /** While playing, a button whose object has opacity 0 is hidden (the game script shows "Drive" and "Seat" only next to a car). */
+    private fun updateButtonVisibility() {
+        val bs = scene.objects.filter { o -> o.shape == Shape.BUTTON }.take(6)
+        for (i in 0 until minOf(bs.size, buttonViews.size)) {
+            val v = buttonViews[i]
+            val show = bs[i].opacity > 0.05f
+            if (show && v.visibility != View.VISIBLE) v.visibility = View.VISIBLE
+            if (!show && v.visibility != View.GONE) { v.reset(); v.visibility = View.GONE }
+        }
+    }
+
     /** Reads the on-screen buttons. A button named "Jump" also feeds input.jump / input.jumpPressed. */
     private fun readButtons() {
-        val bs = scene.objects.filter { o -> o.shape == Shape.BUTTON }.take(4)
+        val bs = scene.objects.filter { o -> o.shape == Shape.BUTTON }.take(6)
         val held = HashMap<String, Boolean>()
         val pressed = HashMap<String, Boolean>()
         var j = false
@@ -2345,13 +2357,13 @@ end
             joystick.alpha = if (playing) 1f else 0.45f
             placeControl(joystick, j, (150 * JoystickView.ZONE).toInt())
         }
-        val bs = scene.objects.filter { o -> o.shape == Shape.BUTTON }.take(4)
-        for (i in 0 until 4) {
+        val bs = scene.objects.filter { o -> o.shape == Shape.BUTTON }.take(6)
+        for (i in 0 until 6) {
             val v = buttonViews[i]
             if (i >= bs.size) {
                 if (v.visibility != View.GONE) { v.reset(); v.visibility = View.GONE }
             } else {
-                v.visibility = View.VISIBLE
+                v.visibility = if (!playing || bs[i].opacity > 0.05f) View.VISIBLE else View.GONE
                 v.interactive = playing
                 v.alpha = if (playing) 1f else 0.45f
                 v.label = bs[i].name.uppercase().take(10)
