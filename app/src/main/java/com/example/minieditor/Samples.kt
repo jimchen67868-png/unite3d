@@ -62,7 +62,7 @@ end
 -- Joystick = move, drag the screen = look, hold FIRE = shoot, RELOAD, JUMP, VIEW = 1st / 3rd person.
 local NBOTS = 8
 STAIRS = {}
-SEATS = { { -0.45, 0.1 }, { 0.45, 0.1 }, { -0.45, 1.1 }, { 0.45, 1.1 } }   -- driver, front passenger, rear left, rear right
+SEATS = { { -0.45, -0.3 }, { 0.45, -0.3 }, { -0.45, 0.7 }, { 0.45, 0.7 } }   -- driver, front passenger, rear left, rear right
 
 function start()
   self.hp = 100
@@ -180,14 +180,13 @@ function enterCar(c, seat)
   self.collider = 0
   self.vy = 0
   swimming = false
-  setGunVisible(false)
-  setVm(false)
   camera.dist = 6.5
+  camera.yaw = c.ry     -- the camera starts behind the car
   playSound("door", 0.8, 0.8)
   if seat == 1 then
-    log("Driver seat: joystick up = gas, down = brake / reverse, left and right = steer. DRIVE = get out, SEAT = other seat, JUMP = jump out")
+    log("Driver seat: joystick up = gas, down = brake / reverse, left and right = steer. You can shoot out of the window. DRIVE = get out, SEAT = other seat, JUMP = jump out")
   else
-    log("Sitting in the " .. seatName(seat) .. ". SEAT = next seat, DRIVE = driver seat, JUMP = get out")
+    log("Sitting in the " .. seatName(seat) .. ". Aim and shoot out of the window. SEAT = next seat, DRIVE = driver seat, JUMP = get out")
   end
 end
 
@@ -206,8 +205,37 @@ function leaveCar()
   self.seat = nil
   carObj = nil
   self.collider = 1
-  setGunVisible(true)
+  fpWas = nil          -- the body / gun visibility is set again in the next frame
   camera.dist = 3.6
+end
+
+-- shooting and reloading (the same rules as on foot); used inside the car too
+function handleShooting(dt)
+  fireT = fireT - dt
+  if reloadT > 0 then
+    reloadT = reloadT - dt
+    if reloadT <= 0 then
+      local take = math.min(30 - mag, reserve)
+      mag = mag + take
+      reserve = reserve - take
+      log("Reloaded  " .. mag .. " / " .. reserve)
+    end
+  elseif input.buttonsPressed["Reload"] and mag < 30 and reserve > 0 then
+    reloadT = 1.4
+    log("Reloading...")
+    playSound("reload", 0.8)
+  elseif input.buttons["Fire"] and fireT <= 0 then
+    if mag > 0 then
+      shoot()
+    elseif reserve > 0 then
+      reloadT = 1.4
+      log("Reloading...")
+      playSound("reload", 0.8)
+    else
+      fireT = 1
+      log("Out of ammo! Find an ammo box.")
+    end
+  end
 end
 
 function carRide(dt)
@@ -222,17 +250,43 @@ function carRide(dt)
   self.z = c.z - math.sin(r) * st[1] + math.cos(r) * st[2]
   self.y = c.y + 0.43
   self.vy = 0
-  self.ry = c.ry
-  -- sitting: legs forward, hands on the wheel (driver) or in the lap (passengers)
+  -- shooting out of the window, from any seat: the aim follows the camera, the glass does not stop bullets
+  handleShooting(dt)
+  aimT = aimT - dt
+  local aiming = aimT > 0
+  if aiming then self.ry = input.yaw else self.ry = c.ry end
+  -- the body is hidden in first person
+  local fp = camera.firstPerson
+  if fp ~= fpWas then
+    fpWas = fp
+    local o = 1
+    if fp then o = 0 end
+    P.head.opacity = o
+    P.helm.opacity = o
+    P.torso.opacity = o
+    P.pack.opacity = o
+    P.legL.opacity = o
+    P.legR.opacity = o
+    P.armL.opacity = o
+    P.armR.opacity = o
+  end
+  setGunVisible(aiming and not fp)
+  local vmWant = fp
+  if vmWant ~= vmOn then
+    vmOn = vmWant
+    setVm(vmWant)
+  end
+  if vmWant then placeVm(dt) end
+  -- sitting: legs forward; hands on the wheel (driver), the weapon raised when aiming, otherwise in the lap
   local arm = 15
   if self.seat == 1 then arm = 70 end
+  if aiming then arm = 88 end
   if P.legL ~= nil then P.legL.swing = 80 end
   if P.legR ~= nil then P.legR.swing = 80 end
   if P.armL ~= nil then P.armL.swing = arm end
   if P.armR ~= nil then P.armR.swing = arm end
-  setGunVisible(false)
-  -- the camera swings round behind the car while you drive (unless you drag the screen)
-  if not input.touching and math.abs(c.speed or 0) > 1 then
+  -- the driver's camera swings round behind the car (unless you drag the screen)
+  if self.seat == 1 and not input.touching and math.abs(c.speed or 0) > 0.5 then
     local d = ((c.ry - input.yaw + 540) % 360) - 180
     camera.yaw = input.yaw + d * math.min(1, dt * 2.2)
   end
@@ -2370,15 +2424,15 @@ end
                 return p
             }
             // glass cabin: you can see the seats and the people sitting in them
-            carPart(0f, 0.8f, 0.45f, 1.8f, 1.1f, 2.3f, floatArrayOf(0.55f, 0.68f, 0.78f)).opacity = 0.28f
-            carPart(0f, 1.39f, 0.45f, 1.86f, 0.08f, 2.36f, floatArrayOf(col[0] * 0.8f, col[1] * 0.8f, col[2] * 0.8f))   // roof
-            carPart(0f, 0.36f, -0.55f, 1.7f, 0.22f, 0.35f, dark)                                                      // dashboard
+            carPart(0f, 0.8f, 0.1f, 1.8f, 1.1f, 2.3f, floatArrayOf(0.55f, 0.68f, 0.78f)).opacity = 0.28f
+            carPart(0f, 1.39f, 0.1f, 1.86f, 0.08f, 2.36f, floatArrayOf(col[0] * 0.8f, col[1] * 0.8f, col[2] * 0.8f))   // roof
+            carPart(0f, 0.36f, -0.85f, 1.7f, 0.22f, 0.35f, dark)                                                      // dashboard
             for (sx in floatArrayOf(-0.45f, 0.45f)) {                                                                // the two front seats
-                carPart(sx, 0.29f, 0.1f, 0.5f, 0.08f, 0.5f, fabric)
-                carPart(sx, 0.61f, 0.4f, 0.5f, 0.56f, 0.1f, fabric)
+                carPart(sx, 0.29f, -0.3f, 0.5f, 0.08f, 0.5f, fabric)
+                carPart(sx, 0.61f, 0.0f, 0.5f, 0.56f, 0.1f, fabric)
             }
-            carPart(0f, 0.29f, 1.1f, 1.5f, 0.08f, 0.5f, fabric)                                                       // the back seat
-            carPart(0f, 0.61f, 1.4f, 1.5f, 0.56f, 0.1f, fabric)
+            carPart(0f, 0.29f, 0.7f, 1.5f, 0.08f, 0.5f, fabric)                                                       // the back seat
+            carPart(0f, 0.61f, 1.0f, 1.5f, 0.56f, 0.1f, fabric)
             for (wx in floatArrayOf(-0.98f, 0.98f)) for (wz in floatArrayOf(-1.35f, 1.35f)) {                        // round wheels
                 val w = if (wheel != null) scene.add(Shape.MODEL, wheel, "Car " + carN + " wheel") else scene.add(Shape.SPHERE, null, "Car " + carN + " wheel")
                 w.x = x + wx; w.y = y - 0.15f; w.z = z + wz
