@@ -119,13 +119,19 @@ function start()
   zone = find("Zone")
   home = { x = self.x, z = self.z }
   cars = {}
-  local ci = 1
-  while true do
-    local cc = find("Car " .. ci)
-    if cc == nil then break end
-    cars[ci] = cc
-    ci = ci + 1
+  for _, prefix in ipairs({ "Car ", "Bike ", "Heli " }) do
+    local ci = 1
+    while true do
+      local cc = find(prefix .. ci)
+      if cc == nil then break end
+      cars[#cars + 1] = cc
+      ci = ci + 1
+    end
   end
+  climbBtn = find("Climb")
+  descBtn = find("Descend")
+  if climbBtn ~= nil then climbBtn.opacity = 0 end
+  if descBtn ~= nil then descBtn.opacity = 0 end
   self.car = nil
   carObj = nil
   driveBtn = find("Drive")
@@ -137,14 +143,14 @@ function start()
   over = false
 end
 
--- cars. DRIVE: driver seat (or get out of the driver seat). SEAT: a passenger seat, then the next seat. JUMP: get out.
+-- vehicles (cars, motorcycles, helicopters). DRIVE: driver / pilot seat (or get out of it). SEAT: a passenger seat, then the next seat. JUMP: get out.
 function setGunVisible(on)
   local v = 0
   if on then v = 1 end
   if P.gun ~= nil then P.gun.opacity = v end
 end
 
--- the DRIVE and SEAT buttons only show next to a car (or while you sit in one)
+-- the buttons only show next to a vehicle (or while you sit in one); CLIMB and DESCEND only while you fly a helicopter
 function updateCarButtons()
   local show = self.car ~= nil
   if not show then show = nearestCar() ~= nil end
@@ -152,6 +158,11 @@ function updateCarButtons()
   if show then v = 1 end
   if driveBtn ~= nil then driveBtn.opacity = v end
   if seatBtn ~= nil then seatBtn.opacity = v end
+  local fly = self.car ~= nil and self.seat == 1 and carObj ~= nil and carObj.kind == "heli"
+  local vf = 0
+  if fly then vf = 1 end
+  if climbBtn ~= nil then climbBtn.opacity = vf end
+  if descBtn ~= nil then descBtn.opacity = vf end
 end
 
 function nearestCar()
@@ -166,8 +177,22 @@ function nearestCar()
   return best
 end
 
+-- where a seat is: x right, z back (from the middle of the vehicle), and how high the rider's middle is
+function seatDef(c, n)
+  local d = c.seatsDef
+  if d ~= nil and d[n] ~= nil then return d[n] end
+  local st = SEATS[n] or SEATS[1]
+  return { st[1], st[2], 0.43 }
+end
+
 function seatName(n)
-  if n == 1 then return "driver seat" end
+  local k = nil
+  if carObj ~= nil then k = carObj.kind end
+  if n == 1 then
+    if k == "heli" then return "pilot seat" end
+    return "driver seat"
+  end
+  if k == "bike" then return "passenger seat" end
   if n == 2 then return "front passenger seat" end
   if n == 3 then return "rear left seat" end
   return "rear right seat"
@@ -180,22 +205,29 @@ function enterCar(c, seat)
   self.collider = 0
   self.vy = 0
   swimming = false
-  camera.dist = 6.5
-  camera.yaw = c.ry     -- the camera starts behind the car
+  camera.dist = c.camDist or 6.5
+  camera.yaw = c.ry     -- the camera starts behind the vehicle
   playSound("door", 0.8, 0.8)
-  if seat == 1 then
-    log("Driver seat: joystick up = gas, down = brake / reverse, left and right = steer. You can shoot out of the window. DRIVE = get out, SEAT = other seat, JUMP = jump out")
+  if seat == 1 and c.kind == "heli" then
+    log("Pilot seat: the rotor spins up. Joystick up / down = forward / back, left / right = turn. CLIMB and DESCEND buttons = height. You can shoot. DRIVE = get out (after landing)")
+  elseif seat == 1 then
+    log("Driver seat: joystick up = gas, down = brake / reverse, left and right = steer. You can shoot. DRIVE = get out, SEAT = other seat, JUMP = jump out")
   else
-    log("Sitting in the " .. seatName(seat) .. ". Aim and shoot out of the window. SEAT = next seat, DRIVE = driver seat, JUMP = get out")
+    log("Sitting in the " .. seatName(seat) .. ". Aim and shoot. SEAT = next seat, DRIVE = driver seat, JUMP = get out")
   end
 end
 
-function leaveCar()
+function leaveCar(force)
   local c = carObj
+  if not force and c ~= nil and c.kind == "heli" and (c.agl or 0) > 2.5 then
+    log("Land first - you cannot get out in the air")
+    return
+  end
   if c ~= nil then
     local r = math.rad(c.ry)
     local side = 3
-    if SEATS[self.seat or 1][1] < 0 then side = -3 end
+    if c.kind == "heli" then side = 4 end
+    if seatDef(c, self.seat or 1)[1] < 0 then side = -side end
     self.x = c.x + math.cos(r) * side
     self.z = c.z - math.sin(r) * side
     self.y = groundHeight(self.x, self.z) + 1.2
@@ -209,7 +241,7 @@ function leaveCar()
   camera.dist = 3.6
 end
 
--- shooting and reloading (the same rules as on foot); used inside the car too
+-- shooting and reloading (the same rules as on foot); used inside a vehicle too
 function handleShooting(dt)
   fireT = fireT - dt
   if reloadT > 0 then
@@ -241,16 +273,16 @@ end
 function carRide(dt)
   local c = carObj
   if c == nil then
-    leaveCar()
+    leaveCar(true)
     return
   end
-  local st = SEATS[self.seat or 1]
+  local st = seatDef(c, self.seat or 1)
   local r = math.rad(c.ry)
   self.x = c.x + math.cos(r) * st[1] + math.sin(r) * st[2]
   self.z = c.z - math.sin(r) * st[1] + math.cos(r) * st[2]
-  self.y = c.y + 0.43
+  self.y = c.y + st[3]
   self.vy = 0
-  -- shooting out of the window, from any seat: the aim follows the camera, the glass does not stop bullets
+  -- shooting from any seat: the aim follows the camera, the glass does not stop bullets
   handleShooting(dt)
   aimT = aimT - dt
   local aiming = aimT > 0
@@ -281,12 +313,13 @@ function carRide(dt)
   local arm = 15
   if self.seat == 1 then arm = 70 end
   if aiming then arm = 88 end
-  if P.legL ~= nil then P.legL.swing = 80 end
-  if P.legR ~= nil then P.legR.swing = 80 end
+  local leg = c.legSwing or 80
+  if P.legL ~= nil then P.legL.swing = leg end
+  if P.legR ~= nil then P.legR.swing = leg end
   if P.armL ~= nil then P.armL.swing = arm end
   if P.armR ~= nil then P.armR.swing = arm end
-  -- the driver's camera swings round behind the car (unless you drag the screen)
-  if self.seat == 1 and not input.touching and math.abs(c.speed or 0) > 0.5 then
+  -- the driver's camera swings round behind the vehicle (unless you drag the screen)
+  if self.seat == 1 and c.kind ~= "heli" and not input.touching and math.abs(c.speed or 0) > 0.5 then
     local d = ((c.ry - input.yaw + 540) % 360) - 180
     camera.yaw = input.yaw + d * math.min(1, dt * 2.2)
   end
@@ -701,14 +734,14 @@ function update(dt)
       local c = nearestCar()
       if c ~= nil then enterCar(c, 2) else log("No car close enough - walk up to a car and tap DRIVE or SEAT") end
     else
-      self.seat = self.seat % 4 + 1
+      self.seat = self.seat % (carObj.nseats or 4) + 1
       log("Now in the " .. seatName(self.seat))
     end
   elseif input.jumpPressed and self.car ~= nil then
     leaveCar()
   end
   if self.car ~= nil then
-    if self.hp <= 0 then leaveCar() else carRide(dt) return end
+    if self.hp <= 0 then leaveCar(true) else carRide(dt) return end
   end
 
   -- move
@@ -1422,6 +1455,228 @@ function oncollide(other)
     if self.driven and math.abs(speed) > 7 and other.hp ~= nil then other.hp = other.hp - 40 end
     speed = speed * 0.4
   end
+end
+"""
+
+    private val BR_BIKE = """-- A motorcycle for two. Walk up and tap DRIVE (rider) or SEAT (passenger). Joystick: up = gas, down = brake and reverse, left / right = steer.
+SEATS = { { 0, 0.25, 0.46 }, { 0, 0.7, 0.46 } }
+
+function start()
+  speed = 0
+  heading = self.ry
+  self.speed = 0
+  self.driven = false
+  self.kind = "bike"
+  self.nseats = 2
+  self.seatsDef = SEATS
+  self.camDist = 5.5
+  self.legSwing = 60
+  local nm = self.name
+  fw = find(nm .. " wheel F")
+  fork = find(nm .. " fork")
+  bar = find(nm .. " bar")
+  wheelSteer = 0
+  placed = false
+end
+
+-- puts an object at a spot given in the vehicle's own frame (x right, y up, z back) and turns it
+function put(o, lx, ly, lz, nx, nz, cs, sn, cp, sp, ry2, rx2, rz2)
+  if o == nil then return end
+  local y2 = ly * cp - lz * sp
+  local z2 = ly * sp + lz * cp
+  o.x = nx + lx * cs + z2 * sn
+  o.z = nz - lx * sn + z2 * cs
+  o.y = self.y + y2
+  o.ry = ry2
+  o.rx = rx2
+  o.rz = rz2
+end
+
+function update(dt)
+  local pl = find("Player")
+  local driven = pl ~= nil and pl.car == self.name and pl.seat == 1
+  self.driven = driven
+  local throttle = 0
+  local steer = 0
+  if driven and input.joyActive then
+    throttle = input.joyY
+    steer = input.joyX
+  end
+  if throttle > 0.1 then
+    local a = 20 * throttle
+    if speed < 0 then a = a + 16 end
+    speed = speed + a * dt
+  elseif throttle < -0.1 then
+    if speed > 0.5 then
+      speed = speed - 28 * dt
+    else
+      speed = speed + 9 * throttle * dt
+    end
+  else
+    local drag = 6 * dt
+    if speed > 0 then speed = math.max(0, speed - drag) else speed = math.min(0, speed + drag) end
+  end
+  speed = math.max(-5, math.min(36, speed))
+  local dir = 1
+  if speed < 0 then dir = -1 end
+  heading = heading - steer * 80 * math.min(1, math.abs(speed) / 6) * dir * dt
+  self.ry = heading
+  local r = math.rad(heading)
+  local fx = -math.sin(r)
+  local fz = -math.cos(r)
+  local nx = self.x + fx * speed * dt
+  local nz = self.z + fz * speed * dt
+  local gF = groundHeight(nx + fx * 0.85, nz + fz * 0.85)
+  local gB = groundHeight(nx - fx * 0.85, nz - fz * 0.85)
+  local g = groundHeight(nx, nz)
+  if gF ~= nil and gB ~= nil and g ~= nil then
+    self.rx = math.deg(math.atan2(gF - gB, 1.7))
+    self.y = math.max(g, (gF + gB) / 2) + 0.62
+  end
+  self.x = nx
+  self.z = nz
+  self.speed = speed
+  if self.waterY ~= nil and self.y < self.waterY then speed = speed * (1 - 1.5 * dt) end
+  -- riders are carried with the NEW position (reading it in the player script would be a frame late)
+  if pl ~= nil and pl.car == self.name then
+    local st = SEATS[pl.seat or 1]
+    pl.x = nx + math.cos(r) * st[1] + math.sin(r) * st[2]
+    pl.z = nz - math.sin(r) * st[1] + math.cos(r) * st[2]
+    pl.y = self.y + st[3]
+    pl.vy = 0
+  end
+  -- the front wheel, the fork and the handlebar turn with the steering
+  local target = -steer * 28
+  wheelSteer = wheelSteer + (target - wheelSteer) * math.min(1, dt * 8)
+  if driven or math.abs(speed) > 0.01 or math.abs(wheelSteer) > 0.1 or not placed then
+    placed = true
+    local cs, sn = math.cos(r), math.sin(r)
+    local pitch = math.rad(self.rx)
+    local cp, sp = math.cos(pitch), math.sin(pitch)
+    local yw = heading + wheelSteer
+    put(fw, 0, -0.27, -0.85, nx, nz, cs, sn, cp, sp, yw, self.rx, 90)
+    put(fork, 0, 0.0, -0.85, nx, nz, cs, sn, cp, sp, yw, self.rx, 0)
+    put(bar, 0, 0.5, -0.75, nx, nz, cs, sn, cp, sp, yw, self.rx, 0)
+  end
+end
+
+function oncollide(other)
+  if math.abs(speed) > 3 then
+    if self.driven and math.abs(speed) > 7 and other.hp ~= nil then other.hp = other.hp - 40 end
+    speed = speed * 0.4
+  end
+end
+"""
+
+    private val BR_HELI = """-- A helicopter. Walk up and tap DRIVE (pilot) or SEAT (passenger). The pilot: joystick up / down = forward / back, left / right = turn, CLIMB / DESCEND = height.
+SEATS = { { -0.4, -0.55, 0.47 }, { 0.4, -0.55, 0.47 }, { -0.4, 0.55, 0.47 }, { 0.4, 0.55, 0.47 } }
+
+function start()
+  speed = 0
+  vy = 0
+  heading = self.ry
+  rotor = 0
+  spin = 0
+  self.speed = 0
+  self.driven = false
+  self.agl = 0
+  self.kind = "heli"
+  self.nseats = 4
+  self.seatsDef = SEATS
+  self.camDist = 11
+  self.legSwing = 80
+  local nm = self.name
+  r1 = find(nm .. " rotor1")
+  r2 = find(nm .. " rotor2")
+  tailR = find(nm .. " tailrotor")
+  placed = false
+  padLift = math.max(0, self.y - ((groundHeight(self.x, self.z) or 0) + 0.85))   -- it stands on a pad a little above the ground
+end
+
+function put(o, lx, ly, lz, nx, nz, cs, sn, cp, sp, ry2, rx2, rz2)
+  if o == nil then return end
+  local y2 = ly * cp - lz * sp
+  local z2 = ly * sp + lz * cp
+  o.x = nx + lx * cs + z2 * sn
+  o.z = nz - lx * sn + z2 * cs
+  o.y = self.y + y2
+  o.ry = ry2
+  o.rx = rx2
+  o.rz = rz2
+end
+
+function update(dt)
+  local pl = find("Player")
+  local pilot = pl ~= nil and pl.car == self.name and pl.seat == 1
+  self.driven = pilot
+  local fwd = 0
+  local turn = 0
+  local climb = 0
+  if pilot then
+    if input.joyActive then
+      fwd = input.joyY
+      turn = input.joyX
+    end
+    if input.buttons["Climb"] then climb = 1 end
+    if input.buttons["Descend"] then climb = -1 end
+  end
+  -- the rotor spins up while the pilot sits in
+  local rt = 0
+  if pilot then rt = 1 end
+  rotor = rotor + (rt - rotor) * math.min(1, dt * 0.6)
+  if rt == 0 and rotor < 0.03 then rotor = 0 end
+  local flying = rotor > 0.8
+  local top = 40
+  if flying then
+    vy = vy + (climb * 7 - vy) * math.min(1, dt * 2)
+    speed = speed + (fwd * top - speed) * math.min(1, dt * 0.9)
+    heading = heading - turn * 70 * dt
+  else
+    vy = vy - 12 * dt
+    speed = speed * math.max(0, 1 - dt * 2)
+  end
+  local r = math.rad(heading)
+  local fx = -math.sin(r)
+  local fz = -math.cos(r)
+  local nx = self.x + fx * speed * dt
+  local nz = self.z + fz * speed * dt
+  local ny = self.y + vy * dt
+  local gh = groundHeight(nx, nz)
+  local minY = (gh or 0) + 0.85 + padLift
+  if ny <= minY then
+    ny = minY
+    if vy < 0 then vy = 0 end
+  end
+  self.ry = heading
+  self.rx = -(speed / top) * 12
+  self.x = nx
+  self.y = ny
+  self.z = nz
+  self.speed = speed
+  self.agl = ny - minY
+  -- passengers and the pilot are carried with the NEW position
+  if pl ~= nil and pl.car == self.name then
+    local st = SEATS[pl.seat or 1]
+    pl.x = nx + math.cos(r) * st[1] + math.sin(r) * st[2]
+    pl.z = nz - math.sin(r) * st[1] + math.cos(r) * st[2]
+    pl.y = ny + st[3]
+    pl.vy = 0
+  end
+  -- the rotors
+  spin = spin + rotor * 1500 * dt
+  if rotor > 0.01 or math.abs(speed) > 0.01 or math.abs(vy) > 0.01 or not placed then
+    placed = true
+    local cs, sn = math.cos(r), math.sin(r)
+    local pitch = math.rad(self.rx)
+    local cp, sp = math.cos(pitch), math.sin(pitch)
+    put(r1, 0, 1.85, -0.3, nx, nz, cs, sn, cp, sp, heading + spin, self.rx, 0)
+    put(r2, 0, 1.85, -0.3, nx, nz, cs, sn, cp, sp, heading + spin, self.rx, 0)
+    put(tailR, 0.2, 0.6, 4.5, nx, nz, cs, sn, cp, sp, heading, self.rx + spin * 1.3, 0)
+  end
+end
+
+function oncollide(other)
+  if math.abs(speed) > 6 then speed = speed * 0.5 end
 end
 """
 
@@ -2511,6 +2766,113 @@ end
             body.ry = yawDeg
         }
 
+        // ---- motorcycles (2 seats) ----
+        var bikeN = 0
+        fun buildBike(x: Float, z: Float, yawDeg: Float) {
+            val g = ground(x, z) ?: return
+            if (g < seaY + 0.3f) return
+            bikeN++
+            val col = carCols[rnd.nextInt(carCols.size)]
+            val y = g + 0.62f
+            val body = mk(scene, Shape.CUBE, "Bike " + bikeN, x, y, z, 0.36f, 0.45f, 1.2f, col, BR_BIKE)
+            body.collider = 1
+            val dark = floatArrayOf(0.07f, 0.07f, 0.08f)
+            val steel = floatArrayOf(0.35f, 0.36f, 0.38f)
+            val bparts = ArrayList<SceneObject>()
+            fun bikePart(dx: Float, dy: Float, dz: Float, psx: Float, psy: Float, psz: Float, c: FloatArray): SceneObject {
+                val p = mk(scene, Shape.CUBE, "Bike " + bikeN + " part", x + dx, y + dy, z + dz, psx, psy, psz, c)
+                p.shadow = false
+                bparts.add(p)
+                return p
+            }
+            bikePart(0f, -0.15f, 0f, 0.3f, 0.28f, 0.45f, steel)                                   // engine
+            bikePart(0f, 0.3f, 0.45f, 0.3f, 0.1f, 0.75f, dark)                                    // seat
+            bikePart(0f, 0.3f, -0.2f, 0.34f, 0.22f, 0.5f, floatArrayOf(col[0] * 0.8f, col[1] * 0.8f, col[2] * 0.8f))   // tank
+            bikePart(0f, 0.2f, -0.95f, 0.2f, 0.2f, 0.1f, floatArrayOf(1f, 0.95f, 0.7f)).emit = 0.8f                   // headlight
+            val yr = Math.toRadians(yawDeg.toDouble())
+            val ycs = Math.cos(yr).toFloat()
+            val ysn = Math.sin(yr).toFloat()
+            fun bikeFree(name: String, lz: Float, ly: Float, w0: Float, w1: Float, w2: Float, c: FloatArray, wheelObj: Boolean): SceneObject {
+                val o = if (wheelObj && wheel != null) scene.add(Shape.MODEL, wheel, name) else if (wheelObj) scene.add(Shape.SPHERE, null, name) else scene.add(Shape.CUBE, null, name)
+                o.x = x + lz * ysn
+                o.y = y + ly
+                o.z = z + lz * ycs
+                o.sx = w0; o.sy = w1; o.sz = w2
+                o.color = c
+                o.shadow = false
+                o.ry = yawDeg
+                if (wheelObj && wheel != null) o.rz = 90f
+                return o
+            }
+            val rear = bikeFree("Bike " + bikeN + " wheel R", 0.85f, -0.27f, 0.7f, 0.18f, 0.7f, dark, true)
+            bparts.add(rear)                                                                       // the rear wheel stays on the body
+            bikeFree("Bike " + bikeN + " wheel F", -0.85f, -0.27f, 0.7f, 0.18f, 0.7f, dark, true)   // the front wheel, fork and handlebar are turned by the script
+            bikeFree("Bike " + bikeN + " fork", -0.85f, 0f, 0.07f, 0.75f, 0.07f, steel, false)
+            bikeFree("Bike " + bikeN + " bar", -0.75f, 0.5f, 0.8f, 0.05f, 0.05f, dark, false)
+            for (p in bparts) Rig.bind(p, body)
+            body.ry = yawDeg
+        }
+
+        // ---- helicopters (4 seats) on levelled pads ----
+        var heliN = 0
+        fun buildHeli(x: Float, z: Float, yawDeg: Float, level: Float) {
+            heliN++
+            val col = carCols[rnd.nextInt(carCols.size)]
+            val y = level + 0.12f + 0.85f
+            val body = mk(scene, Shape.CUBE, "Heli " + heliN, x, y, z, 1.7f, 0.55f, 3.2f, col, BR_HELI)
+            body.collider = 1
+            val dark = floatArrayOf(0.07f, 0.07f, 0.08f)
+            val fabric = floatArrayOf(0.35f, 0.33f, 0.30f)
+            val hparts = ArrayList<SceneObject>()
+            fun hPart(dx: Float, dy: Float, dz: Float, psx: Float, psy: Float, psz: Float, c: FloatArray): SceneObject {
+                val p = mk(scene, Shape.CUBE, "Heli " + heliN + " part", x + dx, y + dy, z + dz, psx, psy, psz, c)
+                p.shadow = false
+                hparts.add(p)
+                return p
+            }
+            hPart(0f, 0.85f, -0.3f, 1.6f, 1.2f, 2.0f, floatArrayOf(0.55f, 0.68f, 0.78f)).opacity = 0.28f     // glass cabin
+            hPart(0f, 1.5f, -0.3f, 1.7f, 0.12f, 2.2f, floatArrayOf(col[0] * 0.8f, col[1] * 0.8f, col[2] * 0.8f))   // roof
+            hPart(0f, 0.15f, 3.1f, 0.3f, 0.3f, 3.0f, col)                                                     // tail boom
+            hPart(0f, 0.65f, 4.4f, 0.08f, 0.9f, 0.6f, col)                                                    // tail fin
+            hPart(0f, 1.7f, -0.3f, 0.14f, 0.3f, 0.14f, dark)                                                  // rotor mast
+            hPart(-0.8f, -0.8f, 0f, 0.12f, 0.12f, 3.2f, dark)                                                 // skids
+            hPart(0.8f, -0.8f, 0f, 0.12f, 0.12f, 3.2f, dark)
+            hPart(0f, -0.55f, -0.8f, 1.5f, 0.08f, 0.08f, dark)                                                // struts
+            hPart(0f, -0.55f, 0.8f, 1.5f, 0.08f, 0.08f, dark)
+            hPart(-0.4f, 0.31f, -0.55f, 0.45f, 0.08f, 0.45f, fabric)                                          // seats
+            hPart(0.4f, 0.31f, -0.55f, 0.45f, 0.08f, 0.45f, fabric)
+            hPart(0f, 0.31f, 0.55f, 1.3f, 0.08f, 0.45f, fabric)
+            for (p in hparts) Rig.bind(p, body)
+            // the rotors are turned by the script
+            val yr = Math.toRadians(yawDeg.toDouble())
+            val ycs = Math.cos(yr).toFloat()
+            val ysn = Math.sin(yr).toFloat()
+            fun heliFree(name: String, lx: Float, ly: Float, lz: Float, w0: Float, w1: Float, w2: Float) {
+                val o = scene.add(Shape.CUBE, null, name)
+                o.x = x + lx * ycs + lz * ysn
+                o.y = y + ly
+                o.z = z - lx * ysn + lz * ycs
+                o.sx = w0; o.sy = w1; o.sz = w2
+                o.color = dark
+                o.shadow = false
+                o.ry = yawDeg
+            }
+            heliFree("Heli " + heliN + " rotor1", 0f, 1.85f, -0.3f, 7f, 0.04f, 0.28f)
+            heliFree("Heli " + heliN + " rotor2", 0f, 1.85f, -0.3f, 0.28f, 0.04f, 7f)
+            heliFree("Heli " + heliN + " tailrotor", 0.2f, 0.6f, 4.5f, 0.05f, 0.9f, 0.1f)
+            body.ry = yawDeg
+        }
+        fun buildHelipad(x: Float, z: Float, level: Float) {
+            val concrete = floatArrayOf(0.62f, 0.62f, 0.60f)
+            val pad = mk(scene, Shape.CUBE, "Helipad", x, level + 0.06f, z, 12f, 0.12f, 12f, concrete)
+            pad.shadow = false
+            val white = floatArrayOf(0.95f, 0.95f, 0.92f)
+            for (b in arrayOf(floatArrayOf(-1.4f, 0f, 0.6f, 4f), floatArrayOf(1.4f, 0f, 0.6f, 4f), floatArrayOf(0f, 0f, 2.2f, 0.6f))) {
+                val m = mk(scene, Shape.CUBE, "Helipad mark", x + b[0], level + 0.125f, z + b[1], b[2], 0.02f, b[3], white)
+                m.shadow = false
+            }
+        }
+
         // ---- roads between the houses ----
         class RoadSeg(val x0: Float, val z0: Float, val x1: Float, val z1: Float)
         val roadSegs = ArrayList<RoadSeg>()
@@ -2594,6 +2956,50 @@ end
                 if (carSpots.any { Math.hypot((it[0] - cx2).toDouble(), (it[1] - cz2).toDouble()) < 25.0 }) continue
                 carSpots.add(floatArrayOf(cx2, cz2))
                 buildCar(cx2, cz2, rp[2] + (if (rnd.nextBoolean()) 0f else 180f))
+            }
+            // motorcycles beside the road
+            val nBikes = if (mega) 5 else if (giant) 4 else 3
+            var bikeTries = 0
+            var bikesDone = 0
+            while (bikesDone < nBikes && bikeTries++ < 300 && roadPieces.isNotEmpty()) {
+                val rp = roadPieces[rnd.nextInt(roadPieces.size)]
+                val rr = Math.toRadians(rp[2].toDouble())
+                val side = if (rnd.nextBoolean()) 1f else -1f
+                val bx2 = rp[0] + Math.cos(rr).toFloat() * 2.6f * side
+                val bz2 = rp[1] - Math.sin(rr).toFloat() * 2.6f * side
+                if (carSpots.any { Math.hypot((it[0] - bx2).toDouble(), (it[1] - bz2).toDouble()) < 14.0 }) continue
+                carSpots.add(floatArrayOf(bx2, bz2))
+                buildBike(bx2, bz2, rp[2] + (if (rnd.nextBoolean()) 0f else 180f))
+                bikesDone++
+            }
+            // helicopters on levelled pads, away from the roads and the houses
+            val nHelis = if (mega) 3 else if (giant) 2 else 1
+            val heliSpots = ArrayList<FloatArray>()
+            var heliTries = 0
+            while (heliSpots.size < nHelis && heliTries++ < 600) {
+                val hx = (rnd.nextFloat() - 0.5f) * 0.75f * map
+                val hz = (rnd.nextFloat() - 0.5f) * 0.75f * map
+                val g0 = ground(hx, hz) ?: continue
+                if (g0 < seaY + 1.5f) continue
+                var lo2 = g0
+                var hi2 = g0
+                var ok2 = true
+                for (q in 0 until 8) {
+                    val qa = q * Math.PI / 4.0
+                    val gq = ground(hx + Math.cos(qa).toFloat() * 9f, hz + Math.sin(qa).toFloat() * 9f)
+                    if (gq == null || gq < seaY + 1.0f) { ok2 = false; break }
+                    lo2 = minOf(lo2, gq); hi2 = maxOf(hi2, gq)
+                }
+                if (!ok2 || hi2 - lo2 > 3.0f) continue
+                if (nearRoad(hx, hz, 16f)) continue
+                if (houses.any { Math.abs(it[0] - hx) < it[5] / 2f + 20f && Math.abs(it[1] - hz) < it[6] / 2f + 20f }) continue
+                if (heliSpots.any { Math.hypot((it[0] - hx).toDouble(), (it[1] - hz).toDouble()) < 120.0 }) continue
+                val lvl = (lo2 + hi2) / 2f
+                flattenPad(hx, hz, 7f, 7f, lvl)
+                val lg = ground(hx, hz) ?: lvl
+                heliSpots.add(floatArrayOf(hx, hz))
+                buildHelipad(hx, hz, lg)
+                buildHeli(hx, hz, rnd.nextFloat() * 360f, lg)
             }
         }
 
@@ -2716,6 +3122,8 @@ end
         scene.addButton()?.let { it.name = "View"; it.x = 62f; it.y = 52f; it.sx = 0.8f }
         scene.addButton()?.let { it.name = "Drive"; it.x = 90f; it.y = 30f; it.sx = 0.9f }
         scene.addButton()?.let { it.name = "Seat"; it.x = 75f; it.y = 34f; it.sx = 0.8f }
+        scene.addButton()?.let { it.name = "Climb"; it.x = 90f; it.y = 14f; it.sx = 0.9f }
+        scene.addButton()?.let { it.name = "Descend"; it.x = 75f; it.y = 16f; it.sx = 0.9f }
         Rig.apply(scene)
         scene.selected = null
     }
