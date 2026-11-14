@@ -100,10 +100,12 @@ class Scene {
     /** On-screen buttons (max 4). The first is named "Jump". Rename a button in the Inspector to change its label. */
     fun addButton(): SceneObject? {
         val n = objects.count { it.shape == Shape.BUTTON }
-        if (n >= 4) return null
-        val pos = arrayOf(floatArrayOf(85f, 66f), floatArrayOf(70f, 56f), floatArrayOf(88f, 48f), floatArrayOf(58f, 66f))
+        // there is no limit on the number of buttons: the first six get their own place, later ones are laid out in rows
+        val pos = arrayOf(floatArrayOf(85f, 66f), floatArrayOf(70f, 56f), floatArrayOf(88f, 48f), floatArrayOf(58f, 66f), floatArrayOf(90f, 30f), floatArrayOf(75f, 34f))
+        val px = if (n < pos.size) pos[n][0] else 92f - ((n - pos.size) % 5) * 12f
+        val py = if (n < pos.size) pos[n][1] else 14f + ((n - pos.size) / 5) * 14f
         val name = if (n == 0) "Jump" else "Button " + (n + 1)
-        val o = SceneObject(Shape.BUTTON, name, x = pos[n][0], y = pos[n][1], z = 0f, color = floatArrayOf(1f, 1f, 1f))
+        val o = SceneObject(Shape.BUTTON, name, x = px, y = py, z = 0f, color = floatArrayOf(1f, 1f, 1f))
         objects.add(o)
         selected = o
         return o

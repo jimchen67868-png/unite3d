@@ -1059,9 +1059,18 @@ end
         }
     }
 
+    /** The on-screen buttons are made as needed: a scene can have any number of Button objects. */
+    private fun ensureButtonViews(n: Int) {
+        while (buttonViews.size < n) {
+            val v = JumpButtonView(this).apply { visibility = View.GONE }
+            buttonViews.add(v)
+            root.addView(v, FrameLayout.LayoutParams(dp(90), dp(90), Gravity.TOP or Gravity.START))
+        }
+    }
+
     /** While playing, a button whose object has opacity 0 is hidden (the game script shows "Drive" and "Seat" only next to a car). */
     private fun updateButtonVisibility() {
-        val bs = scene.objects.filter { o -> o.shape == Shape.BUTTON }.take(6)
+        val bs = scene.objects.filter { o -> o.shape == Shape.BUTTON }
         for (i in 0 until minOf(bs.size, buttonViews.size)) {
             val v = buttonViews[i]
             val show = bs[i].opacity > 0.05f
@@ -1072,11 +1081,12 @@ end
 
     /** Reads the on-screen buttons. A button named "Jump" also feeds input.jump / input.jumpPressed. */
     private fun readButtons() {
-        val bs = scene.objects.filter { o -> o.shape == Shape.BUTTON }.take(6)
+        val bs = scene.objects.filter { o -> o.shape == Shape.BUTTON }
         val held = HashMap<String, Boolean>()
         val pressed = HashMap<String, Boolean>()
         var j = false
         var jp = false
+        ensureButtonViews(bs.size)
         for ((i, b) in bs.withIndex()) {
             val v = buttonViews[i]
             val down = v.pressedNow
@@ -1446,7 +1456,7 @@ end
             visibility = View.GONE
             addView(row(
                 btn("+Stick", true) { if (scene.addJoystick() == null) toast("Joystick already added") else editor.refresh() },
-                btn("+Button", true) { if (scene.addButton() == null) toast("Max 4 buttons") else editor.refresh() },
+                btn("+Button", true) { scene.addButton(); editor.refresh() },
                 btn("Copy", true) { scene.duplicate(); editor.refresh() },
                 btn("Delete", true) { scene.removeSelected(); editor.refresh() },
                 btn("Clear", true) { scene.objects.clear(); scene.selected = null; editor.refresh() }
@@ -2357,8 +2367,9 @@ end
             joystick.alpha = if (playing) 1f else 0.45f
             placeControl(joystick, j, (150 * JoystickView.ZONE).toInt())
         }
-        val bs = scene.objects.filter { o -> o.shape == Shape.BUTTON }.take(6)
-        for (i in 0 until 6) {
+        val bs = scene.objects.filter { o -> o.shape == Shape.BUTTON }
+        ensureButtonViews(bs.size)
+        for (i in 0 until buttonViews.size) {
             val v = buttonViews[i]
             if (i >= bs.size) {
                 if (v.visibility != View.GONE) { v.reset(); v.visibility = View.GONE }
