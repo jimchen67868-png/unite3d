@@ -1314,11 +1314,33 @@ end
 """
 
     private val BR_CAR = """-- A car you can drive. Walk up to it and tap DRIVE. Joystick: up = gas, down = brake and reverse, left / right = steer.
+SEATS = { { -0.45, -0.3 }, { 0.45, -0.3 }, { -0.45, 0.7 }, { 0.45, 0.7 } }   -- driver, front passenger, rear left, rear right
+
+WOFF = { { -0.98, -0.15, -1.35 }, { 0.98, -0.15, -1.35 }, { -0.98, -0.15, 1.35 }, { 0.98, -0.15, 1.35 } }   -- front left, front right, rear left, rear right
+
 function start()
   speed = 0
   heading = self.ry
   self.speed = 0
   self.driven = false
+  local nm = self.name
+  wheels = { find(nm .. " wheel FL"), find(nm .. " wheel FR"), find(nm .. " wheel RL"), find(nm .. " wheel RR") }
+  bars = { find(nm .. " steer1"), find(nm .. " steer2") }
+  wheelSteer = 0
+  placed = false
+end
+
+-- puts an object at a spot given in the car's own frame (x right, y up, z back) and turns it
+function put(o, lx, ly, lz, nx, nz, cs, sn, cp, sp, ry2, rx2, rz2)
+  if o == nil then return end
+  local y2 = ly * cp - lz * sp
+  local z2 = ly * sp + lz * cp
+  o.x = nx + lx * cs + z2 * sn
+  o.z = nz - lx * sn + z2 * cs
+  o.y = self.y + y2
+  o.ry = ry2
+  o.rx = rx2
+  o.rz = rz2
 end
 
 function update(dt)
@@ -1365,7 +1387,34 @@ function update(dt)
   self.x = nx
   self.z = nz
   self.speed = speed
+  -- whoever sits in the car is carried along with the NEW position (reading it in the player script would be one frame late)
+  if pl ~= nil and pl.car == self.name then
+    local st = SEATS[pl.seat or 1]
+    pl.x = nx + math.cos(r) * st[1] + math.sin(r) * st[2]
+    pl.z = nz - math.sin(r) * st[1] + math.cos(r) * st[2]
+    pl.y = self.y + 0.43
+    pl.vy = 0
+  end
   if self.waterY ~= nil and self.y < self.waterY then speed = speed * (1 - 1.5 * dt) end
+
+  -- the front wheels turn when you steer, and the steering wheel turns too
+  local target = -steer * 32
+  wheelSteer = wheelSteer + (target - wheelSteer) * math.min(1, dt * 8)
+  if driven or math.abs(speed) > 0.01 or math.abs(wheelSteer) > 0.1 or not placed then
+    placed = true
+    local cs, sn = math.cos(r), math.sin(r)
+    local pitch = math.rad(self.rx)
+    local cp, sp = math.cos(pitch), math.sin(pitch)
+    for i = 1, 4 do
+      local w = WOFF[i]
+      local yawW = heading
+      if i <= 2 then yawW = heading + wheelSteer end
+      put(wheels[i], w[1], w[2], w[3], nx, nz, cs, sn, cp, sp, yawW, self.rx, 90)
+    end
+    local roll = -wheelSteer * 3
+    put(bars[1], -0.45, 0.62, -0.62, nx, nz, cs, sn, cp, sp, heading, self.rx - 20, roll)
+    put(bars[2], -0.45, 0.62, -0.62, nx, nz, cs, sn, cp, sp, heading, self.rx - 20, roll)
+  end
 end
 
 function oncollide(other)
@@ -2433,13 +2482,29 @@ end
             }
             carPart(0f, 0.29f, 0.7f, 1.5f, 0.08f, 0.5f, fabric)                                                       // the back seat
             carPart(0f, 0.61f, 1.0f, 1.5f, 0.56f, 0.1f, fabric)
-            for (wx in floatArrayOf(-0.98f, 0.98f)) for (wz in floatArrayOf(-1.35f, 1.35f)) {                        // round wheels
-                val w = if (wheel != null) scene.add(Shape.MODEL, wheel, "Car " + carN + " wheel") else scene.add(Shape.SPHERE, null, "Car " + carN + " wheel")
-                w.x = x + wx; w.y = y - 0.15f; w.z = z + wz
+            // round wheels and the steering wheel are moved by the car script (the front wheels turn), so they are not fixed to the body
+            val yr = Math.toRadians(yawDeg.toDouble())
+            val ycs = Math.cos(yr).toFloat()
+            val ysn = Math.sin(yr).toFloat()
+            val wheelNames = arrayOf("FL", "FR", "RL", "RR")
+            var wi = 0
+            for (wz in floatArrayOf(-1.35f, 1.35f)) for (wx in floatArrayOf(-0.98f, 0.98f)) {
+                val wname = "Car " + carN + " wheel " + wheelNames[wi++]
+                val w = if (wheel != null) scene.add(Shape.MODEL, wheel, wname) else scene.add(Shape.SPHERE, null, wname)
+                w.x = x + wx * ycs + wz * ysn
+                w.y = y - 0.15f
+                w.z = z - wx * ysn + wz * ycs
                 if (wheel != null) { w.sx = 0.8f; w.sy = 0.34f; w.sz = 0.8f; w.rz = 90f } else { w.sx = 0.34f; w.sy = 0.8f; w.sz = 0.8f }
+                w.ry = yawDeg
                 w.color = dark
                 w.shadow = false
-                parts.add(w)
+            }
+            for (k in 0..1) {
+                val bar = mk(scene, Shape.CUBE, "Car " + carN + " steer" + (k + 1), x + (-0.45f) * ycs + (-0.62f) * ysn, y + 0.62f, z - (-0.45f) * ysn + (-0.62f) * ycs,
+                    if (k == 0) 0.38f else 0.04f, if (k == 0) 0.04f else 0.38f, 0.05f, dark)
+                bar.ry = yawDeg
+                bar.rx = -20f
+                bar.shadow = false
             }
             for (lx in floatArrayOf(-0.65f, 0.65f)) carPart(lx, 0.05f, -2.12f, 0.4f, 0.2f, 0.08f, floatArrayOf(1f, 0.95f, 0.7f)).emit = 0.8f   // headlights (front is -z)
             for (p in parts) Rig.bind(p, body)
