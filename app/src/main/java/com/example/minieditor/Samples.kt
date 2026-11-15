@@ -70,6 +70,13 @@ WEAPONS = {
   shotgun = { name = "S12K",   mag = 5,  dmg = 12, rate = 0.85,  spread = 0.07,   auto = false, pellets = 9, speed = 220, life = 0.3, ammo = "g12",  reload = 2.7, recoil = 2.2,  pitch = 0.6,  vol = 1.0,  assist = false, len = 0.95, thick = 1.3 },
   sniper  = { name = "Kar98k", mag = 5,  dmg = 95, rate = 1.5,   spread = 0.0015, auto = false, pellets = 1, speed = 650, life = 1.2, ammo = "r762", reload = 3.2, recoil = 3.0,  pitch = 0.5,  vol = 1.0,  assist = false, len = 1.35, thick = 0.9 }
 }
+WEAPONS.rifle.ads = { 38 }          -- field of view when you aim (the normal one is 50); the sniper has two zoom steps and a scope
+WEAPONS.smg.ads = { 42 }
+WEAPONS.pistol.ads = { 44 }
+WEAPONS.shotgun.ads = { 42 }
+WEAPONS.sniper.ads = { 12.5, 6.3 }
+WEAPONS.sniper.scope = true
+aimLevel = 0
 AMMONAMES = { r556 = "5.56", r9 = "9mm", g12 = "12 gauge", r762 = "7.62" }
 AMMOCAP = { r556 = 240, r9 = 150, g12 = 40, r762 = 40 }
 MAXWEAPONS = 3
@@ -120,6 +127,8 @@ function start()
   mag = mags[slots[cur]]
   reserve = ammoBag[W.ammo]
   gunBase = nil
+  aimLevel = 0
+  camera.fov = 50
   reloadT = 0
   fireT = 0
   bullets = {}
@@ -205,11 +214,29 @@ function applyGunLook()
   scale(P.gun, gunBase.pg)
 end
 
+-- AIM: zoom in (the sniper has a scope with two zoom steps); tap again for the next step, then back to normal
+function applyAim()
+  if aimLevel > 0 and W.ads[aimLevel] ~= nil then
+    camera.fov = W.ads[aimLevel]
+  else
+    aimLevel = 0
+    camera.fov = 50
+  end
+end
+
+function toggleAim()
+  aimLevel = (aimLevel + 1) % (#W.ads + 1)
+  applyAim()
+  if aimLevel > 0 then playSound("reload", 0.3, 2.0) end
+end
+
 function switchWeapon(k)
   if reloadT > 0 then reloadT = 0 end
   storeAmmo()
   cur = k
   syncAmmo()
+  aimLevel = 0
+  applyAim()
   applyGunLook()
   fireT = 0.3
   playSound("reload", 0.5, 1.5)
@@ -315,6 +342,7 @@ function handleItems(dt)
   if gunBase == nil then applyGunLook() end
   bloom = math.max(0, bloom - dt * 0.09)
   if input.buttonsPressed["Weapon"] then nextWeapon() end
+  if input.buttonsPressed["Aim"] then toggleAim() end
   if input.buttonsPressed["Grenade"] then throwGrenade() end
   if input.buttonsPressed["Heal"] then useMedkit() end
   if input.buttonsPressed["Bag"] then showBag() end
@@ -422,6 +450,8 @@ end
 
 -- shooting and reloading (on foot and inside a vehicle)
 function startReload()
+  aimLevel = 0
+  applyAim()
   reloadT = W.reload
   log("Reloading the " .. W.name .. "...")
   playSound("reload", 0.8)
@@ -485,7 +515,7 @@ function carRide(dt)
     P.armR.opacity = o
   end
   setGunVisible(aiming and not fp)
-  local vmWant = fp
+  local vmWant = fp and not (aimLevel > 0 and W.scope == true)
   if vmWant ~= vmOn then
     vmOn = vmWant
     setVm(vmWant)
@@ -668,6 +698,7 @@ function shoot()
   muzzleFlash(ox, oy, oz)
   local sp = W.spread + bloom
   if legAmp > 1 then sp = sp * 1.6 end
+  if aimLevel > 0 then sp = sp * 0.4 end
   for p = 1, W.pellets do
     local dx = fx0 + (math.random() - 0.5) * 2 * sp
     local dy = fy0 + (math.random() - 0.5) * 2 * sp
@@ -697,8 +728,10 @@ function shoot()
   end
   bloom = math.min(0.045, bloom + W.spread * 0.35 + 0.002)
   -- recoil: the view jumps up and wobbles a little
-  camera.pitch = camera.pitch - W.recoil * (0.7 + math.random() * 0.6)
-  camera.yaw = camera.yaw + (math.random() - 0.5) * W.recoil * 0.7
+  local rk = 1
+  if aimLevel > 0 then rk = 0.6 end
+  camera.pitch = camera.pitch - W.recoil * rk * (0.7 + math.random() * 0.6)
+  camera.yaw = camera.yaw + (math.random() - 0.5) * W.recoil * rk * 0.7
 end
 
 function updateBullets(dt)
@@ -1111,6 +1144,10 @@ function update(dt)
   if self.dead then
     deadT = deadT + dt
     if camera.firstPerson then camera.firstPerson = false end
+    if aimLevel > 0 then
+      aimLevel = 0
+      camera.fov = 50
+    end
     fallPose(deadT, deadG or groundHeight(self.x, self.z))
     return
   end
@@ -1161,6 +1198,7 @@ function update(dt)
   local moving = len > 0.1
   local sp = 6
   if swimming then sp = 3.2 elseif self.inWater then sp = 4 end
+  if aimLevel > 0 and not swimming then sp = sp * 0.6 end
   -- cliffs: a slope steeper than about 55 degrees cannot be walked up (no popping up a cliff face)
   local mvx, mvz = mx * sp * dt, mz * sp * dt
   local feet0 = self.y - 0.9
@@ -1330,7 +1368,7 @@ function update(dt)
     P.armR.opacity = o
     P.gun.opacity = o
   end
-  local vmWant = fp and (not swimming) and (not self.dead)
+  local vmWant = fp and (not swimming) and (not self.dead) and not (aimLevel > 0 and W.scope == true)
   if vmWant ~= vmOn then
     vmOn = vmWant
     setVm(vmWant)
@@ -3588,6 +3626,7 @@ end
         scene.addButton()?.let { it.name = "Climb"; it.x = 90f; it.y = 14f; it.sx = 0.9f }
         scene.addButton()?.let { it.name = "Descend"; it.x = 75f; it.y = 16f; it.sx = 0.9f }
         scene.addButton()?.let { it.name = "Weapon"; it.x = 46f; it.y = 66f; it.sx = 0.9f }
+        scene.addButton()?.let { it.name = "Aim"; it.x = 76f; it.y = 48f; it.sx = 0.9f }
         scene.addButton()?.let { it.name = "Grenade"; it.x = 92f; it.y = 70f; it.sx = 0.9f }
         scene.addButton()?.let { it.name = "Heal"; it.x = 46f; it.y = 80f; it.sx = 0.8f }
         scene.addButton()?.let { it.name = "Bag"; it.x = 62f; it.y = 86f; it.sx = 0.8f }

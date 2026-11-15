@@ -312,9 +312,10 @@ class EditorView(ctx: Context, val scene: Scene) : GLSurfaceView(ctx) {
                         lastX = x; lastY = y
                         touchX = x; touchY = y
                         if (abs(dx) > 0f || abs(dy) > 0f) {
-                            renderer.yaw -= dx * 0.4f
+                            val sens = 0.4f * (renderer.fov / 50f).coerceIn(0.12f, 1f)
+                            renderer.yaw -= dx * sens
                             val fp = renderer.fpMode
-                            renderer.pitch = (renderer.pitch + dy * 0.4f).coerceIn(if (fp) -80f else -15f, if (fp) 80f else 70f)
+                            renderer.pitch = (renderer.pitch + dy * sens).coerceIn(if (fp) -80f else -15f, if (fp) 80f else 70f)
                             requestRender()
                         }
                     }

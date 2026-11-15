@@ -76,6 +76,9 @@ class ScriptEngine(private val scene: Scene, private val log: (String) -> Unit) 
     /** Set by scripts with camera.dist = number (3rd person camera distance); the app takes it and clears it. */
     @Volatile var distOut: Float? = null
     private var distPushed = Float.NaN
+    /** Set by scripts with camera.fov = degrees (zoom); the app takes it and clears it. */
+    @Volatile var fovOut: Float? = null
+    private var fovPushed = Float.NaN
     /** Where the camera is (read only for scripts: camera.x, camera.y, camera.z). */
     var camX = 0f
     var camY = 0f
@@ -362,6 +365,7 @@ class ScriptEngine(private val scene: Scene, private val log: (String) -> Unit) 
 
     private fun pullCamera() {
         num(camera, "dist")?.let { if (it != distPushed) { distPushed = it; distOut = it } }
+        num(camera, "fov")?.let { if (it != fovPushed) { fovPushed = it; fovOut = it } }
         val f = camera.get("firstPerson")
         if (f.isboolean() && f.toboolean() != fpPushed) fpRequest = f.toboolean()
         val t = camera.get("target")

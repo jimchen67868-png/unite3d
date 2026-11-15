@@ -65,6 +65,7 @@ class MainActivity : Activity(), SensorEventListener {
     private var gameMode = false
     private lateinit var moreRows: LinearLayout
     private lateinit var crosshair: CrosshairView
+    private lateinit var scope: ScopeView
     private var toolbarShowTab: (Int) -> Unit = {}   // opens a toolbar tab by number (1 = Play)
     private lateinit var transformRow: LinearLayout
     private lateinit var playButton: Button
@@ -517,6 +518,8 @@ end
 
         root = FrameLayout(this).apply { isFocusable = true; isFocusableInTouchMode = true }
         root.addView(editor, FrameLayout.LayoutParams(-1, -1))
+        scope = ScopeView(this).apply { visibility = View.GONE }
+        root.addView(scope, FrameLayout.LayoutParams(-1, -1))
         coordLabel = TextView(this).apply {
             setTextColor(Color.WHITE)
             textSize = 12f
@@ -995,7 +998,9 @@ end
     private val frameCb = object : Choreographer.FrameCallback {
         override fun doFrame(frameTimeNanos: Long) {
             if (!playing) return
-            val wantCross = true   // the crosshair is shown in 1st and 3rd person
+            val scoped = playing && editor.renderer.fov < 20f   // zoomed in a lot: the sniper scope
+            if ((scope.visibility == View.VISIBLE) != scoped) scope.visibility = if (scoped) View.VISIBLE else View.GONE
+            val wantCross = !scoped   // the crosshair is shown in 1st and 3rd person (the scope has its own)
             if ((crosshair.visibility == View.VISIBLE) != wantCross) crosshair.visibility = if (wantCross) View.VISIBLE else View.GONE
             val dt = if (lastFrame == 0L) 0.016f
             else ((frameTimeNanos - lastFrame) / 1_000_000_000f).coerceAtMost(0.1f)
@@ -1025,6 +1030,10 @@ end
                 it.fpRequest?.let { want ->
                     it.fpRequest = null
                     if (want != editor.renderer.fpMode) setFirstPerson(want)
+                }
+                it.fovOut?.let { fv ->
+                    editor.renderer.fov = fv.coerceIn(4f, 90f)
+                    it.fovOut = null
                 }
                 it.distOut?.let { dv ->
                     editor.renderer.tpDist = dv.coerceIn(1.8f, 12f)
@@ -1177,6 +1186,7 @@ end
         if (editor.renderer.fpMode) setFirstPerson(false)
         editor.renderer.tpFollow = null
         editor.renderer.tpDist = 3.6f
+        editor.renderer.fov = 50f
         camTargetName = "Player"
         Choreographer.getInstance().removeFrameCallback(frameCb)
         engine = null
