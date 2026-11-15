@@ -62,6 +62,21 @@ end
 -- Joystick = move, drag the screen = look, hold FIRE = shoot, RELOAD, JUMP, VIEW = 1st / 3rd person.
 local NBOTS = 8
 STAIRS = {}
+-- ===== weapons: every gun has its own numbers =====
+WEAPONS = {
+  rifle   = { name = "M416",   mag = 30, dmg = 22, rate = 0.1,   spread = 0.010,  auto = true,  pellets = 1, speed = 420, life = 1.0, ammo = "r556", reload = 2.1, recoil = 0.55, pitch = 1.0,  vol = 0.8,  assist = true,  len = 1.0,  thick = 1.0 },
+  smg     = { name = "UMP45",  mag = 25, dmg = 16, rate = 0.075, spread = 0.018,  auto = true,  pellets = 1, speed = 340, life = 0.8, ammo = "r9",   reload = 1.8, recoil = 0.4,  pitch = 1.25, vol = 0.65, assist = true,  len = 0.75, thick = 0.9 },
+  pistol  = { name = "P1911",  mag = 12, dmg = 26, rate = 0.2,   spread = 0.012,  auto = false, pellets = 1, speed = 380, life = 0.8, ammo = "r9",   reload = 1.4, recoil = 0.8,  pitch = 1.45, vol = 0.6,  assist = true,  len = 0.5,  thick = 0.8 },
+  shotgun = { name = "S12K",   mag = 5,  dmg = 12, rate = 0.85,  spread = 0.07,   auto = false, pellets = 9, speed = 220, life = 0.3, ammo = "g12",  reload = 2.7, recoil = 2.2,  pitch = 0.6,  vol = 1.0,  assist = false, len = 0.95, thick = 1.3 },
+  sniper  = { name = "Kar98k", mag = 5,  dmg = 95, rate = 1.5,   spread = 0.0015, auto = false, pellets = 1, speed = 650, life = 1.2, ammo = "r762", reload = 3.2, recoil = 3.0,  pitch = 0.5,  vol = 1.0,  assist = false, len = 1.35, thick = 0.9 }
+}
+AMMONAMES = { r556 = "5.56", r9 = "9mm", g12 = "12 gauge", r762 = "7.62" }
+AMMOCAP = { r556 = 240, r9 = 150, g12 = 40, r762 = 40 }
+MAXWEAPONS = 3
+MAXGREN = 5
+MAXMED = 4
+grenList = {}
+bloom = 0
 SEATS = { { -0.45, -0.3 }, { 0.45, -0.3 }, { -0.45, 0.7 }, { 0.45, 0.7 } }   -- driver, front passenger, rear left, rear right
 
 function start()
@@ -92,8 +107,19 @@ function start()
   uwK = 0
   rippleT = 0
   strokeT = 0
-  mag = 30
-  reserve = 90
+  -- the bag: weapons (max 3), ammo of four kinds, grenades and medkits
+  slots = { "rifle", "pistol" }
+  cur = 1
+  W = WEAPONS[slots[cur]]
+  mags = { rifle = 30, pistol = 12 }
+  ammoBag = { r556 = 90, r9 = 36, g12 = 0, r762 = 0 }
+  grenades = 2
+  medkits = 1
+  grenList = {}
+  bloom = 0
+  mag = mags[slots[cur]]
+  reserve = ammoBag[W.ammo]
+  gunBase = nil
   reloadT = 0
   fireT = 0
   bullets = {}
@@ -141,6 +167,159 @@ function start()
   lastHp = 100
   statT = 8
   over = false
+end
+
+-- ===== the bag =====
+function storeAmmo()
+  mags[slots[cur]] = mag
+  ammoBag[W.ammo] = reserve
+end
+
+function syncAmmo()
+  W = WEAPONS[slots[cur]]
+  mag = mags[slots[cur]] or 0
+  reserve = ammoBag[W.ammo] or 0
+end
+
+-- the gun in the hands: its length and thickness (first person model and the one in third person)
+function applyGunLook()
+  if gunBase == nil then
+    gunBase = {}
+    local function grab(o)
+      if o ~= nil then return { o.sx, o.sy, o.sz } end
+      return nil
+    end
+    gunBase.v1 = grab(VM[1])
+    gunBase.v2 = grab(VM[2])
+    gunBase.pg = grab(P.gun)
+  end
+  local function scale(o, b)
+    if o ~= nil and b ~= nil then
+      o.sx = b[1] * W.thick
+      o.sy = b[2] * W.thick
+      o.sz = b[3] * W.len
+    end
+  end
+  scale(VM[1], gunBase.v1)
+  scale(VM[2], gunBase.v2)
+  scale(P.gun, gunBase.pg)
+end
+
+function switchWeapon(k)
+  if reloadT > 0 then reloadT = 0 end
+  storeAmmo()
+  cur = k
+  syncAmmo()
+  applyGunLook()
+  fireT = 0.3
+  playSound("reload", 0.5, 1.5)
+  log("Weapon: " .. W.name .. "   " .. mag .. " / " .. reserve .. "  (" .. AMMONAMES[W.ammo] .. ")")
+end
+
+function nextWeapon()
+  if #slots > 1 then
+    switchWeapon(cur % #slots + 1)
+  else
+    log("You carry only one weapon")
+  end
+end
+
+function addAmmo(key, n)
+  ammoBag[key] = math.min(AMMOCAP[key], (ammoBag[key] or 0) + n)
+  if W.ammo == key then reserve = ammoBag[key] end
+  log("+" .. n .. " " .. AMMONAMES[key] .. " ammo  (" .. ammoBag[key] .. ")")
+end
+
+function addWeapon(key)
+  local w = WEAPONS[key]
+  if w == nil then return end
+  for i = 1, #slots do
+    if slots[i] == key then
+      addAmmo(w.ammo, w.mag)
+      log("You already carry the " .. w.name .. " - took its ammo")
+      return
+    end
+  end
+  storeAmmo()
+  if #slots < MAXWEAPONS then
+    slots[#slots + 1] = key
+    mags[key] = w.mag
+    log("Picked up the " .. w.name .. "  (bag: " .. #slots .. " / " .. MAXWEAPONS .. " weapons)")
+    switchWeapon(#slots)
+  else
+    -- the bag is full: the weapon in your hands is swapped for the new one
+    local old = slots[cur]
+    ammoBag[WEAPONS[old].ammo] = math.min(AMMOCAP[WEAPONS[old].ammo], (ammoBag[WEAPONS[old].ammo] or 0) + (mags[old] or 0))
+    mags[old] = nil
+    slots[cur] = key
+    mags[key] = w.mag
+    syncAmmo()
+    applyGunLook()
+    log("Swapped the " .. WEAPONS[old].name .. " for the " .. w.name)
+  end
+  addAmmo(w.ammo, w.mag)
+end
+
+-- loot scripts leave their gifts in these fields of the player; they are put into the bag here
+function collectLoot()
+  if (self.addR556 or 0) > 0 then addAmmo("r556", self.addR556); self.addR556 = 0 end
+  if (self.addR9 or 0) > 0 then addAmmo("r9", self.addR9); self.addR9 = 0 end
+  if (self.addG12 or 0) > 0 then addAmmo("g12", self.addG12); self.addG12 = 0 end
+  if (self.addR762 or 0) > 0 then addAmmo("r762", self.addR762); self.addR762 = 0 end
+  if (self.addGren or 0) > 0 then
+    grenades = math.min(MAXGREN, grenades + self.addGren)
+    self.addGren = 0
+    log("Grenades: " .. grenades)
+  end
+  if (self.addMed or 0) > 0 then
+    medkits = math.min(MAXMED, medkits + self.addMed)
+    self.addMed = 0
+    log("Medkit in the bag (" .. medkits .. "). Tap HEAL to use one")
+  end
+  if self.addWeapon ~= nil and self.addWeapon ~= "" then
+    local k = self.addWeapon
+    self.addWeapon = ""
+    addWeapon(k)
+  end
+end
+
+function useMedkit()
+  if medkits <= 0 then
+    log("No medkit in the bag")
+  elseif self.hp >= 100 then
+    log("Your health is full")
+  else
+    medkits = medkits - 1
+    self.hp = math.min(100, self.hp + 40)
+    playSound("pickup", 0.8)
+    log("Medkit used +40 HP  (" .. math.floor(self.hp) .. ").  Medkits left: " .. medkits)
+  end
+end
+
+function showBag()
+  storeAmmo()
+  local t = {}
+  for i = 1, #slots do
+    local k = slots[i]
+    local mark = ""
+    if i == cur then mark = "* " end
+    t[#t + 1] = mark .. WEAPONS[k].name .. " " .. (mags[k] or 0) .. "/" .. WEAPONS[k].mag
+  end
+  log("BAG  Weapons: " .. table.concat(t, ",  ") .. "   (* = in your hands, max " .. MAXWEAPONS .. ")")
+  log("BAG  Ammo: 5.56 " .. ammoBag.r556 .. " | 9mm " .. ammoBag.r9 .. " | 12 gauge " .. ammoBag.g12 .. " | 7.62 " .. ammoBag.r762)
+  log("BAG  Grenades " .. grenades .. " / " .. MAXGREN .. " | Medkits " .. medkits .. " / " .. MAXMED)
+end
+
+-- WEAPON, GRENADE, HEAL and BAG buttons (work on foot and in a vehicle)
+function handleItems(dt)
+  if gunBase == nil then applyGunLook() end
+  bloom = math.max(0, bloom - dt * 0.09)
+  if input.buttonsPressed["Weapon"] then nextWeapon() end
+  if input.buttonsPressed["Grenade"] then throwGrenade() end
+  if input.buttonsPressed["Heal"] then useMedkit() end
+  if input.buttonsPressed["Bag"] then showBag() end
+  self.nMed = medkits
+  self.nGren = grenades
 end
 
 -- vehicles (cars, motorcycles, helicopters). DRIVE: driver / pilot seat (or get out of it). SEAT: a passenger seat, then the next seat. JUMP: get out.
@@ -241,31 +420,34 @@ function leaveCar(force)
   camera.dist = 3.6
 end
 
--- shooting and reloading (the same rules as on foot); used inside a vehicle too
+-- shooting and reloading (on foot and inside a vehicle)
+function startReload()
+  reloadT = W.reload
+  log("Reloading the " .. W.name .. "...")
+  playSound("reload", 0.8)
+end
+
 function handleShooting(dt)
   fireT = fireT - dt
   if reloadT > 0 then
     reloadT = reloadT - dt
     if reloadT <= 0 then
-      local take = math.min(30 - mag, reserve)
+      local take = math.min(W.mag - mag, reserve)
       mag = mag + take
       reserve = reserve - take
+      storeAmmo()
       log("Reloaded  " .. mag .. " / " .. reserve)
     end
-  elseif input.buttonsPressed["Reload"] and mag < 30 and reserve > 0 then
-    reloadT = 1.4
-    log("Reloading...")
-    playSound("reload", 0.8)
-  elseif input.buttons["Fire"] and fireT <= 0 then
+  elseif input.buttonsPressed["Reload"] and mag < W.mag and reserve > 0 then
+    startReload()
+  elseif ((input.buttons["Fire"] and W.auto) or input.buttonsPressed["Fire"]) and fireT <= 0 then
     if mag > 0 then
       shoot()
     elseif reserve > 0 then
-      reloadT = 1.4
-      log("Reloading...")
-      playSound("reload", 0.8)
+      startReload()
     else
       fireT = 1
-      log("Out of ammo! Find an ammo box.")
+      log("Out of " .. AMMONAMES[W.ammo] .. " ammo for the " .. W.name .. "! Find ammo or tap WEAPON.")
     end
   end
 end
@@ -373,7 +555,7 @@ function moveBullet(b, dt)
   local dx, dy, dz = b.vx * dt, b.vy * dt, b.vz * dt
   local n = math.ceil(math.sqrt(dx * dx + dy * dy + dz * dz) / 0.2)
   if n < 1 then n = 1 end
-  if n > 40 then n = 40 end
+  if n > 60 then n = 60 end
   local sx, sy, sz = dx / n, dy / n, dz / n
   local x, y, z = b.x, b.y, b.z
   for s = 1, n do
@@ -401,7 +583,7 @@ function lineClear(x0, y0, z0, x1, y1, z1)
 end
 
 -- where the crosshair points, with a gentle snap onto an enemy that is almost in line
-function aimDir()
+function aimDir(assist)
   local yaw = math.rad(input.yaw)
   local p = math.rad(camera.pitch)
   local fx = -math.cos(p) * math.sin(yaw)
@@ -417,6 +599,7 @@ function aimDir()
   end
   local best = nil
   local bd = 0.97
+  if assist == false then bd = 2 end
   for k = 1, NBOTS do
     local e = bots[k]
     if e ~= nil and not e.dead and e.hp > 0 then
@@ -439,27 +622,83 @@ function aimDir()
   return fx, fy, fz
 end
 
+-- a flash at the muzzle for a moment
+function muzzleFlash(x, y, z)
+  local o = fxSpawn(x, y, z, 0.3, 0.3, 0.42, 1, 0.8, 0.3, 1)
+  if o ~= nil then
+    o.kind = "flash"
+    o.life = 0.05
+    o.emit = 1
+    fx[#fx + 1] = o
+  end
+end
+
+-- what a bullet does where it lands: 1 = wall (sparks), 2 = ground (dust), 3 = body (red sparks)
+function impactFx(x, y, z, kind)
+  local n = 4
+  if kind == 2 then n = 3 end
+  for i = 1, n do
+    local r, g, b = 1, 0.85, 0.4
+    if kind == 2 then r, g, b = 0.55, 0.45, 0.32 end
+    if kind == 3 then r, g, b = 0.8, 0.1, 0.1 end
+    local o = fxSpawn(x, y, z, 0.09, 0.09, 0.09, r, g, b, 1)
+    if o ~= nil then
+      local a = math.random() * 6.28
+      local sp = 1.5 + math.random() * 3
+      o.kind = "spark"
+      o.vx = math.cos(a) * sp
+      o.vz = math.sin(a) * sp
+      o.vy = 1 + math.random() * 3
+      o.life = 0.35 + math.random() * 0.2
+      if kind == 2 then o.emit = 0 end
+      fx[#fx + 1] = o
+    end
+  end
+end
+
 function shoot()
   mag = mag - 1
-  fireT = 0.12
+  storeAmmo()
+  fireT = W.rate
   aimT = 0.7
   kick = 1
-  playSound("shot", 0.7)
-  local fx, fy, fz = aimDir()
-  local ok, b = pcall(spawn, "sphere", self.x + fx * 1.2, self.y + 0.5 + fy * 1.2, self.z + fz * 1.2)
-  if not ok then return end
-  b.sx = 0.2
-  b.sy = 0.2
-  b.sz = 0.2
-  b.r = 1
-  b.g = 0.85
-  b.b = 0.2
-  b.emit = 1
-  b.vx = fx * 80
-  b.vy = fy * 80
-  b.vz = fz * 80
-  b.life = 1.4
-  bullets[#bullets + 1] = b
+  playSound("shot", W.vol, W.pitch * (0.97 + math.random() * 0.06))
+  local fx0, fy0, fz0 = aimDir(W.assist)
+  local ox, oy, oz = self.x + fx0 * 1.3, self.y + 0.5 + fy0 * 1.3, self.z + fz0 * 1.3
+  muzzleFlash(ox, oy, oz)
+  local sp = W.spread + bloom
+  if legAmp > 1 then sp = sp * 1.6 end
+  for p = 1, W.pellets do
+    local dx = fx0 + (math.random() - 0.5) * 2 * sp
+    local dy = fy0 + (math.random() - 0.5) * 2 * sp
+    local dz = fz0 + (math.random() - 0.5) * 2 * sp
+    local l = math.sqrt(dx * dx + dy * dy + dz * dz)
+    dx, dy, dz = dx / l, dy / l, dz / l
+    local ok, b = pcall(spawn, "cube", ox, oy, oz)
+    if ok then
+      -- a thin bright streak along the flight direction (a tracer), not a ball
+      b.sx = 0.035
+      b.sy = 0.035
+      b.sz = 2.2
+      b.ry = math.deg(math.atan2(dx, dz))
+      b.rx = -math.deg(math.asin(math.max(-1, math.min(1, dy))))
+      b.r = 1
+      b.g = 0.85
+      b.b = 0.3
+      b.emit = 1
+      b.shadow = false
+      b.vx = dx * W.speed
+      b.vy = dy * W.speed
+      b.vz = dz * W.speed
+      b.life = W.life
+      b.dmg = W.dmg
+      bullets[#bullets + 1] = b
+    end
+  end
+  bloom = math.min(0.045, bloom + W.spread * 0.35 + 0.002)
+  -- recoil: the view jumps up and wobbles a little
+  camera.pitch = camera.pitch - W.recoil * (0.7 + math.random() * 0.6)
+  camera.yaw = camera.yaw + (math.random() - 0.5) * W.recoil * 0.7
 end
 
 function updateBullets(dt)
@@ -468,7 +707,10 @@ function updateBullets(dt)
     local ox, oy, oz = b.x, b.y, b.z
     local hit = moveBullet(b, dt)
     b.life = b.life - dt
-    local gone = b.life <= 0 or hit or b.y < groundHeight(b.x, b.z) - 0.1
+    local gh = groundHeight(b.x, b.z)
+    local low = b.y < gh - 0.1
+    local gone = b.life <= 0 or hit or low
+    if hit then impactFx(b.x, b.y, b.z, 1) elseif low then impactFx(b.x, gh, b.z, 2) end
     if not gone then
       local ex, ez = b.x - ox, b.z - oz
       local seg2 = ex * ex + ez * ez + 0.0001
@@ -481,10 +723,18 @@ function updateBullets(dt)
           local dx, dz = e.x - (ox + ex * t), e.z - (oz + ez * t)
           local dy = e.y - (oy + (b.y - oy) * t)
           if dx * dx + dz * dz < 0.9 and math.abs(dy) < 1.1 then
-            e.hp = e.hp - 25
-            playSound("hit", 0.7)
+            local dmg = b.dmg or 25
+            local head = (oy + (b.y - oy) * t) - e.y > 0.5
+            if head then dmg = dmg * 2 end
+            e.hp = e.hp - dmg
+            playSound("hit", 0.7, head and 1.4 or 1)
+            impactFx(b.x, b.y, b.z, 3)
             gone = true
-            if e.hp <= 0 then log("Enemy down!  " .. countAlive() .. " left") end
+            if e.hp <= 0 then
+              if head then log("Headshot! Enemy down!  " .. countAlive() .. " left") else log("Enemy down!  " .. countAlive() .. " left") end
+            elseif head then
+              log("Headshot!")
+            end
             break
           end
         end
@@ -495,6 +745,130 @@ function updateBullets(dt)
       table.remove(bullets, i)
     end
   end
+end
+
+-- ===== grenades =====
+function throwGrenade()
+  if grenades <= 0 then
+    log("No grenades")
+    return
+  end
+  if swimming then return end
+  grenades = grenades - 1
+  playSound("pin", 0.8)
+  aimT = 0.5
+  local fx0, fy0, fz0 = aimDir(false)
+  local ok, g = pcall(spawn, "sphere", self.x + fx0 * 0.9, self.y + 0.7, self.z + fz0 * 0.9)
+  if not ok then
+    grenades = grenades + 1
+    return
+  end
+  g.sx = 0.24
+  g.sy = 0.24
+  g.sz = 0.24
+  g.r = 0.22
+  g.g = 0.32
+  g.b = 0.14
+  g.shadow = false
+  g.vx = fx0 * 17
+  g.vy = fy0 * 17 + 5
+  g.vz = fz0 * 17
+  g.fuse = 3
+  grenList[#grenList + 1] = g
+  log("Grenade thrown (" .. grenades .. " left) - it explodes in 3 seconds")
+end
+
+function updateGrenades(dt)
+  for i = #grenList, 1, -1 do
+    local g = grenList[i]
+    g.fuse = g.fuse - dt
+    g.vy = g.vy - 15 * dt
+    local nx, ny, nz = g.x + g.vx * dt, g.y + g.vy * dt, g.z + g.vz * dt
+    if pointInWall(nx, ny, nz) then
+      -- bounce off a wall or a ceiling / floor
+      if pointInWall(nx, g.y, g.z) then g.vx = -g.vx * 0.4; nx = g.x end
+      if pointInWall(g.x, g.y, nz) then g.vz = -g.vz * 0.4; nz = g.z end
+      if pointInWall(g.x, ny, g.z) then g.vy = -g.vy * 0.3; ny = g.y end
+    end
+    local gh = groundHeight(nx, nz)
+    if ny < gh + 0.13 then
+      ny = gh + 0.13
+      if g.vy < 0 then g.vy = -g.vy * 0.35 end
+      g.vx = g.vx * 0.7
+      g.vz = g.vz * 0.7
+    end
+    g.x, g.y, g.z = nx, ny, nz
+    if g.fuse <= 0 then
+      explode(g.x, g.y, g.z)
+      destroy(g)
+      table.remove(grenList, i)
+    end
+  end
+end
+
+function blastFx(x, y, z)
+  local o = fxSpawn(x, y, z, 2, 2, 2, 1, 0.75, 0.25, 0.9)
+  if o ~= nil then
+    o.kind = "blast"
+    o.life = 0.3
+    o.age = 0
+    o.emit = 1
+    fx[#fx + 1] = o
+  end
+  for i = 1, 16 do
+    local s = fxSpawn(x, y + 0.3, z, 0.16, 0.16, 0.16, 1, 0.7 + math.random() * 0.3, 0.2, 1)
+    if s ~= nil then
+      local a = math.random() * 6.28
+      local e = math.random() * 1.2
+      local sp = 6 + math.random() * 9
+      s.kind = "spark"
+      s.vx = math.cos(a) * math.cos(e) * sp
+      s.vy = math.sin(e) * sp + 2
+      s.vz = math.sin(a) * math.cos(e) * sp
+      s.life = 0.6 + math.random() * 0.5
+      s.emit = 1
+      fx[#fx + 1] = s
+    end
+  end
+  for i = 1, 8 do
+    local s = fxSpawn(x + (math.random() - 0.5) * 2, y + 0.3, z + (math.random() - 0.5) * 2, 0.8, 0.8, 0.8, 0.25, 0.25, 0.25, 0.7)
+    if s ~= nil then
+      s.kind = "smoke"
+      s.vx = (math.random() - 0.5) * 2
+      s.vy = 1.5 + math.random() * 1.5
+      s.vz = (math.random() - 0.5) * 2
+      s.life = 1.6
+      s.emit = 0
+      fx[#fx + 1] = s
+    end
+  end
+end
+
+function explode(x, y, z)
+  playSound("boom", 1, 0.9 + math.random() * 0.2)
+  local R = 9
+  for k = 1, NBOTS do
+    local e = bots[k]
+    if e ~= nil and not e.dead and e.hp > 0 then
+      local dx, dy, dz = e.x - x, e.y - y, e.z - z
+      local d = math.sqrt(dx * dx + dy * dy + dz * dz)
+      if d < R then
+        local dmg = 150 * (1 - d / R)
+        if not lineClear(x, y + 0.3, z, e.x, e.y, e.z) then dmg = dmg * 0.25 end
+        e.hp = e.hp - dmg
+        if e.hp <= 0 then log("Enemy blown up!  " .. countAlive() .. " left") end
+      end
+    end
+  end
+  local dx, dy, dz = self.x - x, self.y - y, self.z - z
+  local d = math.sqrt(dx * dx + dy * dy + dz * dz)
+  if d < R and not self.dead then
+    local dmg = 90 * (1 - d / R)
+    if not lineClear(x, y + 0.3, z, self.x, self.y, self.z) then dmg = dmg * 0.25 end
+    self.hp = self.hp - dmg
+    log("The blast hit you!  HP " .. math.max(0, math.floor(self.hp)))
+  end
+  blastFx(x, y, z)
 end
 
 -- ===== watchtower stairs: the floor height under (x, z), or nil when there is no stair there =====
@@ -621,7 +995,7 @@ end
 
 -- ===== water effects: ripples and splash drops (little see-through spheres) =====
 function fxSpawn(x, y, z, sx, sy, sz, r, g, b, op)
-  if #fx >= 40 then return nil end
+  if #fx >= 90 then return nil end
   local ok, o = pcall(spawn, "sphere", x, y, z)
   if not ok then return nil end
   o.sx = sx
@@ -690,6 +1064,29 @@ function updateFx(dt)
       o.y = o.y + o.vy * dt
       o.x = o.x + math.sin(time * 5 + o.ph) * 0.25 * dt
       o.opacity = 0.6 * math.min(1, o.life / 0.5)
+    elseif o.kind == "flash" then
+      -- the muzzle flash just stays for its short life
+    elseif o.kind == "spark" then
+      o.vy = o.vy - 14 * dt
+      o.x = o.x + o.vx * dt
+      o.y = o.y + o.vy * dt
+      o.z = o.z + o.vz * dt
+      o.opacity = math.min(1, o.life / 0.3)
+    elseif o.kind == "smoke" then
+      o.x = o.x + o.vx * dt
+      o.y = o.y + o.vy * dt
+      o.z = o.z + o.vz * dt
+      o.sx = o.sx + 1.6 * dt
+      o.sy = o.sx
+      o.sz = o.sx
+      o.opacity = 0.7 * math.min(1, o.life / 1)
+    elseif o.kind == "blast" then
+      o.age = o.age + dt
+      local k = math.min(1, o.age / 0.3)
+      o.sx = 2 + k * 14
+      o.sy = o.sx
+      o.sz = o.sx
+      o.opacity = 0.9 * (1 - k)
     else
       o.vy = o.vy - 12 * dt
       o.x = o.x + o.vx * dt
@@ -710,6 +1107,7 @@ function update(dt)
   end
   updateBullets(dt)
   updateFx(dt)
+  updateGrenades(dt)
   if self.dead then
     deadT = deadT + dt
     if camera.firstPerson then camera.firstPerson = false end
@@ -719,6 +1117,7 @@ function update(dt)
 
   -- cars: DRIVE = driver seat, SEAT = passenger seats, JUMP = get out
   updateCarButtons()
+  handleItems(dt)
   if input.buttonsPressed["Drive"] then
     if self.car == nil then
       local c = nearestCar()
@@ -905,39 +1304,13 @@ function update(dt)
   wasUwK = uwK > 0
 
   -- pickups
-  if self.reserveAdd > 0 then
-    reserve = reserve + self.reserveAdd
-    self.reserveAdd = 0
-    log("Ammo picked up  (" .. reserve .. " spare)")
-  end
+  collectLoot()
 
   -- shooting (not while swimming)
-  fireT = fireT - dt
   if swimming then
-    -- no shooting in deep water
-  elseif reloadT > 0 then
-    reloadT = reloadT - dt
-    if reloadT <= 0 then
-      local take = math.min(30 - mag, reserve)
-      mag = mag + take
-      reserve = reserve - take
-      log("Reloaded  " .. mag .. " / " .. reserve)
-    end
-  elseif input.buttonsPressed["Reload"] and mag < 30 and reserve > 0 then
-    reloadT = 1.4
-    log("Reloading...")
-    playSound("reload", 0.8)
-  elseif input.buttons["Fire"] and fireT <= 0 then
-    if mag > 0 then
-      shoot()
-    elseif reserve > 0 then
-      reloadT = 1.4
-      log("Reloading...")
-    playSound("reload", 0.8)
-    else
-      fireT = 1
-      log("Out of ammo! Find an ammo box.")
-    end
+    fireT = fireT - dt
+  else
+    handleShooting(dt)
   end
 
   -- the person: pose, swim stroke, and hide the body in first person
@@ -999,7 +1372,7 @@ function update(dt)
   statT = statT - dt
   if statT <= 0 and not over then
     statT = 8
-    log("HP " .. math.floor(self.hp) .. "   Ammo " .. mag .. "/" .. reserve .. "   Enemies " .. countAlive() .. "   Zone " .. math.floor(zone.radius or 0))
+    log("HP " .. math.floor(self.hp) .. "   " .. W.name .. " " .. mag .. "/" .. reserve .. "   Grenades " .. grenades .. "   Medkits " .. medkits .. "   Enemies " .. countAlive() .. "   Zone " .. math.floor(zone.radius or 0))
   end
 end
 """
@@ -1762,7 +2135,7 @@ function update(dt)
 end
 """
 
-    private val BR_MEDKIT = """-- Medkit: walk over it to heal 40 HP. It comes back after 25 seconds.
+    private val BR_MEDKIT = """-- Medkit: walk over it to put it in your bag (tap HEAL to use it). It comes back after 25 seconds.
 function start()
   phase = math.random() * 6
   home = self.y
@@ -1781,16 +2154,15 @@ end
 
 function oncollide(other)
   if taken > 0 or other.name ~= "Player" or other.dead then return end
-  if other.hp >= 100 then return end
-  other.hp = math.min(100, other.hp + 40)
+  if (other.nMed or 0) >= 4 then return end
+  other.addMed = (other.addMed or 0) + 1
   playSound("pickup", 0.8)
   taken = 25
   self.y = -50
-  log("Medkit +40 HP  (" .. math.floor(other.hp) .. ")")
 end
 """
 
-    private val BR_AMMO = """-- Ammo box: walk over it for 30 more bullets. It comes back after 25 seconds.
+    private val BR_AMMO = """-- Ammo box (the kind and the amount are filled in when the game is built): walk over it. It comes back after 25 seconds.
 function start()
   phase = math.random() * 6
   home = self.y
@@ -1809,9 +2181,60 @@ end
 
 function oncollide(other)
   if taken > 0 or other.name ~= "Player" or other.dead then return end
-  other.reserveAdd = (other.reserveAdd or 0) + 30
+  other.%F% = (other.%F% or 0) + %N%
   playSound("pickup", 0.8, 1.2)
   taken = 25
+  self.y = -50
+end
+"""
+    private val BR_WEAPON = """-- A weapon on the ground: walk over it to put it in your bag. It comes back after 60 seconds.
+function start()
+  phase = math.random() * 6
+  home = self.y
+  taken = 0
+end
+
+function update(dt)
+  if taken > 0 then
+    taken = taken - dt
+    if taken <= 0 then self.y = home end
+    return
+  end
+  self.ry = self.ry + 60 * dt
+  self.y = home + 0.15 + math.sin(time * 3 + phase) * 0.1
+end
+
+function oncollide(other)
+  if taken > 0 or other.name ~= "Player" or other.dead then return end
+  other.addWeapon = "%W%"
+  playSound("pickup", 0.8, 0.8)
+  taken = 60
+  self.y = -50
+end
+"""
+    private val BR_GRENADE = """-- Grenades: walk over them to put two in your bag. They come back after 40 seconds.
+function start()
+  phase = math.random() * 6
+  home = self.y
+  taken = 0
+end
+
+function update(dt)
+  if taken > 0 then
+    taken = taken - dt
+    if taken <= 0 then self.y = home end
+    return
+  end
+  self.ry = self.ry + 100 * dt
+  self.y = home + 0.15 + math.sin(time * 3 + phase) * 0.1
+end
+
+function oncollide(other)
+  if taken > 0 or other.name ~= "Player" or other.dead then return end
+  if (other.nGren or 0) >= 5 then return end
+  other.addGren = (other.addGren or 0) + 2
+  playSound("pickup", 0.8, 0.9)
+  taken = 40
   self.y = -50
 end
 """
@@ -2263,7 +2686,7 @@ end
                 .append(", tread = ").append(tread).append(", n = ").append(n).append(", rise = ").append(rise)
                 .append(", base = ").append(base).append(", dir = ").append(dir).append(", smooth = ").append(smooth).append(" }")
         }
-        val houseLoot = ArrayList<FloatArray>()      // x, y, z, 0 = medkit / 1 = ammo box
+        val houseLoot = ArrayList<FloatArray>()      // x, y, z, 0 = medkit / 1 = ammo box / 2 = weapon / 3 = grenades
         // level the ground under a house (and a little beyond), so the door is simply walked into: no stairs, no steps
         fun flattenPad(cx: Float, cz: Float, hw: Float, hd: Float, level: Float) {
             val hs = land.heights ?: return
@@ -2565,10 +2988,10 @@ end
             // loot: one in each of the three back rooms of the ground floor, one on each upper floor
             houseLoot.add(floatArrayOf(cx - W * 0.34f, top + 0.5f, cz - hd * 0.7f, 0f))
             houseLoot.add(floatArrayOf(cx, top + 0.5f, cz - hd * 0.7f, 1f))
-            houseLoot.add(floatArrayOf(cx + W * 0.34f, top + 0.5f, cz - hd * 0.7f, 0f))
-            houseLoot.add(floatArrayOf(cx - W * 0.1f, top + 0.5f, cz + hd * 0.5f, 1f))
+            houseLoot.add(floatArrayOf(cx + W * 0.34f, top + 0.5f, cz - hd * 0.7f, 2f))
+            houseLoot.add(floatArrayOf(cx - W * 0.1f, top + 0.5f, cz + hd * 0.5f, 3f))
             for (k in 1 until floors) {
-                houseLoot.add(floatArrayOf(cx + W * 0.12f, top + k * floorH + 0.5f, cz + hd * 0.2f, if (k % 2 == 0) 1f else 0f))
+                houseLoot.add(floatArrayOf(cx + W * 0.12f, top + k * floorH + 0.5f, cz + hd * 0.2f, if (k % 3 == 0) 2f else if (k % 3 == 1) 1f else 0f))
             }
             // furniture on every floor: between the two stair strips, along the walls or free in the room, never in a doorway or on a loot spot
             if (withFurniture) run {
@@ -3031,17 +3454,52 @@ end
             val o = mk(scene, Shape.CUBE, "Medkit " + medN, x, y, z, 0.5f, 0.5f, 0.5f, floatArrayOf(0.9f, 0.15f, 0.15f), BR_MEDKIT)
             o.collider = 2; o.emit = 0.35f; o.shadow = false
         }
+        // four kinds of ammo (colour coded): 5.56 yellow, 9mm orange, 12 gauge red, 7.62 blue
+        val ammoField = arrayOf("addR556", "addR9", "addG12", "addR762")
+        val ammoAmt = intArrayOf(30, 24, 6, 8)
+        val ammoCol = arrayOf(floatArrayOf(0.95f, 0.8f, 0.15f), floatArrayOf(0.95f, 0.5f, 0.1f), floatArrayOf(0.85f, 0.2f, 0.2f), floatArrayOf(0.25f, 0.45f, 0.95f))
+        val ammoPick = intArrayOf(0, 0, 0, 1, 1, 2, 3)
         fun ammo(x: Float, y: Float, z: Float) {
             ammoN++
-            val o = mk(scene, Shape.CUBE, "Ammo " + ammoN, x, y, z, 0.5f, 0.35f, 0.6f, floatArrayOf(0.95f, 0.8f, 0.15f), BR_AMMO)
+            val t = ammoPick[rnd.nextInt(ammoPick.size)]
+            val o = mk(scene, Shape.CUBE, "Ammo " + ammoN, x, y, z, 0.5f, 0.35f, 0.6f, ammoCol[t],
+                BR_AMMO.replace("%F%", ammoField[t]).replace("%N%", ammoAmt[t].toString()))
             o.collider = 2; o.emit = 0.35f; o.shadow = false
         }
+        // weapons lie around as long flat shapes in the colour of the gun
+        val weaponKeys = arrayOf("rifle", "rifle", "rifle", "rifle", "smg", "smg", "smg", "shotgun", "shotgun", "pistol", "pistol", "sniper")
+        val weaponLen = mapOf("rifle" to 1.0f, "smg" to 0.7f, "pistol" to 0.4f, "shotgun" to 0.95f, "sniper" to 1.3f)
+        val weaponCol = mapOf(
+            "rifle" to floatArrayOf(0.25f, 0.3f, 0.25f), "smg" to floatArrayOf(0.3f, 0.3f, 0.38f), "pistol" to floatArrayOf(0.35f, 0.35f, 0.35f),
+            "shotgun" to floatArrayOf(0.45f, 0.28f, 0.15f), "sniper" to floatArrayOf(0.2f, 0.34f, 0.15f)
+        )
+        var weapN = 0
+        fun weaponBox(x: Float, y: Float, z: Float, key: String) {
+            weapN++
+            val o = mk(scene, Shape.CUBE, "Weapon " + weapN, x, y, z, 0.14f, 0.16f, weaponLen[key] ?: 0.8f, weaponCol[key] ?: floatArrayOf(0.3f, 0.3f, 0.3f),
+                BR_WEAPON.replace("%W%", key))
+            o.collider = 2; o.emit = 0.45f; o.shadow = false
+            o.ry = rnd.nextFloat() * 360f
+        }
+        fun randomWeapon(x: Float, y: Float, z: Float) = weaponBox(x, y, z, weaponKeys[rnd.nextInt(weaponKeys.size)])
+        var grenN = 0
+        fun grenadePack(x: Float, y: Float, z: Float) {
+            grenN++
+            val o = mk(scene, Shape.SPHERE, "Grenades " + grenN, x, y, z, 0.32f, 0.32f, 0.32f, floatArrayOf(0.22f, 0.4f, 0.16f), BR_GRENADE)
+            o.collider = 2; o.emit = 0.4f; o.shadow = false
+        }
         for (l in houseLoot) {
-            if (l[3] < 0.5f) medkit(l[0], l[1], l[2]) else ammo(l[0], l[1], l[2])
+            when (l[3].toInt()) {
+                0 -> medkit(l[0], l[1], l[2])
+                1 -> ammo(l[0], l[1], l[2])
+                2 -> randomWeapon(l[0], l[1], l[2])
+                else -> grenadePack(l[0], l[1], l[2])
+            }
         }
         for (t in towerSpots) {
             medkit(t[0] - 1.6f, t[2] + 10f + 0.5f, t[1] - 1.6f)
             ammo(t[0] + 1.6f, t[2] + 10f + 0.5f, t[1] - 1.6f)
+            weaponBox(t[0], t[2] + 10f + 0.5f, t[1] + 1.6f, "sniper")
         }
         var extra = 0
         tries = 0
@@ -3051,7 +3509,12 @@ end
             val z = (rnd.nextFloat() - 0.5f) * 0.8f * map
             val h = ground(x, z) ?: continue
             if (h < seaY + 0.5f) continue
-            if (extra % 2 == 0) medkit(x, h + 0.5f, z) else ammo(x, h + 0.5f, z)
+            when (extra % 4) {
+                0 -> medkit(x, h + 0.5f, z)
+                1 -> ammo(x, h + 0.5f, z)
+                2 -> randomWeapon(x, h + 0.5f, z)
+                else -> grenadePack(x, h + 0.5f, z)
+            }
             extra++
         }
 
@@ -3124,6 +3587,10 @@ end
         scene.addButton()?.let { it.name = "Seat"; it.x = 75f; it.y = 34f; it.sx = 0.8f }
         scene.addButton()?.let { it.name = "Climb"; it.x = 90f; it.y = 14f; it.sx = 0.9f }
         scene.addButton()?.let { it.name = "Descend"; it.x = 75f; it.y = 16f; it.sx = 0.9f }
+        scene.addButton()?.let { it.name = "Weapon"; it.x = 46f; it.y = 66f; it.sx = 0.9f }
+        scene.addButton()?.let { it.name = "Grenade"; it.x = 92f; it.y = 70f; it.sx = 0.9f }
+        scene.addButton()?.let { it.name = "Heal"; it.x = 46f; it.y = 80f; it.sx = 0.8f }
+        scene.addButton()?.let { it.name = "Bag"; it.x = 62f; it.y = 86f; it.sx = 0.8f }
         Rig.apply(scene)
         scene.selected = null
     }

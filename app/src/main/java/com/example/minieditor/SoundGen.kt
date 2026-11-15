@@ -9,7 +9,7 @@ import kotlin.math.sin
 
 /**
  * Small synthesized sound effects (WAV) for the sample games, so they have sound without any file to import.
- * Names: shot, splash, swim, reload, pickup, hit, bubble, gasp, door.
+ * Names: shot, splash, swim, reload, pickup, hit, bubble, gasp, door, boom, pin.
  */
 object SoundGen {
     private const val RATE = 22050
@@ -53,6 +53,24 @@ object SoundGen {
         return wav(0.28f) { t, _ ->
             lp += (r.next() - lp) * 0.55f
             lp * exp(-t * 26f) * 1.0f + tone(95f, t) * exp(-t * 16f) * 0.8f + tone(190f, t) * exp(-t * 30f) * 0.3f
+        }
+    }
+
+    /** A grenade blast: a deep boom with a long rumble. */
+    private fun boom(): ByteArray {
+        val r = Rng(7)
+        var lp = 0f
+        return wav(1.3f) { t, _ ->
+            lp += (r.next() - lp) * (0.25f * exp(-t * 2.5f) + 0.03f)
+            lp * exp(-t * 2.6f) * 2.4f + tone(48f, t) * exp(-t * 3.5f) * 0.9f + tone(95f, t) * exp(-t * 7f) * 0.5f
+        }
+    }
+
+    /** The click of a grenade pin. */
+    private fun pin(): ByteArray {
+        val r = Rng(8)
+        return wav(0.14f) { t, _ ->
+            tone(2300f, t) * exp(-t * 55f) * 0.5f + r.next() * exp(-t * 80f) * 0.35f + tone(900f, t) * exp(-t * 30f) * 0.3f
         }
     }
 
@@ -170,7 +188,8 @@ object SoundGen {
         val all = mapOf(
             "shot.wav" to shot(), "splash.wav" to splash(), "swim.wav" to swim(),
             "reload.wav" to reload(), "pickup.wav" to pickup(), "hit.wav" to hit(),
-            "bubble.wav" to bubbleSnd(), "gasp.wav" to gasp(), "door.wav" to door()
+            "bubble.wav" to bubbleSnd(), "gasp.wav" to gasp(), "door.wav" to door(),
+            "boom.wav" to boom(), "pin.wav" to pin()
         )
         for ((name, bytes) in all) {
             try { File(dir, name).writeBytes(bytes) } catch (e: Throwable) { }
