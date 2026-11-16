@@ -760,6 +760,7 @@ function updateBullets(dt)
             local head = (oy + (b.y - oy) * t) - e.y > 0.5
             if head then dmg = dmg * 2 end
             e.hp = e.hp - dmg
+            camera.hit = (head or e.hp <= 0) and 2 or 1
             playSound("hit", 0.7, head and 1.4 or 1)
             impactFx(b.x, b.y, b.z, 3)
             gone = true
@@ -794,6 +795,7 @@ function throwGrenade()
   local ok, g = pcall(spawn, "sphere", self.x + fx0 * 0.9, self.y + 0.7, self.z + fz0 * 0.9)
   if not ok then
     grenades = grenades + 1
+    log("Too many objects - cannot throw")
     return
   end
   g.sx = 0.24
@@ -840,14 +842,32 @@ function updateGrenades(dt)
 end
 
 function blastFx(x, y, z)
-  local o = fxSpawn(x, y, z, 2, 2, 2, 1, 0.75, 0.25, 0.9)
+  -- big orange fireball
+  local o = fxSpawn(x, y + 0.5, z, 3, 3, 3, 1, 0.6, 0.15, 0.95)
   if o ~= nil then
     o.kind = "blast"
-    o.life = 0.3
+    o.life = 0.55
+    o.dur = 0.55
+    o.big = 20
     o.age = 0
     o.emit = 1
     fx[#fx + 1] = o
   end
+  -- white hot core
+  local c = fxSpawn(x, y + 0.5, z, 2, 2, 2, 1, 1, 0.85, 1)
+  if c ~= nil then
+    c.kind = "blast"
+    c.life = 0.25
+    c.dur = 0.25
+    c.big = 9
+    c.age = 0
+    c.emit = 1
+    fx[#fx + 1] = c
+  end
+  -- the view shakes when you are close
+  local sdx, sdz = self.x - x, self.z - z
+  local sd = math.sqrt(sdx * sdx + sdz * sdz)
+  if sd < 25 then camera.pitch = camera.pitch - (1 - sd / 25) * 5 end
   for i = 1, 16 do
     local s = fxSpawn(x, y + 0.3, z, 0.16, 0.16, 0.16, 1, 0.7 + math.random() * 0.3, 0.2, 1)
     if s ~= nil then
@@ -889,6 +909,7 @@ function explode(x, y, z)
         local dmg = 150 * (1 - d / R)
         if not lineClear(x, y + 0.3, z, e.x, e.y, e.z) then dmg = dmg * 0.25 end
         e.hp = e.hp - dmg
+        camera.hit = (e.hp <= 0) and 2 or 1
         if e.hp <= 0 then log("Enemy blown up!  " .. countAlive() .. " left") end
       end
     end
@@ -1028,7 +1049,7 @@ end
 
 -- ===== water effects: ripples and splash drops (little see-through spheres) =====
 function fxSpawn(x, y, z, sx, sy, sz, r, g, b, op)
-  if #fx >= 90 then return nil end
+  if #fx >= 160 then return nil end
   local ok, o = pcall(spawn, "sphere", x, y, z)
   if not ok then return nil end
   o.sx = sx
@@ -1115,11 +1136,11 @@ function updateFx(dt)
       o.opacity = 0.7 * math.min(1, o.life / 1)
     elseif o.kind == "blast" then
       o.age = o.age + dt
-      local k = math.min(1, o.age / 0.3)
-      o.sx = 2 + k * 14
+      local k = math.min(1, o.age / (o.dur or 0.3))
+      o.sx = 3 + k * (o.big or 14)
       o.sy = o.sx
       o.sz = o.sx
-      o.opacity = 0.9 * (1 - k)
+      o.opacity = 0.95 * (1 - k)
     else
       o.vy = o.vy - 12 * dt
       o.x = o.x + o.vx * dt

@@ -53,7 +53,7 @@ class ScriptEngine(private val scene: Scene, private val log: (String) -> Unit) 
     private val worldPushed = FloatArray(6)
     private var time = 0f
     private var spawnCount = 0
-    private val maxObjects = 1200
+    private val maxObjects = 2400
 
     var touching = false
     var touchX = 0f
@@ -79,6 +79,8 @@ class ScriptEngine(private val scene: Scene, private val log: (String) -> Unit) 
     /** Set by scripts with camera.fov = degrees (zoom); the app takes it and clears it. */
     @Volatile var fovOut: Float? = null
     private var fovPushed = Float.NaN
+    /** Set by scripts with camera.hit = 1 (body hit) or 2 (headshot / kill): the app flashes the crosshair red and clears it. */
+    @Volatile var hitOut = 0
     /** Where the camera is (read only for scripts: camera.x, camera.y, camera.z). */
     var camX = 0f
     var camY = 0f
@@ -366,6 +368,7 @@ class ScriptEngine(private val scene: Scene, private val log: (String) -> Unit) 
     private fun pullCamera() {
         num(camera, "dist")?.let { if (it != distPushed) { distPushed = it; distOut = it } }
         num(camera, "fov")?.let { if (it != fovPushed) { fovPushed = it; fovOut = it } }
+        num(camera, "hit")?.let { if (it > 0f) { hitOut = it.toInt().coerceIn(1, 2); camera.set("hit", 0.0) } }
         val f = camera.get("firstPerson")
         if (f.isboolean() && f.toboolean() != fpPushed) fpRequest = f.toboolean()
         val t = camera.get("target")

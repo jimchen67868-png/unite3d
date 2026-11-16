@@ -1035,6 +1035,11 @@ end
                     editor.renderer.fov = fv.coerceIn(4f, 90f)
                     it.fovOut = null
                 }
+                if (it.hitOut > 0) {
+                    crosshair.hit(it.hitOut)
+                    scope.hit(it.hitOut)
+                    it.hitOut = 0
+                }
                 it.distOut?.let { dv ->
                     editor.renderer.tpDist = dv.coerceIn(1.8f, 12f)
                     it.distOut = null

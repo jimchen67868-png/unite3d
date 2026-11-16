@@ -4,6 +4,7 @@ import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.Path
+import android.os.SystemClock
 import android.view.View
 
 /** A sniper scope: black all round, a round window in the middle and a fine crosshair. Shown while the view is zoomed in a lot. */
@@ -12,6 +13,14 @@ class ScopeView(ctx: Context) : View(ctx) {
     private val thin = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFF000000.toInt(); style = Paint.Style.STROKE; strokeWidth = 2.5f; strokeCap = Paint.Cap.BUTT }
     private val thick = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFF000000.toInt(); style = Paint.Style.STROKE; strokeWidth = 9f; strokeCap = Paint.Cap.BUTT }
     private val dot = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFFFF3030.toInt(); style = Paint.Style.FILL }
+
+    private var hitAt = 0L
+
+    /** An enemy was hit: the crosshair and the dot turn red for a moment. */
+    fun hit(kind: Int) {
+        hitAt = SystemClock.uptimeMillis()
+        postInvalidateOnAnimation()
+    }
 
     init {
         isClickable = false
@@ -28,6 +37,10 @@ class ScopeView(ctx: Context) : View(ctx) {
         p.addCircle(cx, cy, r, Path.Direction.CW)
         p.fillType = Path.FillType.INVERSE_WINDING
         c.drawPath(p, black)
+        val hot = hitAt != 0L && SystemClock.uptimeMillis() - hitAt < 450L
+        val keepT = thin.color
+        val keepK = thick.color
+        if (hot) { thin.color = 0xFFFF2020.toInt(); thick.color = 0xFFFF2020.toInt(); postInvalidateOnAnimation() }
         // the crosshair: fine in the middle, thick towards the rim
         c.drawLine(cx - r, cy, cx + r, cy, thin)
         c.drawLine(cx, cy - r, cx, cy + r, thin)
@@ -36,6 +49,8 @@ class ScopeView(ctx: Context) : View(ctx) {
         c.drawLine(cx + a, cy, cx + r, cy, thick)
         c.drawLine(cx, cy - r, cx, cy - a, thick)
         c.drawLine(cx, cy + a, cx, cy + r, thick)
-        c.drawCircle(cx, cy, 3f, dot)
+        c.drawCircle(cx, cy, if (hot) 9f else 3f, dot)
+        thin.color = keepT
+        thick.color = keepK
     }
 }
