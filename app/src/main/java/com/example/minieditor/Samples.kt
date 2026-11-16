@@ -62,6 +62,7 @@ end
 -- Joystick = move, drag the screen = look, hold FIRE = shoot, RELOAD, JUMP, VIEW = 1st / 3rd person.
 local NBOTS = 8
 STAIRS = {}
+TREES = {}
 -- ===== weapons: every gun has its own numbers =====
 WEAPONS = {
   rifle   = { name = "M416",   mag = 30, dmg = 22, rate = 0.1,   spread = 0.010,  auto = true,  pellets = 1, speed = 420, life = 1.0, ammo = "r556", reload = 2.1, recoil = 0.55, pitch = 1.0,  vol = 0.8,  assist = true,  len = 1.0,  thick = 1.0 },
@@ -167,6 +168,9 @@ function start()
       ci = ci + 1
     end
   end
+  buildTreeGrid()
+  nearCars = {}
+  hitKind = 1
   climbBtn = find("Climb")
   descBtn = find("Descend")
   if climbBtn ~= nil then climbBtn.opacity = 0 end
@@ -632,7 +636,61 @@ function pointInWall(x, y, z)
   return false
 end
 
--- moves a bullet in small steps so it cannot jump through a thin wall; true if it hit one
+-- tree trunks are put into a grid once, so a bullet only tests the few trunks near it
+TGRID = {}
+function buildTreeGrid()
+  TGRID = {}
+  for i = 1, #TREES do
+    local t = TREES[i]
+    local seen = {}
+    for _, ox in ipairs({ -t[4], t[4] }) do
+      for _, oz in ipairs({ -t[4], t[4] }) do
+        local key = (math.floor((t[1] + ox) / 8) + 512) * 1024 + math.floor((t[2] + oz) / 8) + 512
+        if not seen[key] then
+          seen[key] = true
+          local l = TGRID[key]
+          if l == nil then
+            l = {}
+            TGRID[key] = l
+          end
+          l[#l + 1] = t
+        end
+      end
+    end
+  end
+end
+
+function treeAt(x, y, z)
+  local l = TGRID[(math.floor(x / 8) + 512) * 1024 + math.floor(z / 8) + 512]
+  if l == nil then return false end
+  for i = 1, #l do
+    local t = l[i]
+    local dx, dz = x - t[1], z - t[2]
+    if dx * dx + dz * dz < t[4] * t[4] and y > t[3] and y < t[3] + t[5] then return true end
+  end
+  return false
+end
+
+-- is the point inside a vehicle (a box turned by the vehicle's heading)?
+function carAt(x, y, z)
+  for i = 1, #nearCars do
+    local c = nearCars[i]
+    local dy = y - c.y
+    if dy > -0.5 and dy < 1.3 then
+      local dx, dz = x - c.x, z - c.z
+      if math.abs(dx) < 4 and math.abs(dz) < 4 then
+        local a = math.rad(c.ry or 0)
+        local cs, sn = math.cos(a), math.sin(a)
+        local lx = dx * cs - dz * sn
+        local lz = dx * sn + dz * cs
+        if math.abs(lx) < math.max(0.45, c.sx * 0.5) and math.abs(lz) < math.max(0.6, c.sz * 0.5) then return true end
+      end
+    end
+  end
+  return false
+end
+
+-- moves a bullet in small steps so it cannot jump through a thin wall; true if it hit a wall, a tree trunk or a vehicle (hitKind says which)
 function moveBullet(b, dt)
   local dx, dy, dz = b.vx * dt, b.vy * dt, b.vz * dt
   local n = math.ceil(math.sqrt(dx * dx + dy * dy + dz * dz) / 0.2)
@@ -644,7 +702,16 @@ function moveBullet(b, dt)
     x = x + sx
     y = y + sy
     z = z + sz
+    local k = 0
     if pointInWall(x, y, z) then
+      k = 1
+    elseif treeAt(x, y, z) then
+      k = 4
+    elseif #nearCars > 0 and carAt(x, y, z) then
+      k = 5
+    end
+    if k > 0 then
+      hitKind = k
       b.x, b.y, b.z = x, y, z
       return true
     end
@@ -725,25 +792,64 @@ function muzzleFlash(x, y, z)
   end
 end
 
--- what a bullet does where it lands: 1 = wall (sparks), 2 = ground (dust), 3 = body (red sparks)
-function impactFx(x, y, z, kind)
-  local n = 4
-  if kind == 2 then n = 3 end
-  for i = 1, n do
-    local r, g, b = 1, 0.85, 0.4
-    if kind == 2 then r, g, b = 0.55, 0.45, 0.32 end
-    if kind == 3 then r, g, b = 0.8, 0.1, 0.1 end
-    local o = fxSpawn(x, y, z, 0.09, 0.09, 0.09, r, g, b, 1)
-    if o ~= nil then
-      local a = math.random() * 6.28
-      local sp = 1.5 + math.random() * 3
-      o.kind = "spark"
-      o.vx = math.cos(a) * sp
-      o.vz = math.sin(a) * sp
-      o.vy = 1 + math.random() * 3
-      o.life = 0.35 + math.random() * 0.2
-      if kind == 2 then o.emit = 0 end
-      fx[#fx + 1] = o
+-- a small chip or spark flying off; (nx, ny, nz) points away from the surface that was hit
+function chip(x, y, z, r, g, b, size, sp, up, life, glow, nx, ny, nz)
+  local o = fxSpawn(x, y, z, size, size, size, r, g, b, 1)
+  if o ~= nil then
+    local a = math.random() * 6.28
+    local s = sp * (0.4 + math.random() * 0.8)
+    o.kind = "spark"
+    o.vx = math.cos(a) * s + (nx or 0) * sp * 0.9
+    o.vz = math.sin(a) * s + (nz or 0) * sp * 0.9
+    o.vy = up * (0.5 + math.random()) + (ny or 0) * sp * 0.9
+    o.life = life * (0.7 + math.random() * 0.6)
+    o.emit = glow
+    fx[#fx + 1] = o
+  end
+end
+
+-- a soft cloud (dust, smoke) that grows and fades
+function puff(x, y, z, r, g, b, size, grow, life, op, vy)
+  local o = fxSpawn(x, y, z, size, size, size, r, g, b, op)
+  if o ~= nil then
+    o.kind = "puff"
+    o.grow = grow
+    o.dur = life
+    o.life = life
+    o.op = op
+    o.vx = (math.random() - 0.5) * 0.8
+    o.vy = vy
+    o.vz = (math.random() - 0.5) * 0.8
+    o.emit = 0
+    fx[#fx + 1] = o
+  end
+end
+
+-- what a bullet does where it lands: 1 = wall / block (sparks and dust), 2 = ground (dirt),
+-- 4 = tree (wood chips and leaves), 5 = vehicle (bright sparks)
+function impactFx(x, y, z, kind, nx, ny, nz)
+  if kind == 2 then
+    for i = 1, 5 do chip(x, y + 0.05, z, 0.45, 0.34, 0.22, 0.13, 2.5, 4, 0.6, 0, nil, nil, nil) end
+    puff(x, y + 0.1, z, 0.62, 0.52, 0.36, 0.4, 2.2, 0.7, 0.6, 0.8)
+  elseif kind == 4 then
+    for i = 1, 6 do chip(x, y, z, 0.6, 0.42, 0.22, 0.13, 3, 2.5, 0.6, 0.1, nx, ny, nz) end
+    for i = 1, 3 do chip(x, y, z, 0.3, 0.55, 0.2, 0.11, 2, 1.5, 0.8, 0.1, nx, ny, nz) end
+    puff(x, y, z, 0.5, 0.4, 0.25, 0.3, 1.2, 0.5, 0.5, 0.4)
+  else
+    local f = fxSpawn(x, y, z, 0.45, 0.45, 0.45, 1, 0.85, 0.4, 1)
+    if f ~= nil then
+      f.kind = "flash"
+      f.life = 0.07
+      f.emit = 1
+      fx[#fx + 1] = f
+    end
+    local n = 6
+    if kind == 5 then n = 9 end
+    for i = 1, n do chip(x, y, z, 1, 0.8 + math.random() * 0.2, 0.3, 0.12, 5, 2.5, 0.4, 1, nx, ny, nz) end
+    if kind == 5 then
+      puff(x, y, z, 0.35, 0.35, 0.38, 0.25, 1.2, 0.5, 0.5, 0.5)
+    else
+      puff(x, y, z, 0.62, 0.6, 0.56, 0.35, 1.8, 0.6, 0.55, 0.5)
     end
   end
 end
@@ -804,8 +910,19 @@ function updateBullets(dt)
     b.life = b.life - dt
     local gh = groundHeight(b.x, b.z)
     local low = b.y < gh - 0.1
-    local gone = b.life <= 0 or hit or low
-    if hit then impactFx(b.x, b.y, b.z, 1) elseif low then impactFx(b.x, gh, b.z, 2) end
+    local wy = waterHeight(b.x, b.z)
+    local wet = wy ~= nil and b.y < wy
+    local gone = b.life <= 0 or hit or low or wet
+    if hit then
+      -- the effect starts a little in front of the surface and the chips fly back towards the shooter
+      local bl = math.sqrt(b.vx * b.vx + b.vy * b.vy + b.vz * b.vz) + 0.001
+      local nx, ny, nz = -b.vx / bl, -b.vy / bl, -b.vz / bl
+      impactFx(b.x + nx * 0.3, b.y + ny * 0.3, b.z + nz * 0.3, hitKind, nx, ny, nz)
+    elseif wet then
+      splash(b.x, wy, b.z, 4)
+    elseif low then
+      impactFx(b.x, gh, b.z, 2)
+    end
     if not gone then
       local ex, ez = b.x - ox, b.z - oz
       local seg2 = ex * ex + ez * ez + 0.0001
@@ -826,7 +943,6 @@ function updateBullets(dt)
             e.hp = e.hp - dmg
             camera.hit = (head or e.hp <= 0) and 2 or 1
             playSound("hit", 0.7, head and 1.4 or 1)
-            impactFx(b.x, b.y, b.z, 3)
             gone = true
             if e.hp <= 0 then
               if head then log("Headshot! Enemy down!  " .. countAlive() .. " left") else log("Enemy down!  " .. countAlive() .. " left") end
@@ -1190,6 +1306,14 @@ function updateFx(dt)
       o.y = o.y + o.vy * dt
       o.z = o.z + o.vz * dt
       o.opacity = math.min(1, o.life / 0.3)
+    elseif o.kind == "puff" then
+      o.x = o.x + o.vx * dt
+      o.y = o.y + o.vy * dt
+      o.z = o.z + o.vz * dt
+      o.sx = o.sx + o.grow * dt
+      o.sy = o.sx
+      o.sz = o.sx
+      o.opacity = o.op * math.min(1, o.life / (o.dur * 0.7))
     elseif o.kind == "smoke" then
       o.x = o.x + o.vx * dt
       o.y = o.y + o.vy * dt
@@ -1222,6 +1346,12 @@ end
 function update(dt)
   if input.joyTap or input.buttonsPressed["View"] then
     camera.firstPerson = not camera.firstPerson
+  end
+  -- vehicles close to the player (bullets test against these)
+  nearCars = {}
+  for i = 1, #cars do
+    local c = cars[i]
+    if math.abs(c.x - self.x) < 70 and math.abs(c.z - self.z) < 70 and c ~= carObj then nearCars[#nearCars + 1] = c end
   end
   updateBullets(dt)
   updateFx(dt)
@@ -3635,6 +3765,7 @@ end
 
         // ---- trees (away from houses and water) ----
         var trees = 0
+        val treeLua = StringBuilder()   // the tree trunks for the player script: x, z, ground y, trunk radius, trunk height
         tries = 0
         while (trees < nTrees && tries < 1500) {
             tries++
@@ -3645,12 +3776,16 @@ end
             if (houses.any { Math.hypot((it[0] - tx).toDouble(), (it[1] - tz).toDouble()) < 0.5 * maxOf(it[5], it[6]) + 8.0 }) continue
             if (towerSpots.any { Math.hypot((it[0] - tx).toDouble(), (it[1] - (tz + 10f)).toDouble()) < 16.0 }) continue
             if (nearRoad(tx, tz, 7f)) continue
-            val tr = scene.addTree(rnd.nextInt(2))
+            val ttype = rnd.nextInt(2)
+            val tr = scene.addTree(ttype)
             val k = 0.8f + rnd.nextFloat() * 0.6f
             tr.x = tx; tr.z = tz; tr.y = th - 0.05f
             tr.sx = 2f * k; tr.sy = 3.4f * k; tr.sz = 2f * k
             tr.ry = rnd.nextFloat() * 360f
             trees++
+            val trR = (if (ttype == 1) 0.06f else 0.09f) * tr.sx + 0.06f
+            val trH = (if (ttype == 1) 0.9f else 0.6f) * tr.sy
+            treeLua.append(String.format(java.util.Locale.US, "{%.1f,%.1f,%.2f,%.2f,%.2f},", tx, tz, tr.y, trR, trH))
         }
 
         // ---- loot: one medkit and one ammo box in every house, plus some outside ----
@@ -3743,7 +3878,7 @@ end
             break
         }
         human(
-            scene, "Player", px, pg + 1.2f, pz, playerScriptBase.replace("STAIRS = {}", "STAIRS = " + stairLua),
+            scene, "Player", px, pg + 1.2f, pz, playerScriptBase.replace("STAIRS = {}", "STAIRS = " + stairLua).replace("TREES = {}", "TREES = {" + treeLua + "}"),
             floatArrayOf(0.22f, 0.42f, 0.78f), floatArrayOf(0.2f, 0.22f, 0.3f), floatArrayOf(0.2f, 0.3f, 0.5f)
         )
         // the rifle and arm you see in first person: free objects the script keeps in front of the camera
