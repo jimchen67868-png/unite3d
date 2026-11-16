@@ -801,7 +801,10 @@ end
 -- walks along the camera's line of sight to the first thing it meets
 function aimPoint(fx, fy, fz)
   local cx, cy, cz = camera.x, camera.y, camera.z
-  local d = 3
+  -- start the walk where the line of sight passes the player: what lies between the camera and the player
+  -- (the ground behind you, a wall, a tree) must not catch it
+  local d = (self.x - cx) * fx + (self.y - cy) * fy + (self.z - cz) * fz + 0.5
+  if d < 1 then d = 1 end
   while d < 500 do
     local x, y, z = cx + fx * d, cy + fy * d, cz + fz * d
     if pointInWall(x, y, z) or treeAt(x, y, z) then return x, y, z end
@@ -833,7 +836,8 @@ function aimDir(assist)
     local mx, my, mz = self.x, self.y + 0.5, self.z
     local ddx, ddy, ddz = ax - mx, ay - my, az - mz
     local dl = math.sqrt(ddx * ddx + ddy * ddy + ddz * ddz)
-    if dl > 2 then fx, fy, fz = ddx / dl, ddy / dl, ddz / dl end
+    -- only use it when it points the same way as the view (never backwards or far off)
+    if dl > 2 and (ddx * fx + ddy * fy + ddz * fz) / dl > 0.85 then fx, fy, fz = ddx / dl, ddy / dl, ddz / dl end
   end
   local best = nil
   local bd = 0.97
