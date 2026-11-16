@@ -664,6 +664,15 @@ function lineClear(x0, y0, z0, x1, y1, z1)
   return true
 end
 
+-- damage by body part: h = height of the hit above the middle of the body, lat = how far from the body's centre line
+function zoneMul(h, lat)
+  if h > 0.55 then return 2.5, "head" end
+  if h < -0.05 then return 0.6, "leg" end
+  if lat > 0.25 then return 0.75, "arm" end
+  if h > 0.25 then return 1.0, "chest" end
+  return 0.9, "stomach"
+end
+
 -- where the crosshair points, with a gentle snap onto an enemy that is almost in line
 function aimDir(assist)
   local yaw = math.rad(input.yaw)
@@ -697,7 +706,8 @@ function aimDir(assist)
     end
   end
   if best ~= nil then
-    local dx, dy, dz = best.x - self.x, best.y - self.y, best.z - self.z
+    -- the snap points at the upper body (chest), not at the belly
+    local dx, dy, dz = best.x - self.x, best.y + 0.25 - self.y, best.z - self.z
     local d = math.sqrt(dx * dx + dy * dy + dz * dz)
     return dx / d, dy / d, dz / d
   end
@@ -809,8 +819,10 @@ function updateBullets(dt)
           local dy = e.y - (oy + (b.y - oy) * t)
           if dx * dx + dz * dz < 0.9 and math.abs(dy) < 1.1 then
             local dmg = b.dmg or 25
-            local head = (oy + (b.y - oy) * t) - e.y > 0.5
-            if head then dmg = dmg * 2 end
+            local hy = (oy + (b.y - oy) * t) - e.y
+            local mul, zone = zoneMul(hy, math.sqrt(dx * dx + dz * dz))
+            local head = zone == "head"
+            dmg = dmg * mul
             e.hp = e.hp - dmg
             camera.hit = (head or e.hp <= 0) and 2 or 1
             playSound("hit", 0.7, head and 1.4 or 1)
@@ -1743,11 +1755,21 @@ function pickTarget()
   end
 end
 
+-- damage by body part: h = height of the hit above the middle of the body, lat = how far from the body's centre line
+function zoneMul(h, lat)
+  if h > 0.55 then return 2.5, "head" end
+  if h < -0.05 then return 0.6, "leg" end
+  if lat > 0.25 then return 0.75, "arm" end
+  if h > 0.25 then return 1.0, "chest" end
+  return 0.9, "stomach"
+end
+
 function botShoot(dx, dz, d)
   playSound("shot", math.max(0.1, 0.55 - d / 70), 0.8)
   local ex = (math.random() - 0.5) * d * 0.12
   local ez = (math.random() - 0.5) * d * 0.12
-  local ddx, ddy, ddz = dx + ex, (player.y - self.y), dz + ez
+  local ey = (math.random() - 0.5) * d * 0.06
+  local ddx, ddy, ddz = dx + ex, (player.y - self.y) + ey, dz + ez
   local l = math.sqrt(ddx * ddx + ddy * ddy + ddz * ddz) + 0.001
   local ok, b = pcall(spawn, "sphere", self.x + ddx / l * 1.2, self.y + 0.4 + ddy / l * 1.2, self.z + ddz / l * 1.2)
   if not ok then return end
@@ -1779,7 +1801,8 @@ function updateBullets(dt)
       local dx, dz = player.x - (ox + ex * t), player.z - (oz + ez * t)
       local dy = player.y - (oy + (b.y - oy) * t)
       if dx * dx + dz * dz < 0.8 and math.abs(dy) < 1.1 and (player.diveDepth or 0) < 0.8 then
-        player.hp = player.hp - DMG
+        local mul = zoneMul((oy + (b.y - oy) * t) - player.y, math.sqrt(dx * dx + dz * dz))
+        player.hp = player.hp - DMG * mul
         gone = true
       end
     end
