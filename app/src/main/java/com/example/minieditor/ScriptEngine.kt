@@ -81,6 +81,10 @@ class ScriptEngine(private val scene: Scene, private val log: (String) -> Unit) 
     private var fovPushed = Float.NaN
     /** Set by scripts with camera.hit = 1 (body hit) or 2 (headshot / kill): the app flashes the crosshair red and clears it. */
     @Volatile var hitOut = 0
+    /** The backpack screen: scripts set camera.bagText (the lines to draw) and camera.bagOpen; the app shows it. A tap on it comes back as input.bagTap. */
+    @Volatile var bagText = ""
+    @Volatile var bagOpen = false
+    @Volatile var bagTapIn = ""
     /** Where the camera is (read only for scripts: camera.x, camera.y, camera.z). */
     var camX = 0f
     var camY = 0f
@@ -331,6 +335,7 @@ class ScriptEngine(private val scene: Scene, private val log: (String) -> Unit) 
         input.set("joyMoveX", (joyX * c - joyY * s).toDouble())
         input.set("joyMoveZ", (-joyX * s - joyY * c).toDouble())
         input.set("joyTap", LuaValue.valueOf(joyTap))
+        input.set("bagTap", bagTapIn)
         for ((k, v) in buttonsHeld) buttonsT.set(k, LuaValue.valueOf(v))
         for ((k, v) in buttonsPressed) pressedT.set(k, LuaValue.valueOf(v))
         input.set("buttons", buttonsT)
@@ -369,6 +374,10 @@ class ScriptEngine(private val scene: Scene, private val log: (String) -> Unit) 
         num(camera, "dist")?.let { if (it != distPushed) { distPushed = it; distOut = it } }
         num(camera, "fov")?.let { if (it != fovPushed) { fovPushed = it; fovOut = it } }
         num(camera, "hit")?.let { if (it > 0f) { hitOut = it.toInt().coerceIn(1, 2); camera.set("hit", 0.0) } }
+        val bt = camera.get("bagText")
+        if (bt.isstring()) bagText = bt.tojstring()
+        val bo = camera.get("bagOpen")
+        if (bo.isboolean()) bagOpen = bo.toboolean()
         val f = camera.get("firstPerson")
         if (f.isboolean() && f.toboolean() != fpPushed) fpRequest = f.toboolean()
         val t = camera.get("target")

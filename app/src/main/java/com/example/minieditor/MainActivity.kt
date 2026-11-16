@@ -65,6 +65,8 @@ class MainActivity : Activity(), SensorEventListener {
     private var gameMode = false
     private lateinit var moreRows: LinearLayout
     private lateinit var crosshair: CrosshairView
+    private lateinit var bagView: BagView
+    private var bagTap = ""
     private lateinit var scope: ScopeView
     private var toolbarShowTab: (Int) -> Unit = {}   // opens a toolbar tab by number (1 = Play)
     private lateinit var transformRow: LinearLayout
@@ -542,6 +544,8 @@ end
         }
         crosshair = CrosshairView(this).apply { visibility = View.GONE }
         root.addView(crosshair, FrameLayout.LayoutParams(dp(70), dp(70), Gravity.CENTER))
+        bagView = BagView(this) { k -> bagTap = k }.apply { visibility = View.GONE }
+        root.addView(bagView, FrameLayout.LayoutParams(-1, -1))
         root.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
             topScroll.maxHeightPx = (root.height * panelFrac).toInt()
             refreshJoystick()
@@ -1025,7 +1029,13 @@ end
                 it.camTargetName = camTargetName
                 it.camX = editor.renderer.eyeAt(0); it.camY = editor.renderer.eyeAt(1); it.camZ = editor.renderer.eyeAt(2)
                 it.joyTap = joystick.consumeTap()
+                it.bagTapIn = bagTap
+                bagTap = ""
                 it.update(dt)
+                it.bagTapIn = ""
+                bagView.setData(it.bagText)
+                val wantBag = it.bagOpen
+                if ((bagView.visibility == View.VISIBLE) != wantBag) bagView.visibility = if (wantBag) View.VISIBLE else View.GONE
                 camTargetName = it.camTargetName
                 it.fpRequest?.let { want ->
                     it.fpRequest = null
@@ -1188,6 +1198,7 @@ end
         crosshair.visibility = View.GONE
         joystick.reset()
         buttonViews.forEach { it.reset() }
+        bagView.visibility = View.GONE
         if (editor.renderer.fpMode) setFirstPerson(false)
         editor.renderer.tpFollow = null
         editor.renderer.tpDist = 3.6f

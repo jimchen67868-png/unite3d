@@ -122,6 +122,10 @@ function start()
   ammoBag = { r556 = 90, r9 = 36, g12 = 0, r762 = 0 }
   grenades = 2
   medkits = 1
+  bagOpenState = false
+  bagT = 0
+  camera.bagOpen = false
+  camera.bagText = ""
   grenList = {}
   bloom = 0
   mag = mags[slots[cur]]
@@ -323,18 +327,57 @@ function useMedkit()
   end
 end
 
-function showBag()
+-- the backpack screen (drawn by the app like the PUBG bag): the lines are sent in camera.bagText
+function bagLines()
   storeAmmo()
   local t = {}
-  for i = 1, #slots do
+  local used = 0
+  for i = 1, MAXWEAPONS do
     local k = slots[i]
-    local mark = ""
-    if i == cur then mark = "* " end
-    t[#t + 1] = mark .. WEAPONS[k].name .. " " .. (mags[k] or 0) .. "/" .. WEAPONS[k].mag
+    if k ~= nil then
+      local a = 0
+      if i == cur then a = 1 end
+      t[#t + 1] = "W|" .. WEAPONS[k].name .. "|" .. (mags[k] or 0) .. "|" .. WEAPONS[k].mag .. "|" .. AMMONAMES[WEAPONS[k].ammo] .. "|" .. a
+      used = used + 8
+    else
+      t[#t + 1] = "E"
+    end
   end
-  log("BAG  Weapons: " .. table.concat(t, ",  ") .. "   (* = in your hands, max " .. MAXWEAPONS .. ")")
-  log("BAG  Ammo: 5.56 " .. ammoBag.r556 .. " | 9mm " .. ammoBag.r9 .. " | 12 gauge " .. ammoBag.g12 .. " | 7.62 " .. ammoBag.r762)
-  log("BAG  Grenades " .. grenades .. " / " .. MAXGREN .. " | Medkits " .. medkits .. " / " .. MAXMED)
+  local order = { "r556", "r9", "g12", "r762" }
+  local cols = { r556 = "F2CC26", r9 = "F28019", g12 = "D93333", r762 = "4073F2" }
+  for n = 1, 4 do
+    local key = order[n]
+    local c = ammoBag[key] or 0
+    t[#t + 1] = "A|" .. AMMONAMES[key] .. "|" .. c .. "|" .. AMMOCAP[key] .. "|" .. cols[key]
+    used = used + math.floor(c * 0.25)
+  end
+  t[#t + 1] = "G|" .. grenades .. "|" .. MAXGREN
+  t[#t + 1] = "M|" .. medkits .. "|" .. MAXMED
+  used = used + grenades * 4 + medkits * 6
+  t[#t + 1] = "C|" .. used .. "|200"
+  return table.concat(t, "\n")
+end
+
+function setBag(on)
+  bagOpenState = on
+  camera.bagOpen = on
+  if on then
+    camera.bagText = bagLines()
+    bagT = 0.2
+    playSound("pickup", 0.5, 1.3)
+  end
+end
+
+function bagTapped(k)
+  if k == "close" then
+    setBag(false)
+  elseif k == "med" then
+    useMedkit()
+  elseif string.sub(k, 1, 1) == "w" then
+    local n = tonumber(string.sub(k, 2))
+    if n ~= nil and slots[n] ~= nil and n ~= cur then switchWeapon(n) end
+  end
+  if bagOpenState then camera.bagText = bagLines() end
 end
 
 -- WEAPON, GRENADE, HEAL and BAG buttons (work on foot and in a vehicle)
@@ -345,7 +388,16 @@ function handleItems(dt)
   if input.buttonsPressed["Aim"] then toggleAim() end
   if input.buttonsPressed["Grenade"] then throwGrenade() end
   if input.buttonsPressed["Heal"] then useMedkit() end
-  if input.buttonsPressed["Bag"] then showBag() end
+  if input.buttonsPressed["Bag"] then setBag(not bagOpenState) end
+  local tap = input.bagTap
+  if tap ~= nil and tap ~= "" and bagOpenState then bagTapped(tap) end
+  if bagOpenState then
+    bagT = bagT - dt
+    if bagT <= 0 then
+      bagT = 0.2
+      camera.bagText = bagLines()
+    end
+  end
   self.nMed = medkits
   self.nGren = grenades
 end
@@ -1163,6 +1215,7 @@ function update(dt)
   updateFx(dt)
   updateGrenades(dt)
   if self.dead then
+    if bagOpenState then setBag(false) end
     deadT = deadT + dt
     if camera.firstPerson then camera.firstPerson = false end
     if aimLevel > 0 then
@@ -1443,6 +1496,25 @@ function start()
   self.hp = 60
   self.dead = false
   self.vy = 0
+  -- what this soldier carries: it is dropped in a loot crate when he dies
+  loot = { med = 0, gren = 0, a556 = 0, a9 = 0, g12 = 0, a762 = 0, weapon = "rifle", name = "M416" }
+  local wr = math.random()
+  if wr < 0.4 then
+    loot.weapon = "rifle"; loot.name = "M416"; loot.a556 = 30 + math.random(0, 30)
+  elseif wr < 0.6 then
+    loot.weapon = "smg"; loot.name = "UMP45"; loot.a9 = 25 + math.random(0, 25)
+  elseif wr < 0.75 then
+    loot.weapon = "shotgun"; loot.name = "S12K"; loot.g12 = 5 + math.random(0, 5)
+  elseif wr < 0.9 then
+    loot.weapon = "pistol"; loot.name = "P1911"; loot.a9 = 12 + math.random(0, 12)
+  else
+    loot.weapon = "sniper"; loot.name = "Kar98k"; loot.a762 = 5 + math.random(0, 5)
+  end
+  if math.random() < 0.5 then loot.med = 1 end
+  if math.random() < 0.4 then loot.gren = 1 + math.random(0, 1) end
+  crate = nil
+  looted = false
+  lootT = 0
   spd = 3.0 + math.random() * 1.2
   tx = self.x
   tz = self.z
@@ -1516,10 +1588,60 @@ function fallPose(t, groundY)
 end
 
 function removeBody()
+  if crate ~= nil then
+    destroy(crate)
+    crate = nil
+  end
   for k, part in pairs(P) do
     if part ~= nil then destroy(part) end
   end
   destroy(self)
+end
+
+-- the loot crate: a glowing box on the ground next to the body. Walk up to it to take everything.
+function dropCrate()
+  local ok, c = pcall(spawn, "cube", self.x + 1.1, deadG + 0.3, self.z)
+  if not ok then return end
+  c.sx = 0.9
+  c.sy = 0.55
+  c.sz = 0.9
+  c.r = 0.62
+  c.g = 0.42
+  c.b = 0.12
+  c.emit = 0.45
+  c.shadow = false
+  c.collider = 0
+  crate = c
+  crateX = self.x + 1.1
+  crateZ = self.z
+end
+
+function updateCrate(dt)
+  if crate == nil or looted then return end
+  crate.y = deadG + 0.35 + math.sin(deadT * 3) * 0.06
+  crate.ry = deadT * 50
+  if player == nil or player.dead then return end
+  local dx, dz = player.x - crateX, player.z - crateZ
+  if dx * dx + dz * dz < 5 and math.abs(player.y - deadG) < 3.5 then lootCrate() end
+end
+
+function lootCrate()
+  looted = true
+  lootT = deadT
+  player.addWeapon = loot.weapon
+  if loot.a556 > 0 then player.addR556 = (player.addR556 or 0) + loot.a556 end
+  if loot.a9 > 0 then player.addR9 = (player.addR9 or 0) + loot.a9 end
+  if loot.g12 > 0 then player.addG12 = (player.addG12 or 0) + loot.g12 end
+  if loot.a762 > 0 then player.addR762 = (player.addR762 or 0) + loot.a762 end
+  if loot.gren > 0 then player.addGren = (player.addGren or 0) + loot.gren end
+  if loot.med > 0 then player.addMed = (player.addMed or 0) + loot.med end
+  playSound("pickup", 0.9, 0.8)
+  local t = loot.name
+  if loot.med > 0 then t = t .. ", medkit" end
+  if loot.gren > 0 then t = t .. ", " .. loot.gren .. " grenade" end
+  log("Looted the enemy crate: " .. t .. " + ammo")
+  destroy(crate)
+  crate = nil
 end
 
 -- walls are put into a coarse grid once, so a bullet only tests the few walls near it
@@ -1677,10 +1799,13 @@ function update(dt)
       self.collider = 0
       for i = 1, #bullets do destroy(bullets[i]) end
       bullets = {}
+      dropCrate()
     end
     deadT = deadT + dt
     fallPose(deadT, deadG)
-    if deadT > 6 then removeBody() end
+    updateCrate(dt)
+    if looted and deadT > lootT + 2 then removeBody() end
+    if deadT > 45 then removeBody() end
     return
   end
 
