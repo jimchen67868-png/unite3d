@@ -71,6 +71,20 @@ WEAPONS = {
   shotgun = { name = "S12K",   mag = 5,  dmg = 12, rate = 0.85,  spread = 0.07,   auto = false, pellets = 9, speed = 220, life = 0.3, ammo = "g12",  reload = 2.7, recoil = 2.2,  pitch = 0.6,  vol = 1.0,  assist = false, len = 0.95, thick = 1.3 },
   sniper  = { name = "Kar98k", mag = 5,  dmg = 95, rate = 1.5,   spread = 0.0015, auto = false, pellets = 1, speed = 650, life = 1.2, ammo = "r762", reload = 3.2, recoil = 3.0,  pitch = 0.5,  vol = 1.0,  assist = false, len = 1.35, thick = 0.9 }
 }
+-- shooting distance: full damage up to "near" metres, then less and less until "far" metres, where the bullet is gone
+-- (at "far" the damage is "minD" times the full damage)
+WEAPONS.rifle.near, WEAPONS.rifle.far, WEAPONS.rifle.minD = 50, 300, 0.55
+WEAPONS.smg.near, WEAPONS.smg.far, WEAPONS.smg.minD = 25, 120, 0.4
+WEAPONS.pistol.near, WEAPONS.pistol.far, WEAPONS.pistol.minD = 20, 100, 0.4
+WEAPONS.shotgun.near, WEAPONS.shotgun.far, WEAPONS.shotgun.minD = 8, 50, 0.15
+WEAPONS.sniper.near, WEAPONS.sniper.far, WEAPONS.sniper.minD = 200, 750, 0.85
+
+function rangeMul(d, near, far, minD)
+  if near == nil or d <= near then return 1 end
+  if d >= far then return minD end
+  return 1 - (1 - minD) * (d - near) / (far - near)
+end
+
 WEAPONS.rifle.ads = { 38 }          -- field of view when you aim (the normal one is 50); the sniper has two zoom steps and a scope
 WEAPONS.smg.ads = { 42 }
 WEAPONS.pistol.ads = { 44 }
@@ -93,6 +107,8 @@ function start()
   self.vy = 0
   self.reserveAdd = 0
   fx = {}
+  decals = {}
+  decalT = 0
   findParts()
   VM = { find("Player vgun"), find("Player vbar"), find("Player vhand"), find("Player vsleeve") }
   for i = 1, #VM do
@@ -169,6 +185,8 @@ function start()
     end
   end
   buildTreeGrid()
+  self.wallAt = pointInWall   -- the vehicles ask these to stop at walls and trees
+  self.treeAt = treeAt
   nearCars = {}
   hitKind = 1
   climbBtn = find("Climb")
@@ -248,7 +266,7 @@ function switchWeapon(k)
   applyGunLook()
   fireT = 0.3
   playSound("reload", 0.5, 1.5)
-  log("Weapon: " .. W.name .. "   " .. mag .. " / " .. reserve .. "  (" .. AMMONAMES[W.ammo] .. ")")
+  log("Weapon: " .. W.name .. "   " .. mag .. " / " .. reserve .. "  (" .. AMMONAMES[W.ammo] .. ")   full damage to " .. W.near .. " m, range " .. W.far .. " m")
 end
 
 function nextWeapon()
@@ -606,7 +624,7 @@ end
 CELL = 6
 
 function addWall(w, door)
-  local e = { x = w.x, y = w.y, z = w.z, hx = w.sx / 2, hy = w.sy / 2, hz = w.sz / 2, door = door }
+  local e = { x = w.x, y = w.y, z = w.z, hx = w.sx / 2, hy = w.sy / 2, hz = w.sz / 2, door = door, r = w.r or 0.7, g = w.g or 0.7, b = w.b or 0.7 }
   local x0 = math.floor((e.x - e.hx) / CELL)
   local x1 = math.floor((e.x + e.hx) / CELL)
   local z0 = math.floor((e.z - e.hz) / CELL)
@@ -634,6 +652,46 @@ function pointInWall(x, y, z)
     end
   end
   return false
+end
+
+-- the wall box that holds a point (nil if none)
+function wallBoxAt(x, y, z)
+  local c = grid[math.floor(x / CELL) * 100003 + math.floor(z / CELL)]
+  if c == nil then return nil end
+  for i = 1, #c do
+    local w = c[i]
+    if math.abs(x - w.x) < w.hx and math.abs(y - w.y) < w.hy and math.abs(z - w.z) < w.hz then
+      if w.door == nil or not w.door.isOpen then return w end
+    end
+  end
+  return nil
+end
+
+-- where a bullet (unit direction dx, dy, dz) went into the wall at (px, py, pz), which way that face looks, and the wall colour
+function wallEntry(px, py, pz, dx, dy, dz)
+  local w = wallBoxAt(px, py, pz)
+  if w == nil then return nil end
+  local x0, y0, z0 = px - dx * 0.4, py - dy * 0.4, pz - dz * 0.4
+  local ex = math.abs(x0 - w.x) - w.hx
+  local ey = math.abs(y0 - w.y) - w.hy
+  local ez = math.abs(z0 - w.z) - w.hz
+  local nx, ny, nz = 0, 0, 0
+  local t
+  if ex >= ey and ex >= ez then
+    if math.abs(dx) < 0.0001 then return nil end
+    if x0 > w.x then nx = 1 else nx = -1 end
+    t = (w.x + nx * w.hx - x0) / dx
+  elseif ey >= ez then
+    if math.abs(dy) < 0.0001 then return nil end
+    if y0 > w.y then ny = 1 else ny = -1 end
+    t = (w.y + ny * w.hy - y0) / dy
+  else
+    if math.abs(dz) < 0.0001 then return nil end
+    if z0 > w.z then nz = 1 else nz = -1 end
+    t = (w.z + nz * w.hz - z0) / dz
+  end
+  if t < -0.05 or t > 0.5 then return nil end
+  return x0 + dx * t, y0 + dy * t, z0 + dz * t, nx, ny, nz, w.r, w.g, w.b
 end
 
 -- tree trunks are put into a grid once, so a bullet only tests the few trunks near it
@@ -740,6 +798,27 @@ function zoneMul(h, lat)
   return 0.9, "stomach"
 end
 
+-- walks along the camera's line of sight to the first thing it meets
+function aimPoint(fx, fy, fz)
+  local cx, cy, cz = camera.x, camera.y, camera.z
+  local d = 3
+  while d < 500 do
+    local x, y, z = cx + fx * d, cy + fy * d, cz + fz * d
+    if pointInWall(x, y, z) or treeAt(x, y, z) then return x, y, z end
+    local g = groundHeight(x, z)
+    if g ~= nil and y < g then return x, y, z end
+    for k = 1, NBOTS do
+      local e = bots[k]
+      if e ~= nil and not e.dead and e.hp > 0 then
+        local dx, dz = x - e.x, z - e.z
+        if dx * dx + dz * dz < 0.5 and math.abs(y - e.y) < 1 then return x, y, z end
+      end
+    end
+    if d < 60 then d = d + 1 elseif d < 150 then d = d + 1.5 else d = d + 3 end
+  end
+  return cx + fx * 500, cy + fy * 500, cz + fz * 500
+end
+
 -- where the crosshair points, with a gentle snap onto an enemy that is almost in line
 function aimDir(assist)
   local yaw = math.rad(input.yaw)
@@ -747,13 +826,14 @@ function aimDir(assist)
   local fx = -math.cos(p) * math.sin(yaw)
   local fy = -math.sin(p)
   local fz = -math.cos(p) * math.cos(yaw)
-  if not camera.firstPerson and camera.x ~= nil then
-    -- 3rd person: the bullet flies from the player to the point the crosshair looks at
-    local ax, ay, az = camera.x + fx * 45, camera.y + fy * 45, camera.z + fz * 45
-    local mx, my, mz = self.x, self.y + 0.4, self.z
+  if camera.x ~= nil then
+    -- the bullet flies from the player to the exact point the crosshair meets (a wall, a tree, the ground, an enemy, or far away),
+    -- so it hits where you aim at any distance, also with the camera behind your shoulder
+    local ax, ay, az = aimPoint(fx, fy, fz)
+    local mx, my, mz = self.x, self.y + 0.5, self.z
     local ddx, ddy, ddz = ax - mx, ay - my, az - mz
     local dl = math.sqrt(ddx * ddx + ddy * ddy + ddz * ddz)
-    if dl > 0.1 then fx, fy, fz = ddx / dl, ddy / dl, ddz / dl end
+    if dl > 2 then fx, fy, fz = ddx / dl, ddy / dl, ddz / dl end
   end
   local best = nil
   local bd = 0.97
@@ -792,18 +872,36 @@ function muzzleFlash(x, y, z)
   end
 end
 
--- a small chip or spark flying off; (nx, ny, nz) points away from the surface that was hit
-function chip(x, y, z, r, g, b, size, sp, up, life, glow, nx, ny, nz)
-  local o = fxSpawn(x, y, z, size, size, size, r, g, b, 1)
+-- a small piece of the surface flying off (a tumbling cube); (nx, ny, nz) points away from the surface
+function chunk(x, y, z, r, g, b, size, sp, up, life, nx, ny, nz)
+  local k = size * (0.6 + math.random() * 0.8)
+  local o = fxSpawn(x, y, z, k, k * (0.6 + math.random() * 0.8), k * (0.6 + math.random() * 0.8), r, g, b, 1, "cube")
   if o ~= nil then
     local a = math.random() * 6.28
     local s = sp * (0.4 + math.random() * 0.8)
-    o.kind = "spark"
-    o.vx = math.cos(a) * s + (nx or 0) * sp * 0.9
-    o.vz = math.sin(a) * s + (nz or 0) * sp * 0.9
-    o.vy = up * (0.5 + math.random()) + (ny or 0) * sp * 0.9
+    o.kind = "chunk"
+    o.vx = math.cos(a) * s * 0.6 + (nx or 0) * sp * 0.9
+    o.vz = math.sin(a) * s * 0.6 + (nz or 0) * sp * 0.9
+    o.vy = up * (0.4 + math.random() * 0.9) + (ny or 0) * sp * 0.9
+    o.avx = (math.random() - 0.5) * 800
+    o.avy = (math.random() - 0.5) * 800
+    o.avz = (math.random() - 0.5) * 800
     o.life = life * (0.7 + math.random() * 0.6)
-    o.emit = glow
+    o.emit = 0
+    fx[#fx + 1] = o
+  end
+end
+
+-- a hot spark: a thin bright streak that points along its flight
+function streak(x, y, z, sp, life, nx, ny, nz, len)
+  local o = fxSpawn(x, y, z, 0.03, 0.03, len or 0.3, 1, 0.7 + math.random() * 0.3, 0.25, 1, "cube")
+  if o ~= nil then
+    o.kind = "streak"
+    o.vx = (nx or 0) * sp * 0.8 + (math.random() - 0.5) * sp
+    o.vy = (ny or 0) * sp * 0.8 + (math.random() - 0.3) * sp * 0.7 + 1
+    o.vz = (nz or 0) * sp * 0.8 + (math.random() - 0.5) * sp
+    o.life = life * (0.7 + math.random() * 0.6)
+    o.emit = 1
     fx[#fx + 1] = o
   end
 end
@@ -825,31 +923,91 @@ function puff(x, y, z, r, g, b, size, grow, life, op, vy)
   end
 end
 
--- what a bullet does where it lands: 1 = wall / block (sparks and dust), 2 = ground (dirt),
--- 4 = tree (wood chips and leaves), 5 = vehicle (bright sparks)
-function impactFx(x, y, z, kind, nx, ny, nz)
-  if kind == 2 then
-    for i = 1, 5 do chip(x, y + 0.05, z, 0.45, 0.34, 0.22, 0.13, 2.5, 4, 0.6, 0, nil, nil, nil) end
-    puff(x, y + 0.1, z, 0.62, 0.52, 0.36, 0.4, 2.2, 0.7, 0.6, 0.8)
-  elseif kind == 4 then
-    for i = 1, 6 do chip(x, y, z, 0.6, 0.42, 0.22, 0.13, 3, 2.5, 0.6, 0.1, nx, ny, nz) end
-    for i = 1, 3 do chip(x, y, z, 0.3, 0.55, 0.2, 0.11, 2, 1.5, 0.8, 0.1, nx, ny, nz) end
-    puff(x, y, z, 0.5, 0.4, 0.25, 0.3, 1.2, 0.5, 0.5, 0.4)
+-- a mark that stays on the surface (a bullet hole, a scorch): a very thin flat cube turned to the surface
+function decal(x, y, z, nx, ny, nz, size, r, g, b, op, life)
+  local ok, o = pcall(spawn, "cube", x, y, z)
+  if not ok then return end
+  local t = 0.012
+  if math.abs(nx) > 0.5 then
+    o.sx = t
+    o.sy = size
+    o.sz = size
+  elseif math.abs(nz) > 0.5 then
+    o.sx = size
+    o.sy = size
+    o.sz = t
   else
-    local f = fxSpawn(x, y, z, 0.45, 0.45, 0.45, 1, 0.85, 0.4, 1)
+    o.sx = size
+    o.sy = t
+    o.sz = size
+    o.ry = math.random() * 90
+  end
+  o.r = r
+  o.g = g
+  o.b = b
+  o.opacity = op
+  o.shadow = false
+  o.collider = 0
+  o.emit = 0
+  o.life = life
+  o.op = op
+  decals[#decals + 1] = o
+  if #decals > 70 then
+    destroy(decals[1])
+    table.remove(decals, 1)
+  end
+end
+
+function updateDecals(dt)
+  decalT = decalT + dt
+  if decalT < 0.5 then return end
+  local step = decalT
+  decalT = 0
+  for i = #decals, 1, -1 do
+    local o = decals[i]
+    o.life = o.life - step
+    if o.life <= 0 then
+      destroy(o)
+      table.remove(decals, i)
+    elseif o.life < 2 then
+      o.opacity = o.op * o.life / 2
+    end
+  end
+end
+
+-- what a bullet does where it lands: 1 = wall / block, 2 = ground, 4 = tree, 5 = vehicle
+-- (nx, ny, nz) = which way the surface looks; (wr, wg, wb) = the colour of the thing that was hit
+function impactFx(x, y, z, kind, nx, ny, nz, wr, wg, wb)
+  if kind == 2 then
+    for i = 1, 6 do chunk(x, y + 0.05, z, 0.36 + math.random() * 0.1, 0.27, 0.17, 0.07, 2.5, 4, 0.8, 0, 1, 0) end
+    puff(x, y + 0.1, z, 0.6, 0.5, 0.36, 0.35, 2.4, 0.9, 0.4, 0.9)
+    puff(x, y + 0.1, z, 0.55, 0.46, 0.33, 0.25, 1.8, 0.7, 0.35, 0.6)
+    decal(x, y + 0.03, z, 0, 1, 0, 0.32, 0.2, 0.15, 0.1, 0.75, 12)
+  elseif kind == 4 then
+    for i = 1, 5 do chunk(x, y, z, 0.62, 0.45, 0.25, 0.05, 3, 2.5, 0.7, nx, ny, nz) end
+    for i = 1, 3 do chunk(x, y, z, 0.3, 0.55, 0.2, 0.06, 2, 1.5, 0.9, nx, ny, nz) end
+    puff(x, y, z, 0.5, 0.4, 0.25, 0.25, 1.2, 0.5, 0.35, 0.4)
+  elseif kind == 5 then
+    local f = fxSpawn(x, y, z, 0.35, 0.35, 0.35, 1, 0.85, 0.4, 1)
     if f ~= nil then
       f.kind = "flash"
-      f.life = 0.07
+      f.life = 0.06
       f.emit = 1
       fx[#fx + 1] = f
     end
-    local n = 6
-    if kind == 5 then n = 9 end
-    for i = 1, n do chip(x, y, z, 1, 0.8 + math.random() * 0.2, 0.3, 0.12, 5, 2.5, 0.4, 1, nx, ny, nz) end
-    if kind == 5 then
-      puff(x, y, z, 0.35, 0.35, 0.38, 0.25, 1.2, 0.5, 0.5, 0.5)
-    else
-      puff(x, y, z, 0.62, 0.6, 0.56, 0.35, 1.8, 0.6, 0.55, 0.5)
+    for i = 1, 8 do streak(x, y, z, 6, 0.4, nx, ny, nz, 0.35) end
+    puff(x, y, z, 0.3, 0.3, 0.32, 0.2, 1, 0.5, 0.35, 0.5)
+  else
+    -- a wall or block: dust and chips in the colour of the wall, hot sparks, a hole in the surface
+    local r, g, b = wr or 0.7, wg or 0.7, wb or 0.7
+    if nx == nil then nx, ny, nz = 0, 0, 0 end
+    for i = 1, 5 do streak(x, y, z, 5, 0.35, nx, ny, nz, 0.28) end
+    for i = 1, 4 do chunk(x, y, z, r * 0.9, g * 0.9, b * 0.9, 0.06, 3, 2.5, 0.7, nx, ny, nz) end
+    puff(x + nx * 0.1, y + ny * 0.1, z + nz * 0.1, r * 0.8 + 0.15, g * 0.8 + 0.15, b * 0.8 + 0.15, 0.3, 1.8, 0.7, 0.4, 0.5)
+    puff(x + nx * 0.1, y + ny * 0.1, z + nz * 0.1, r * 0.8 + 0.1, g * 0.8 + 0.1, b * 0.8 + 0.1, 0.2, 1.2, 0.5, 0.3, 0.3)
+    if nx ~= 0 or ny ~= 0 or nz ~= 0 then
+      decal(x + nx * 0.015, y + ny * 0.015, z + nz * 0.015, nx, ny, nz, 0.26, r * 0.55, g * 0.55, b * 0.55, 0.55, 14)
+      decal(x + nx * 0.02, y + ny * 0.02, z + nz * 0.02, nx, ny, nz, 0.09, 0.04, 0.04, 0.04, 0.95, 14)
     end
   end
 end
@@ -891,6 +1049,12 @@ function shoot()
       b.vz = dz * W.speed
       b.life = W.life
       b.dmg = W.dmg
+      b.o0x = ox
+      b.o0y = oy
+      b.o0z = oz
+      b.near = W.near
+      b.far = W.far
+      b.minD = W.minD
       bullets[#bullets + 1] = b
     end
   end
@@ -912,16 +1076,28 @@ function updateBullets(dt)
     local low = b.y < gh - 0.1
     local wy = waterHeight(b.x, b.z)
     local wet = wy ~= nil and b.y < wy
-    local gone = b.life <= 0 or hit or low or wet
+    local tx, ty, tz = b.x - (b.o0x or b.x), b.y - (b.o0y or b.y), b.z - (b.o0z or b.z)
+    local dist = math.sqrt(tx * tx + ty * ty + tz * tz)
+    local gone = b.life <= 0 or hit or low or wet or (b.far ~= nil and dist > b.far)
     if hit then
-      -- the effect starts a little in front of the surface and the chips fly back towards the shooter
       local bl = math.sqrt(b.vx * b.vx + b.vy * b.vy + b.vz * b.vz) + 0.001
-      local nx, ny, nz = -b.vx / bl, -b.vy / bl, -b.vz / bl
-      impactFx(b.x + nx * 0.3, b.y + ny * 0.3, b.z + nz * 0.3, hitKind, nx, ny, nz)
+      local ux, uy, uz = b.vx / bl, b.vy / bl, b.vz / bl
+      local done = false
+      if hitKind == 1 then
+        -- a wall: the exact spot on its face, the way the face looks, and its colour
+        local hx, hy, hz, nx, ny, nz, wr, wg, wb = wallEntry(b.x, b.y, b.z, ux, uy, uz)
+        if hx ~= nil then
+          impactFx(hx, hy, hz, 1, nx, ny, nz, wr, wg, wb)
+          done = true
+        end
+      end
+      if not done then
+        impactFx(b.x - ux * 0.3, b.y - uy * 0.3, b.z - uz * 0.3, hitKind, -ux, -uy, -uz)
+      end
     elseif wet then
       splash(b.x, wy, b.z, 4)
     elseif low then
-      impactFx(b.x, gh, b.z, 2)
+      impactFx(b.x, gh, b.z, 2, 0, 1, 0)
     end
     if not gone then
       local ex, ez = b.x - ox, b.z - oz
@@ -939,15 +1115,17 @@ function updateBullets(dt)
             local hy = (oy + (b.y - oy) * t) - e.y
             local mul, zone = zoneMul(hy, math.sqrt(dx * dx + dz * dz))
             local head = zone == "head"
-            dmg = dmg * mul
+            dmg = dmg * mul * rangeMul(dist, b.near, b.far, b.minD)
             e.hp = e.hp - dmg
             camera.hit = (head or e.hp <= 0) and 2 or 1
             playSound("hit", 0.7, head and 1.4 or 1)
             gone = true
+            local ds = ""
+            if dist > 40 then ds = "  (" .. math.floor(dist) .. " m)" end
             if e.hp <= 0 then
-              if head then log("Headshot! Enemy down!  " .. countAlive() .. " left") else log("Enemy down!  " .. countAlive() .. " left") end
+              if head then log("Headshot! Enemy down!  " .. countAlive() .. " left" .. ds) else log("Enemy down!  " .. countAlive() .. " left" .. ds) end
             elseif head then
-              log("Headshot!")
+              log("Headshot!" .. ds)
             end
             break
           end
@@ -1022,58 +1200,78 @@ function updateGrenades(dt)
 end
 
 function blastFx(x, y, z)
-  -- big orange fireball
-  local o = fxSpawn(x, y + 0.5, z, 3, 3, 3, 1, 0.6, 0.15, 0.95)
-  if o ~= nil then
-    o.kind = "blast"
-    o.life = 0.55
-    o.dur = 0.55
-    o.big = 20
-    o.age = 0
-    o.emit = 1
-    fx[#fx + 1] = o
+  local gh = groundHeight(x, z) or y
+  -- 1. a white flash, gone in a blink
+  local f = fxSpawn(x, y + 0.6, z, 4, 4, 4, 1, 0.95, 0.8, 1)
+  if f ~= nil then
+    f.kind = "blast"
+    f.life = 0.14
+    f.dur = 0.14
+    f.big = 12
+    f.age = 0
+    f.emit = 1
+    fx[#fx + 1] = f
   end
-  -- white hot core
-  local c = fxSpawn(x, y + 0.5, z, 2, 2, 2, 1, 1, 0.85, 1)
-  if c ~= nil then
-    c.kind = "blast"
-    c.life = 0.25
-    c.dur = 0.25
-    c.big = 9
-    c.age = 0
-    c.emit = 1
-    fx[#fx + 1] = c
+  -- 2. the fireball: three balls, yellow, orange, red, that swell, rise and burn out
+  local cols = { { 1, 0.85, 0.3 }, { 1, 0.5, 0.12 }, { 0.95, 0.3, 0.06 } }
+  for i = 1, 3 do
+    local c = cols[i]
+    local o = fxSpawn(x + (math.random() - 0.5) * 1.2, y + 0.5 + i * 0.3, z + (math.random() - 0.5) * 1.2, 1.5, 1.5, 1.5, c[1], c[2], c[3], 0.95)
+    if o ~= nil then
+      o.kind = "fire"
+      o.life = 0.5 + i * 0.15
+      o.dur = o.life
+      o.age = 0
+      o.s0 = 1.5
+      o.big = 6 + i * 2
+      o.vy = 2 + i
+      o.g0 = c[2]
+      o.b0 = c[3]
+      o.emit = 1
+      fx[#fx + 1] = o
+    end
   end
-  -- the view shakes when you are close
+  -- 3. the dust ring racing over the ground
+  local ring = fxSpawn(x, gh + 0.3, z, 2, 0.35, 2, 0.72, 0.64, 0.5, 0.55)
+  if ring ~= nil then
+    ring.kind = "ring"
+    ring.life = 0.55
+    ring.dur = 0.55
+    ring.age = 0
+    ring.s0 = 2
+    ring.big = 22
+    ring.op = 0.55
+    ring.emit = 0
+    fx[#fx + 1] = ring
+  end
+  -- 4. a column of dark smoke that rises and spreads
+  for i = 1, 9 do
+    local g = 0.16 + math.random() * 0.14
+    puff(x + (math.random() - 0.5) * 1.6, y + 0.4 + math.random() * 0.8, z + (math.random() - 0.5) * 1.6, g, g, g, 1.5, 2.2 + math.random() * 1.2, 2.5 + math.random(), 0.7, 2.5 + math.random() * 3)
+  end
+  -- 5. earth and rubble thrown out, and hot sparks
+  for i = 1, 14 do
+    local a = math.random() * 6.28
+    local sp = 4 + math.random() * 9
+    local nx, nz = math.cos(a) * sp * 0.15, math.sin(a) * sp * 0.15
+    chunk(x, y + 0.4, z, 0.25 + math.random() * 0.15, 0.2 + math.random() * 0.1, 0.15, 0.2, sp, 5 + math.random() * 7, 1.6, nx / 4, 0, nz / 4)
+  end
+  for i = 1, 22 do
+    local a = math.random() * 6.28
+    streak(x, y + 0.4, z, 8 + math.random() * 10, 0.7, math.cos(a), 0.6, math.sin(a), 0.4)
+  end
+  -- 6. a black scorch mark on the ground
+  if math.abs(y - gh) < 3 then
+    decal(x, gh + 0.04, z, 0, 1, 0, 5.5, 0.1, 0.09, 0.08, 0.35, 40)
+    decal(x, gh + 0.05, z, 0, 1, 0, 3, 0.04, 0.035, 0.03, 0.8, 40)
+  end
+  -- 7. the view shakes when you are close
   local sdx, sdz = self.x - x, self.z - z
   local sd = math.sqrt(sdx * sdx + sdz * sdz)
-  if sd < 25 then camera.pitch = camera.pitch - (1 - sd / 25) * 5 end
-  for i = 1, 16 do
-    local s = fxSpawn(x, y + 0.3, z, 0.16, 0.16, 0.16, 1, 0.7 + math.random() * 0.3, 0.2, 1)
-    if s ~= nil then
-      local a = math.random() * 6.28
-      local e = math.random() * 1.2
-      local sp = 6 + math.random() * 9
-      s.kind = "spark"
-      s.vx = math.cos(a) * math.cos(e) * sp
-      s.vy = math.sin(e) * sp + 2
-      s.vz = math.sin(a) * math.cos(e) * sp
-      s.life = 0.6 + math.random() * 0.5
-      s.emit = 1
-      fx[#fx + 1] = s
-    end
-  end
-  for i = 1, 8 do
-    local s = fxSpawn(x + (math.random() - 0.5) * 2, y + 0.3, z + (math.random() - 0.5) * 2, 0.8, 0.8, 0.8, 0.25, 0.25, 0.25, 0.7)
-    if s ~= nil then
-      s.kind = "smoke"
-      s.vx = (math.random() - 0.5) * 2
-      s.vy = 1.5 + math.random() * 1.5
-      s.vz = (math.random() - 0.5) * 2
-      s.life = 1.6
-      s.emit = 0
-      fx[#fx + 1] = s
-    end
+  if sd < 30 then
+    local k = 1 - sd / 30
+    camera.pitch = camera.pitch - k * 7
+    camera.yaw = camera.yaw + (math.random() - 0.5) * k * 8
   end
 end
 
@@ -1228,9 +1426,9 @@ function placeVm(dt)
 end
 
 -- ===== water effects: ripples and splash drops (little see-through spheres) =====
-function fxSpawn(x, y, z, sx, sy, sz, r, g, b, op)
-  if #fx >= 160 then return nil end
-  local ok, o = pcall(spawn, "sphere", x, y, z)
+function fxSpawn(x, y, z, sx, sy, sz, r, g, b, op, shape)
+  if #fx >= 220 then return nil end
+  local ok, o = pcall(spawn, shape or "sphere", x, y, z)
   if not ok then return nil end
   o.sx = sx
   o.sy = sy
@@ -1306,6 +1504,49 @@ function updateFx(dt)
       o.y = o.y + o.vy * dt
       o.z = o.z + o.vz * dt
       o.opacity = math.min(1, o.life / 0.3)
+    elseif o.kind == "chunk" then
+      if not o.rest then
+        o.vy = o.vy - 14 * dt
+        o.x = o.x + o.vx * dt
+        o.y = o.y + o.vy * dt
+        o.z = o.z + o.vz * dt
+        o.rx = o.rx + o.avx * dt
+        o.ry = o.ry + o.avy * dt
+        o.rz = o.rz + o.avz * dt
+        local gh = groundHeight(o.x, o.z)
+        if gh ~= nil and o.y < gh + 0.04 and o.vy < 0 then
+          o.y = gh + 0.04
+          o.rest = true
+        end
+      end
+      o.opacity = math.min(1, o.life / 0.3)
+    elseif o.kind == "streak" then
+      o.vy = o.vy - 14 * dt
+      o.x = o.x + o.vx * dt
+      o.y = o.y + o.vy * dt
+      o.z = o.z + o.vz * dt
+      local sp = math.sqrt(o.vx * o.vx + o.vy * o.vy + o.vz * o.vz) + 0.001
+      o.ry = math.deg(math.atan2(o.vx, o.vz))
+      o.rx = -math.deg(math.asin(math.max(-1, math.min(1, o.vy / sp))))
+      o.opacity = math.min(1, o.life / 0.2)
+    elseif o.kind == "fire" then
+      o.age = o.age + dt
+      local k = math.min(1, o.age / o.dur)
+      o.y = o.y + o.vy * dt
+      o.sx = o.s0 + (o.big - o.s0) * (1 - (1 - k) * (1 - k))
+      o.sy = o.sx * 0.9
+      o.sz = o.sx
+      o.r = 1 - 0.7 * k
+      o.g = o.g0 * (1 - k) + 0.08 * k
+      o.b = o.b0 * (1 - k) + 0.04 * k
+      o.emit = 1 - k
+      o.opacity = 0.95 * (1 - k * k)
+    elseif o.kind == "ring" then
+      o.age = o.age + dt
+      local k = math.min(1, o.age / o.dur)
+      o.sx = o.s0 + k * o.big
+      o.sz = o.sx
+      o.opacity = o.op * (1 - k)
     elseif o.kind == "puff" then
       o.x = o.x + o.vx * dt
       o.y = o.y + o.vy * dt
@@ -1355,6 +1596,7 @@ function update(dt)
   end
   updateBullets(dt)
   updateFx(dt)
+  updateDecals(dt)
   updateGrenades(dt)
   if self.dead then
     if bagOpenState then setBag(false) end
@@ -1914,6 +2156,8 @@ function botShoot(dx, dz, d)
   b.vy = ddy / l * 45
   b.vz = ddz / l * 45
   b.life = 1.6
+  b.o0x = b.x
+  b.o0z = b.z
   bullets[#bullets + 1] = b
 end
 
@@ -1932,7 +2176,11 @@ function updateBullets(dt)
       local dy = player.y - (oy + (b.y - oy) * t)
       if dx * dx + dz * dz < 0.8 and math.abs(dy) < 1.1 and (player.diveDepth or 0) < 0.8 then
         local mul = zoneMul((oy + (b.y - oy) * t) - player.y, math.sqrt(dx * dx + dz * dz))
-        player.hp = player.hp - DMG * mul
+        local fx0, fz0 = b.x - (b.o0x or b.x), b.z - (b.o0z or b.z)
+        local fd = math.sqrt(fx0 * fx0 + fz0 * fz0)
+        local fall = 1
+        if fd > 25 then fall = math.max(0.4, 1 - (fd - 25) / 100) end
+        player.hp = player.hp - DMG * mul * fall
         gone = true
       end
     end
@@ -2086,6 +2334,39 @@ function put(o, lx, ly, lz, nx, nz, cs, sn, cp, sp, ry2, rx2, rz2)
   o.rz = rz2
 end
 
+CP = { { 0, -2.1 }, { -0.95, -2.1 }, { 0.95, -2.1 }, { -0.95, -0.7 }, { 0.95, -0.7 }, { -0.95, 0.7 }, { 0.95, 0.7 }, { -0.95, 2.1 }, { 0.95, 2.1 }, { 0, 2.1 } }
+
+-- solid ground vehicle: it stops at walls, closed doors and tree trunks (the player script knows where they are)
+function blockedAt(pl, x, z, h)
+  local r = math.rad(h)
+  local cs, sn = math.cos(r), math.sin(r)
+  local y0 = self.y + 0.1
+  local y1 = self.y + 0.8
+  for i = 1, #CP do
+    local p = CP[i]
+    local wx = x + p[1] * cs + p[2] * sn
+    local wz = z - p[1] * sn + p[2] * cs
+    if pl.wallAt(wx, y0, wz) or pl.wallAt(wx, y1, wz) or pl.treeAt(wx, y0, wz) then return true end
+  end
+  return false
+end
+
+-- moves from here towards (wx, wz) in small steps so a thin wall cannot be jumped; returns the place reached and whether something stopped it
+function slide(pl, wx, wz, h, oldH)
+  if pl == nil or pl.wallAt == nil then return wx, wz, false end
+  local x0, z0 = self.x, self.z
+  if blockedAt(pl, x0, z0, oldH) then return wx, wz, false end   -- already inside something: let it drive out
+  local dx, dz = wx - x0, wz - z0
+  local steps = math.max(1, math.ceil(math.sqrt(dx * dx + dz * dz) / 0.3))
+  local nx, nz = x0, z0
+  for i = 1, steps do
+    local tx, tz = x0 + dx * i / steps, z0 + dz * i / steps
+    if blockedAt(pl, tx, tz, h) then return nx, nz, true end
+    nx, nz = tx, tz
+  end
+  return nx, nz, false
+end
+
 function update(dt)
   local pl = find("Player")
   local driven = pl ~= nil and pl.car == self.name and pl.seat == 1
@@ -2113,13 +2394,25 @@ function update(dt)
   speed = math.max(-9, math.min(30, speed))
   local dir = 1
   if speed < 0 then dir = -1 end
+  local oldHeading = heading
   heading = heading - steer * 62 * math.min(1, math.abs(speed) / 7) * dir * dt
-  self.ry = heading
   local r = math.rad(heading)
   local fx = -math.sin(r)
   local fz = -math.cos(r)
-  local nx = self.x + fx * speed * dt
-  local nz = self.z + fz * speed * dt
+  local nx, nz, hit = slide(pl, self.x + fx * speed * dt, self.z + fz * speed * dt, heading, oldHeading)
+  if hit then
+    if math.abs(speed) > 4 then
+      playSound("hit", 0.7, 0.6)
+      -- a hard crash hurts the people inside
+      if pl ~= nil and pl.car == self.name and math.abs(speed) > 14 then pl.hp = pl.hp - (math.abs(speed) - 14) * 1.5 end
+    end
+    speed = -speed * 0.25
+    if blockedAt(pl, nx, nz, heading) then   -- the turn itself ran into something: keep the old heading
+      heading = oldHeading
+      r = math.rad(heading)
+    end
+  end
+  self.ry = heading
   local gF = groundHeight(nx + fx * 1.9, nz + fz * 1.9)
   local gB = groundHeight(nx - fx * 1.9, nz - fz * 1.9)
   local g = groundHeight(nx, nz)
@@ -2202,6 +2495,39 @@ function put(o, lx, ly, lz, nx, nz, cs, sn, cp, sp, ry2, rx2, rz2)
   o.rz = rz2
 end
 
+CP = { { 0, -1 }, { 0, 1 }, { -0.3, 0 }, { 0.3, 0 }, { 0, 0 } }
+
+-- solid ground vehicle: it stops at walls, closed doors and tree trunks (the player script knows where they are)
+function blockedAt(pl, x, z, h)
+  local r = math.rad(h)
+  local cs, sn = math.cos(r), math.sin(r)
+  local y0 = self.y + 0.1
+  local y1 = self.y + 0.8
+  for i = 1, #CP do
+    local p = CP[i]
+    local wx = x + p[1] * cs + p[2] * sn
+    local wz = z - p[1] * sn + p[2] * cs
+    if pl.wallAt(wx, y0, wz) or pl.wallAt(wx, y1, wz) or pl.treeAt(wx, y0, wz) then return true end
+  end
+  return false
+end
+
+-- moves from here towards (wx, wz) in small steps so a thin wall cannot be jumped; returns the place reached and whether something stopped it
+function slide(pl, wx, wz, h, oldH)
+  if pl == nil or pl.wallAt == nil then return wx, wz, false end
+  local x0, z0 = self.x, self.z
+  if blockedAt(pl, x0, z0, oldH) then return wx, wz, false end   -- already inside something: let it drive out
+  local dx, dz = wx - x0, wz - z0
+  local steps = math.max(1, math.ceil(math.sqrt(dx * dx + dz * dz) / 0.3))
+  local nx, nz = x0, z0
+  for i = 1, steps do
+    local tx, tz = x0 + dx * i / steps, z0 + dz * i / steps
+    if blockedAt(pl, tx, tz, h) then return nx, nz, true end
+    nx, nz = tx, tz
+  end
+  return nx, nz, false
+end
+
 function update(dt)
   local pl = find("Player")
   local driven = pl ~= nil and pl.car == self.name and pl.seat == 1
@@ -2229,13 +2555,25 @@ function update(dt)
   speed = math.max(-5, math.min(36, speed))
   local dir = 1
   if speed < 0 then dir = -1 end
+  local oldHeading = heading
   heading = heading - steer * 80 * math.min(1, math.abs(speed) / 6) * dir * dt
-  self.ry = heading
   local r = math.rad(heading)
   local fx = -math.sin(r)
   local fz = -math.cos(r)
-  local nx = self.x + fx * speed * dt
-  local nz = self.z + fz * speed * dt
+  local nx, nz, hit = slide(pl, self.x + fx * speed * dt, self.z + fz * speed * dt, heading, oldHeading)
+  if hit then
+    if math.abs(speed) > 4 then
+      playSound("hit", 0.7, 0.6)
+      -- a hard crash hurts the people inside
+      if pl ~= nil and pl.car == self.name and math.abs(speed) > 14 then pl.hp = pl.hp - (math.abs(speed) - 14) * 1.5 end
+    end
+    speed = -speed * 0.25
+    if blockedAt(pl, nx, nz, heading) then   -- the turn itself ran into something: keep the old heading
+      heading = oldHeading
+      r = math.rad(heading)
+    end
+  end
+  self.ry = heading
   local gF = groundHeight(nx + fx * 0.85, nz + fz * 0.85)
   local gB = groundHeight(nx - fx * 0.85, nz - fz * 0.85)
   local g = groundHeight(nx, nz)
@@ -2315,6 +2653,39 @@ function put(o, lx, ly, lz, nx, nz, cs, sn, cp, sp, ry2, rx2, rz2)
   o.rz = rz2
 end
 
+-- the helicopter stops at walls, roofs and tree trunks (the player script knows where they are)
+CP = { { 0, -1.8 }, { -1, -0.5 }, { 1, -0.5 }, { -1, 0.8 }, { 1, 0.8 }, { 0, 2 }, { 0, 3.5 }, { 0, 4.6 } }
+
+function blockedAt(pl, x, y, z, h)
+  local r = math.rad(h)
+  local cs, sn = math.cos(r), math.sin(r)
+  for i = 1, #CP do
+    local p = CP[i]
+    local wx = x + p[1] * cs + p[2] * sn
+    local wz = z - p[1] * sn + p[2] * cs
+    if pl.wallAt(wx, y - 0.3, wz) or pl.wallAt(wx, y + 0.5, wz) or pl.treeAt(wx, y - 0.3, wz) or pl.treeAt(wx, y + 0.5, wz) then return true end
+  end
+  -- the rotor hub
+  if pl.wallAt(x - 0.3 * sn, y + 1.85, z - 0.3 * cs) then return true end
+  return false
+end
+
+-- moves from here towards (wx, wz) in small steps so a thin wall cannot be jumped; returns the place reached and whether something stopped it
+function slide(pl, wx, wz, h, oldH)
+  if pl == nil or pl.wallAt == nil then return wx, wz, false end
+  local x0, z0 = self.x, self.z
+  if blockedAt(pl, x0, self.y, z0, oldH) then return wx, wz, false end   -- already inside something: let it fly out
+  local dx, dz = wx - x0, wz - z0
+  local steps = math.max(1, math.ceil(math.sqrt(dx * dx + dz * dz) / 0.3))
+  local nx, nz = x0, z0
+  for i = 1, steps do
+    local tx, tz = x0 + dx * i / steps, z0 + dz * i / steps
+    if blockedAt(pl, tx, self.y, tz, h) then return nx, nz, true end
+    nx, nz = tx, tz
+  end
+  return nx, nz, false
+end
+
 function update(dt)
   local pl = find("Player")
   local pilot = pl ~= nil and pl.car == self.name and pl.seat == 1
@@ -2337,6 +2708,7 @@ function update(dt)
   if rt == 0 and rotor < 0.03 then rotor = 0 end
   local flying = rotor > 0.8
   local top = 40
+  local oldHeading = heading
   if flying then
     vy = vy + (climb * 7 - vy) * math.min(1, dt * 2)
     speed = speed + (fwd * top - speed) * math.min(1, dt * 0.9)
@@ -2348,9 +2720,26 @@ function update(dt)
   local r = math.rad(heading)
   local fx = -math.sin(r)
   local fz = -math.cos(r)
-  local nx = self.x + fx * speed * dt
-  local nz = self.z + fz * speed * dt
+  local nx, nz, hit = slide(pl, self.x + fx * speed * dt, self.z + fz * speed * dt, heading, oldHeading)
   local ny = self.y + vy * dt
+  if hit then
+    if math.abs(speed) > 4 then
+      playSound("hit", 0.8, 0.5)
+      -- a hard crash hurts the people inside
+      if pl ~= nil and pl.car == self.name and math.abs(speed) > 14 then pl.hp = pl.hp - (math.abs(speed) - 14) * 1.5 end
+    end
+    speed = -speed * 0.25
+    if blockedAt(pl, nx, self.y, nz, heading) then   -- the turn itself ran into something: keep the old heading
+      heading = oldHeading
+      r = math.rad(heading)
+    end
+  end
+  -- up into a ceiling or down onto a roof: it stops there
+  if pl ~= nil and pl.wallAt ~= nil and vy ~= 0 and blockedAt(pl, nx, ny, nz, heading) and not blockedAt(pl, nx, self.y, nz, heading) then
+    if pl.car == self.name and math.abs(vy) > 9 then pl.hp = pl.hp - (math.abs(vy) - 9) * 3 end
+    ny = self.y
+    vy = 0
+  end
   local gh = groundHeight(nx, nz)
   local minY = (gh or 0) + 0.85 + padLift
   if ny <= minY then
@@ -2477,6 +2866,9 @@ function start()
   phase = math.random() * 6
   home = self.y
   taken = 0
+  player = find("Player")
+  nearT = math.random() * 0.3
+  near = true
 end
 
 function update(dt)
@@ -2485,6 +2877,17 @@ function update(dt)
     if taken <= 0 then self.y = home end
     return
   end
+  -- far from the player: nothing to animate (saves a lot of work on big maps)
+  nearT = nearT - dt
+  if nearT <= 0 then
+    nearT = 0.3
+    near = true
+    if player ~= nil then
+      local dx, dz = player.x - self.x, player.z - self.z
+      near = dx * dx + dz * dz < 3600
+    end
+  end
+  if not near then return end
   self.ry = self.ry + 120 * dt
   self.y = home + 0.15 + math.sin(time * 3 + phase) * 0.1
 end
@@ -2504,6 +2907,9 @@ function start()
   phase = math.random() * 6
   home = self.y
   taken = 0
+  player = find("Player")
+  nearT = math.random() * 0.3
+  near = true
 end
 
 function update(dt)
@@ -2512,6 +2918,17 @@ function update(dt)
     if taken <= 0 then self.y = home end
     return
   end
+  -- far from the player: nothing to animate (saves a lot of work on big maps)
+  nearT = nearT - dt
+  if nearT <= 0 then
+    nearT = 0.3
+    near = true
+    if player ~= nil then
+      local dx, dz = player.x - self.x, player.z - self.z
+      near = dx * dx + dz * dz < 3600
+    end
+  end
+  if not near then return end
   self.ry = self.ry + 90 * dt
   self.y = home + 0.15 + math.sin(time * 3 + phase) * 0.1
 end
@@ -2529,6 +2946,9 @@ function start()
   phase = math.random() * 6
   home = self.y
   taken = 0
+  player = find("Player")
+  nearT = math.random() * 0.3
+  near = true
 end
 
 function update(dt)
@@ -2537,6 +2957,17 @@ function update(dt)
     if taken <= 0 then self.y = home end
     return
   end
+  -- far from the player: nothing to animate (saves a lot of work on big maps)
+  nearT = nearT - dt
+  if nearT <= 0 then
+    nearT = 0.3
+    near = true
+    if player ~= nil then
+      local dx, dz = player.x - self.x, player.z - self.z
+      near = dx * dx + dz * dz < 3600
+    end
+  end
+  if not near then return end
   self.ry = self.ry + 60 * dt
   self.y = home + 0.15 + math.sin(time * 3 + phase) * 0.1
 end
@@ -2554,6 +2985,9 @@ function start()
   phase = math.random() * 6
   home = self.y
   taken = 0
+  player = find("Player")
+  nearT = math.random() * 0.3
+  near = true
 end
 
 function update(dt)
@@ -2562,6 +2996,17 @@ function update(dt)
     if taken <= 0 then self.y = home end
     return
   end
+  -- far from the player: nothing to animate (saves a lot of work on big maps)
+  nearT = nearT - dt
+  if nearT <= 0 then
+    nearT = 0.3
+    near = true
+    if player ~= nil then
+      local dx, dz = player.x - self.x, player.z - self.z
+      near = dx * dx + dz * dz < 3600
+    end
+  end
+  if not near then return end
   self.ry = self.ry + 100 * dt
   self.y = home + 0.15 + math.sin(time * 3 + phase) * 0.1
 end
