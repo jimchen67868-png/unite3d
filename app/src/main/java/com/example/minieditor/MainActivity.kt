@@ -1028,6 +1028,7 @@ end
                 it.fpOn = editor.renderer.fpMode
                 it.camTargetName = camTargetName
                 it.camX = editor.renderer.eyeAt(0); it.camY = editor.renderer.eyeAt(1); it.camZ = editor.renderer.eyeAt(2)
+                it.camFx = editor.renderer.fwdAt(0); it.camFy = editor.renderer.fwdAt(1); it.camFz = editor.renderer.fwdAt(2)
                 it.joyTap = joystick.consumeTap()
                 it.bagTapIn = bagTap
                 bagTap = ""

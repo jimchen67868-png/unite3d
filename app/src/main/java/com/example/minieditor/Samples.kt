@@ -65,11 +65,11 @@ STAIRS = {}
 TREES = {}
 -- ===== weapons: every gun has its own numbers =====
 WEAPONS = {
-  rifle   = { name = "M416",   mag = 30, dmg = 22, rate = 0.1,   spread = 0.010,  auto = true,  pellets = 1, speed = 420, life = 1.0, ammo = "r556", reload = 2.1, recoil = 0.55, pitch = 1.0,  vol = 0.8,  assist = true,  len = 1.0,  thick = 1.0 },
-  smg     = { name = "UMP45",  mag = 25, dmg = 16, rate = 0.075, spread = 0.018,  auto = true,  pellets = 1, speed = 340, life = 0.8, ammo = "r9",   reload = 1.8, recoil = 0.4,  pitch = 1.25, vol = 0.65, assist = true,  len = 0.75, thick = 0.9 },
-  pistol  = { name = "P1911",  mag = 12, dmg = 26, rate = 0.2,   spread = 0.012,  auto = false, pellets = 1, speed = 380, life = 0.8, ammo = "r9",   reload = 1.4, recoil = 0.8,  pitch = 1.45, vol = 0.6,  assist = true,  len = 0.5,  thick = 0.8 },
-  shotgun = { name = "S12K",   mag = 5,  dmg = 12, rate = 0.85,  spread = 0.07,   auto = false, pellets = 9, speed = 220, life = 0.3, ammo = "g12",  reload = 2.7, recoil = 2.2,  pitch = 0.6,  vol = 1.0,  assist = false, len = 0.95, thick = 1.3 },
-  sniper  = { name = "Kar98k", mag = 5,  dmg = 95, rate = 1.5,   spread = 0.0015, auto = false, pellets = 1, speed = 650, life = 1.2, ammo = "r762", reload = 3.2, recoil = 3.0,  pitch = 0.5,  vol = 1.0,  assist = false, len = 1.35, thick = 0.9 }
+  rifle   = { name = "M416",   mag = 30, dmg = 22, rate = 0.1,   spread = 0.010,  auto = true,  pellets = 1, speed = 420, life = 1.0, ammo = "r556", reload = 2.1, recoil = 0.4, pitch = 1.0,  vol = 0.8,  assist = true,  len = 1.0,  thick = 1.0 },
+  smg     = { name = "UMP45",  mag = 25, dmg = 16, rate = 0.075, spread = 0.018,  auto = true,  pellets = 1, speed = 340, life = 0.8, ammo = "r9",   reload = 1.8, recoil = 0.3,  pitch = 1.25, vol = 0.65, assist = true,  len = 0.75, thick = 0.9 },
+  pistol  = { name = "P1911",  mag = 12, dmg = 26, rate = 0.2,   spread = 0.012,  auto = false, pellets = 1, speed = 380, life = 0.8, ammo = "r9",   reload = 1.4, recoil = 0.6,  pitch = 1.45, vol = 0.6,  assist = true,  len = 0.5,  thick = 0.8 },
+  shotgun = { name = "S12K",   mag = 5,  dmg = 12, rate = 0.85,  spread = 0.07,   auto = false, pellets = 9, speed = 220, life = 0.3, ammo = "g12",  reload = 2.7, recoil = 1.6,  pitch = 0.6,  vol = 1.0,  assist = false, len = 0.95, thick = 1.3 },
+  sniper  = { name = "Kar98k", mag = 5,  dmg = 95, rate = 1.5,   spread = 0.0015, auto = false, pellets = 1, speed = 650, life = 1.2, ammo = "r762", reload = 3.2, recoil = 1.8,  pitch = 0.5,  vol = 1.0,  assist = false, len = 1.35, thick = 0.9 }
 }
 -- shooting distance: full damage up to "near" metres, then less and less until "far" metres, where the bullet is gone
 -- (at "far" the damage is "minD" times the full damage)
@@ -78,6 +78,20 @@ WEAPONS.smg.near, WEAPONS.smg.far, WEAPONS.smg.minD = 25, 120, 0.4
 WEAPONS.pistol.near, WEAPONS.pistol.far, WEAPONS.pistol.minD = 20, 100, 0.4
 WEAPONS.shotgun.near, WEAPONS.shotgun.far, WEAPONS.shotgun.minD = 8, 50, 0.15
 WEAPONS.sniper.near, WEAPONS.sniper.far, WEAPONS.sniper.minD = 200, 750, 0.85
+
+-- after you stop shooting, the view settles back down by the amount the gun kicked it up
+-- (what you already pulled down by hand counts as settled)
+function updateRecoil(dt)
+  sinceShot = sinceShot + dt
+  local dp = camera.pitch - lastPitch
+  if dp > 0 then recoilAcc = math.max(0, recoilAcc - dp) end
+  if sinceShot > 0.12 and recoilAcc > 0 then
+    local rec = math.min(recoilAcc, 10 * dt)
+    camera.pitch = camera.pitch + rec
+    recoilAcc = recoilAcc - rec
+  end
+  lastPitch = camera.pitch
+end
 
 function rangeMul(d, near, far, minD)
   if near == nil or d <= near then return 1 end
@@ -141,6 +155,9 @@ function start()
   medkits = 1
   bagOpenState = false
   bagT = 0
+  recoilAcc = 0
+  sinceShot = 1
+  lastPitch = camera.pitch or 0
   camera.bagOpen = false
   camera.bagText = ""
   grenList = {}
@@ -406,6 +423,7 @@ end
 function handleItems(dt)
   if gunBase == nil then applyGunLook() end
   bloom = math.max(0, bloom - dt * 0.09)
+  updateRecoil(dt)
   if input.buttonsPressed["Weapon"] then nextWeapon() end
   if input.buttonsPressed["Aim"] then toggleAim() end
   if input.buttonsPressed["Grenade"] then throwGrenade() end
@@ -829,6 +847,12 @@ function aimDir(assist)
   local fx = -math.cos(p) * math.sin(yaw)
   local fy = -math.sin(p)
   local fz = -math.cos(p) * math.cos(yaw)
+  -- the real direction the camera looks (from the screen's own view matrix), so the shot goes exactly where the crosshair is
+  local cl = 0
+  if camera.fx ~= nil then cl = camera.fx * camera.fx + camera.fy * camera.fy + camera.fz * camera.fz end
+  if cl > 0.9 then
+    fx, fy, fz = camera.fx / math.sqrt(cl), camera.fy / math.sqrt(cl), camera.fz / math.sqrt(cl)
+  end
   -- the bullet starts ON the camera's line of sight (just in front of the player) and flies along it,
   -- so it always goes exactly where the crosshair points, at any distance and any angle
   local ox, oy, oz = self.x + fx * 1.3, self.y + 0.5 + fy * 1.3, self.z + fz * 1.3
@@ -842,14 +866,14 @@ function aimDir(assist)
     if lineClear(self.x, self.y + 0.5, self.z, px, py, pz) and not pointInWall(px, py, pz) and (gp == nil or py > gp + 0.1) then ox, oy, oz = px, py, pz end
   end
   local best = nil
-  local bd = 0.97
+  local bd = 0.993
   if assist == false then bd = 2 end
   for k = 1, NBOTS do
     local e = bots[k]
     if e ~= nil and not e.dead and e.hp > 0 then
       local dx, dy, dz = e.x - self.x, e.y - self.y, e.z - self.z
       local d = math.sqrt(dx * dx + dy * dy + dz * dz)
-      if d > 0.5 and d < 60 then
+      if d > 0.5 and d < 45 then
         local dot = (dx * fx + dy * fy + dz * fz) / d
         if dot > bd then
           bd = dot
@@ -1027,6 +1051,10 @@ function shoot()
   playSound("shot", W.vol, W.pitch * (0.97 + math.random() * 0.06))
   local fx0, fy0, fz0, ox, oy, oz = aimDir(W.assist)
   muzzleFlash(ox, oy, oz)
+  if sinceShot > 1 then
+    -- a check line for single shots: the view pitch (+ = looking down) and the height of the bullet direction (+ = up)
+    log(string.format("shot: view pitch %.1f  bullet up %.2f  (view dir up %.2f)", camera.pitch, fy0, camera.fy or 0))
+  end
   local sp = W.spread + bloom
   if legAmp > 1 then sp = sp * 1.6 end
   if aimLevel > 0 then sp = sp * 0.4 end
@@ -1067,7 +1095,11 @@ function shoot()
   -- recoil: the view jumps up and wobbles a little
   local rk = 1
   if aimLevel > 0 then rk = 0.6 end
-  camera.pitch = camera.pitch - W.recoil * rk * (0.7 + math.random() * 0.6)
+  local kickUp = W.recoil * rk * (0.7 + math.random() * 0.6)
+  camera.pitch = camera.pitch - kickUp
+  recoilAcc = math.min(25, recoilAcc + kickUp)
+  sinceShot = 0
+  lastPitch = camera.pitch
   camera.yaw = camera.yaw + (math.random() - 0.5) * W.recoil * rk * 0.7
 end
 

@@ -33,6 +33,8 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
     @Volatile var tpFollow: SceneObject? = null
     @Volatile var tpDist = 3.6f
     fun eyeAt(i: Int): Float = eye[i]
+    /** The direction the camera looks (the middle of the screen), from the real view matrix: 0 = x, 1 = y, 2 = z. */
+    fun fwdAt(i: Int): Float = -view[i * 4 + 2]
     val target = floatArrayOf(0f, 0.5f, 0f)
 
     private val lock = Any()
@@ -2089,6 +2091,18 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         val seeThrough = ArrayList<SceneObject>()
         val huds = ArrayList<SceneObject>()
         val emitters = ArrayList<SceneObject>()
+        // the six planes of the view (from the view-projection matrix): objects fully outside are not drawn at all
+        val fr = FloatArray(24)
+        for (p in 0 until 6) {
+            val row = p / 2
+            val sg = if (p % 2 == 0) 1f else -1f
+            val a = vpc[3] + sg * vpc[row]
+            val b = vpc[7] + sg * vpc[4 + row]
+            val c = vpc[11] + sg * vpc[8 + row]
+            val d = vpc[15] + sg * vpc[12 + row]
+            val l = Math.sqrt((a * a + b * b + c * c).toDouble()).toFloat().coerceAtLeast(1e-6f)
+            fr[p * 4] = a / l; fr[p * 4 + 1] = b / l; fr[p * 4 + 2] = c / l; fr[p * 4 + 3] = d / l
+        }
         for (o in scene.objects) {
             if (o.shape.isLight || o.shape == Shape.CAMERA || o.shape == Shape.BONE) continue
             if (mirror && o.shape == Shape.MIRROR) continue
@@ -2096,6 +2110,16 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
             if (o.opacity <= 0.025f && o.shape != Shape.WATER && !o.shape.isEmitter) continue   // fully invisible (hidden parts, invisible body)
             if (o.hud) { if (!mirror) huds.add(o); continue }
             if (o.shape.isEmitter) { emitters.add(o); continue }
+            if ((o.shape == Shape.CUBE || o.shape == Shape.SPHERE || o.shape == Shape.PYRAMID || o.shape == Shape.TREE) && o.swing == 0f && o !== sel) {
+                // a ball around the object (big enough for any turn); outside the view = skip
+                val rad = Math.sqrt((o.sx * o.sx + o.sy * o.sy + o.sz * o.sz).toDouble()).toFloat() * 0.65f + 0.6f
+                val cy = if (o.shape == Shape.TREE) o.y + o.sy * 0.5f else o.y
+                var out = false
+                for (p in 0 until 6) {
+                    if (fr[p * 4] * o.x + fr[p * 4 + 1] * cy + fr[p * 4 + 2] * o.z + fr[p * 4 + 3] < -rad) { out = true; break }
+                }
+                if (out) continue
+            }
             if (o.shape == Shape.WATER || o.opacity < 0.99f) { seeThrough.add(o); continue }
             drawObject(o, vpc, sel, 1f)
         }

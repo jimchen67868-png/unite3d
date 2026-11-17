@@ -35,6 +35,12 @@ class ScriptEngine(private val scene: Scene, private val log: (String) -> Unit) 
     private val input = LuaTable()
     private val instByObj = HashMap<SceneObject, Inst>()
     private val pendingSpawn = ArrayList<SceneObject>()
+    private val tableOwner = java.util.IdentityHashMap<LuaTable, SceneObject>()   // Lua table -> its object (destroy() finds it fast)
+    private var waterObjs: List<SceneObject> = emptyList()   // the water surfaces, looked up once in a while instead of scanning every object
+    private var waterStamp = -1000
+    private var frameNo = 0
+    private var pullNo = 0
+    private var fired = false
     private val nameIndex = HashMap<String, SceneObject>()   // find() looks names up here first
 
     private fun flushSpawns() {
@@ -89,6 +95,9 @@ class ScriptEngine(private val scene: Scene, private val log: (String) -> Unit) 
     var camX = 0f
     var camY = 0f
     var camZ = 0f
+    var camFx = 0f
+    var camFy = 0f
+    var camFz = 0f
     var fpRequest: Boolean? = null
     var yawOut: Float? = null
     var pitchOut: Float? = null
@@ -176,6 +185,7 @@ class ScriptEngine(private val scene: Scene, private val log: (String) -> Unit) 
             // is never seen by the renderer or the shadow system
             pendingSpawn.add(o)
             tables[o] = t
+            tableOwner[t] = o
             return t
         }
     }
@@ -198,23 +208,20 @@ class ScriptEngine(private val scene: Scene, private val log: (String) -> Unit) 
     /** waterHeight(x, z) = height of the moving water surface there, or nil if there is no water. */
     private val waterFn = object : VarArgFunction() {
         override fun invoke(args: Varargs): Varargs {
-            val y = Water.surfaceAt(scene, args.optdouble(1, 0.0).toFloat(), args.optdouble(2, 0.0).toFloat())
+            val y = surfaceAt(args.optdouble(1, 0.0).toFloat(), args.optdouble(2, 0.0).toFloat())
             return if (y == null) LuaValue.NIL else LuaValue.valueOf(y.toDouble())
         }
     }
 
     private val destroyFn = object : OneArgFunction() {
         override fun call(arg: LuaValue): LuaValue {
-            for ((o, t) in tables.entries.toList()) {
-                if (t === arg) {
-                    tables.remove(o)
-                    pendingSpawn.remove(o)
-                    scene.objects.remove(o)
-                    if (scene.selected === o) scene.selected = null
-                    for (inst in instances) if (inst.obj === o) inst.failed = true
-                    break
-                }
-            }
+            val tt = arg as? LuaTable ?: return LuaValue.NIL
+            val o = tableOwner.remove(tt) ?: return LuaValue.NIL
+            tables.remove(o)
+            pendingSpawn.remove(o)
+            scene.objects.remove(o)
+            if (scene.selected === o) scene.selected = null
+            for (inst in instances) if (inst.obj === o) inst.failed = true
             return LuaValue.NIL
         }
     }
@@ -248,8 +255,23 @@ class ScriptEngine(private val scene: Scene, private val log: (String) -> Unit) 
     // what each object looked like when it was last copied into its Lua table; unchanged ones are skipped
     private val pushCache = HashMap<SceneObject, FloatArray>()
 
+    /** Height of the highest water surface over (x, z), or null. Same as Water.surfaceAt, but only looks at the water objects. */
+    private fun surfaceAt(x: Float, z: Float): Float? {
+        if (frameNo - waterStamp > 120) {
+            waterObjs = scene.objects.filter { it.shape == Shape.WATER }
+            waterStamp = frameNo
+        }
+        var best: Float? = null
+        for (o in waterObjs) {
+            if (abs(x - o.x) > o.sx / 2f || abs(z - o.z) > o.sz / 2f) continue
+            val h = Water.height(o, x, z)
+            best = if (best == null) h else maxOf(best, h)
+        }
+        return best
+    }
+
     private fun push(o: SceneObject, t: LuaTable) {
-        val c = pushCache.getOrPut(o) { FloatArray(18) { Float.NaN } }
+        val c = pushCache.getOrPut(o) { FloatArray(19) { if (it == 18) 0f else Float.NaN } }   // [18] = how many looks in a row found the object unchanged by scripts
         val scripted = instByObj.containsKey(o)
         var changed = false
         var moved = false
@@ -257,7 +279,12 @@ class ScriptEngine(private val scene: Scene, private val log: (String) -> Unit) 
         chk(0, o.x); chk(1, o.y); chk(2, o.z); chk(3, o.rx); chk(4, o.ry); chk(5, o.rz)
         chk(6, o.sx); chk(7, o.sy); chk(8, o.sz); chk(9, o.color[0]); chk(10, o.color[1]); chk(11, o.color[2])
         chk(12, o.collider.toFloat()); chk(13, o.opacity); chk(14, o.emit); chk(15, if (o.shadow) 1f else 0f); chk(16, o.swing); chk(17, if (o.hud) 1f else 0f)
-        if (!changed && !scripted) return
+        if (changed) c[18] = 0f   // the engine moved it: not a quiet object
+        if (!changed) {
+            if (!scripted) return
+            // a still scripted object only needs a refresh now and then (the water level under it can change)
+            if (((frameNo + (System.identityHashCode(o) and 7)) and 3) != 0) return
+        }
         t.set("name", o.name)
         t.set("x", o.x.toDouble()); t.set("y", o.y.toDouble()); t.set("z", o.z.toDouble())
         t.set("rx", o.rx.toDouble()); t.set("ry", o.ry.toDouble()); t.set("rz", o.rz.toDouble())
@@ -270,7 +297,7 @@ class ScriptEngine(private val scene: Scene, private val log: (String) -> Unit) 
         t.set("hud", LuaValue.valueOf(o.hud))
         t.set("shadow", LuaValue.valueOf(o.shadow))
         // water depth is only worked out for scripted objects and ones that just moved (it is the costly part)
-        val wy = if (scripted || (o.collider != 0 && moved)) Water.surfaceAt(scene, o.x, o.z) else null
+        val wy = if (scripted || (o.collider != 0 && moved)) surfaceAt(o.x, o.z) else null
         t.set("inWater", LuaValue.valueOf(wy != null && o.y < wy))
         if (wy != null) t.set("waterY", wy.toDouble()) else t.set("waterY", LuaValue.NIL)
     }
@@ -281,30 +308,47 @@ class ScriptEngine(private val scene: Scene, private val log: (String) -> Unit) 
         return if (f.isNaN() || f.isInfinite()) null else f
     }
 
-    private fun pull(o: SceneObject, t: LuaTable) {
-        num(t, "x")?.let { o.x = it }
-        num(t, "y")?.let { o.y = it }
-        num(t, "z")?.let { o.z = it }
-        num(t, "rx")?.let { o.rx = it }
-        num(t, "ry")?.let { o.ry = it }
-        num(t, "rz")?.let { o.rz = it }
-        num(t, "sx")?.let { o.sx = it.coerceIn(0.01f, 2000f) }
-        num(t, "sy")?.let { o.sy = it.coerceIn(0.01f, 2000f) }
-        num(t, "sz")?.let { o.sz = it.coerceIn(0.01f, 2000f) }
-        num(t, "collider")?.let { o.collider = it.toInt().coerceIn(0, 2) }
-        num(t, "opacity")?.let { o.opacity = it.coerceIn(0f, 1f) }
-        num(t, "emit")?.let { o.emit = it.coerceIn(0f, 1f) }
-        num(t, "swing")?.let { o.swing = it.coerceIn(-170f, 170f) }
-        t.get("shadow").let { if (it.isboolean()) o.shadow = it.toboolean() }
-        t.get("hud").let { if (it.isboolean()) o.hud = it.toboolean() }
-        o.color = floatArrayOf(
-            (num(t, "r") ?: o.color[0]).coerceIn(0f, 1f),
-            (num(t, "g") ?: o.color[1]).coerceIn(0f, 1f),
-            (num(t, "b") ?: o.color[2]).coerceIn(0f, 1f)
-        )
+    /** Copies what scripts wrote in the table back into the object. Returns true when something really changed. */
+    private fun pull(o: SceneObject, t: LuaTable): Boolean {
+        var ch = false
+        num(t, "x")?.let { if (it != o.x) { o.x = it; ch = true } }
+        num(t, "y")?.let { if (it != o.y) { o.y = it; ch = true } }
+        num(t, "z")?.let { if (it != o.z) { o.z = it; ch = true } }
+        num(t, "rx")?.let { if (it != o.rx) { o.rx = it; ch = true } }
+        num(t, "ry")?.let { if (it != o.ry) { o.ry = it; ch = true } }
+        num(t, "rz")?.let { if (it != o.rz) { o.rz = it; ch = true } }
+        num(t, "sx")?.let { val v = it.coerceIn(0.01f, 2000f); if (v != o.sx) { o.sx = v; ch = true } }
+        num(t, "sy")?.let { val v = it.coerceIn(0.01f, 2000f); if (v != o.sy) { o.sy = v; ch = true } }
+        num(t, "sz")?.let { val v = it.coerceIn(0.01f, 2000f); if (v != o.sz) { o.sz = v; ch = true } }
+        num(t, "collider")?.let { val v = it.toInt().coerceIn(0, 2); if (v != o.collider) { o.collider = v; ch = true } }
+        num(t, "opacity")?.let { val v = it.coerceIn(0f, 1f); if (v != o.opacity) { o.opacity = v; ch = true } }
+        num(t, "emit")?.let { val v = it.coerceIn(0f, 1f); if (v != o.emit) { o.emit = v; ch = true } }
+        num(t, "swing")?.let { val v = it.coerceIn(-170f, 170f); if (v != o.swing) { o.swing = v; ch = true } }
+        t.get("shadow").let { if (it.isboolean() && it.toboolean() != o.shadow) { o.shadow = it.toboolean(); ch = true } }
+        t.get("hud").let { if (it.isboolean() && it.toboolean() != o.hud) { o.hud = it.toboolean(); ch = true } }
+        val r = (num(t, "r") ?: o.color[0]).coerceIn(0f, 1f)
+        val g = (num(t, "g") ?: o.color[1]).coerceIn(0f, 1f)
+        val b = (num(t, "b") ?: o.color[2]).coerceIn(0f, 1f)
+        if (r != o.color[0] || g != o.color[1] || b != o.color[2]) { o.color = floatArrayOf(r, g, b); ch = true }
+        return ch
     }
 
-    private fun pullAll() { for ((o, t) in tables.entries.toList()) pull(o, t) }
+    /**
+     * Copies script changes into the objects. Scripted objects and ones scripts touched lately are read every time;
+     * a quiet object (a wall, a still prop) is only looked at every 8th time, which saves most of the work in big scenes.
+     */
+    private fun pullAll() {
+        pullNo++
+        for ((o, t) in tables.entries.toList()) {
+            val c = pushCache[o]
+            if (c != null && c[18] >= 90f && !instByObj.containsKey(o) && ((pullNo + System.identityHashCode(o)) and 7) != 0) continue
+            if (pull(o, t)) {
+                if (c != null) c[18] = 0f
+            } else if (c != null && c[18] < 1000f) {
+                c[18] += 1f
+            }
+        }
+    }
 
     /** Ignores tiny tilts so hand shake does not move things. */
     private fun deadZone(v: Float): Float {
@@ -368,6 +412,9 @@ class ScriptEngine(private val scene: Scene, private val log: (String) -> Unit) 
         camera.set("x", camX.toDouble())
         camera.set("y", camY.toDouble())
         camera.set("z", camZ.toDouble())
+        camera.set("fx", camFx.toDouble())
+        camera.set("fy", camFy.toDouble())
+        camera.set("fz", camFz.toDouble())
     }
 
     private fun pullCamera() {
@@ -428,6 +475,7 @@ class ScriptEngine(private val scene: Scene, private val log: (String) -> Unit) 
         val h = inst.onCollide ?: return
         val tb = tables[b] ?: return
         if (inst.failed) return
+        fired = true
         try {
             guard(inst)
             h.call(tb)
@@ -444,6 +492,7 @@ class ScriptEngine(private val scene: Scene, private val log: (String) -> Unit) 
     private fun collide() {
         val st = settingsObj()
         if (st != null && st.sz < 0.5f) return
+        fired = false
         val cols = ArrayList<SceneObject>()
         for (o in tables.keys) {
             if (o.collider != 0 && !o.shape.isScreen && !o.shape.isLight && o.shape != Shape.SETTINGS && o.shape != Shape.TERRAIN) cols.add(o)
@@ -513,7 +562,7 @@ class ScriptEngine(private val scene: Scene, private val log: (String) -> Unit) 
                 fire(cols[j], cols[i])
             }
         }
-        pullAll()
+        if (fired) pullAll()   // only when a collision script ran (it may have changed things)
     }
 
     fun start() {
@@ -522,6 +571,7 @@ class ScriptEngine(private val scene: Scene, private val log: (String) -> Unit) 
             val t = LuaTable()
             push(o, t)
             tables[o] = t
+            tableOwner[t] = o
             if (!nameIndex.containsKey(o.name)) nameIndex[o.name] = o
         }
         updateInput()
@@ -571,6 +621,7 @@ class ScriptEngine(private val scene: Scene, private val log: (String) -> Unit) 
     fun update(rawDt: Float) {
         val dt = rawDt * (settingsObj()?.sx ?: 1f).coerceIn(0f, 5f)
         time += dt
+        frameNo++
         for ((o, _) in tables) {
             val p = prev.getOrPut(o) { FloatArray(3) }
             p[0] = o.x; p[1] = o.y; p[2] = o.z
