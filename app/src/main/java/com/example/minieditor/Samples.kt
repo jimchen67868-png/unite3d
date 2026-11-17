@@ -1051,10 +1051,6 @@ function shoot()
   playSound("shot", W.vol, W.pitch * (0.97 + math.random() * 0.06))
   local fx0, fy0, fz0, ox, oy, oz = aimDir(W.assist)
   muzzleFlash(ox, oy, oz)
-  if sinceShot > 1 then
-    -- a check line for single shots: the view pitch (+ = looking down) and the height of the bullet direction (+ = up)
-    log(string.format("shot: view pitch %.1f  bullet up %.2f  (view dir up %.2f)", camera.pitch, fy0, camera.fy or 0))
-  end
   local sp = W.spread + bloom
   if legAmp > 1 then sp = sp * 1.6 end
   if aimLevel > 0 then sp = sp * 0.4 end
@@ -1103,6 +1099,19 @@ function shoot()
   camera.yaw = camera.yaw + (math.random() - 0.5) * W.recoil * rk * 0.7
 end
 
+-- where the line from (ox, oy, oz) to (ex, ey, ez) first goes under the ground (or under the water)
+function crossAt(ox, oy, oz, ex, ey, ez, water)
+  local t0, t1 = 0, 1
+  for k = 1, 10 do
+    local tm = (t0 + t1) / 2
+    local mx, my, mz = ox + (ex - ox) * tm, oy + (ey - oy) * tm, oz + (ez - oz) * tm
+    local g
+    if water then g = waterHeight(mx, mz) else g = groundHeight(mx, mz) end
+    if g ~= nil and my < g then t1 = tm else t0 = tm end
+  end
+  return ox + (ex - ox) * t1, oy + (ey - oy) * t1, oz + (ez - oz) * t1
+end
+
 function updateBullets(dt)
   for i = #bullets, 1, -1 do
     local b = bullets[i]
@@ -1132,9 +1141,13 @@ function updateBullets(dt)
         impactFx(b.x - ux * 0.3, b.y - uy * 0.3, b.z - uz * 0.3, hitKind, -ux, -uy, -uz)
       end
     elseif wet then
-      splash(b.x, wy, b.z, 4)
+      -- the bullet flies several metres per frame: find the spot where it really crossed the water surface
+      local sx0, sy0, sz0 = crossAt(ox, oy, oz, b.x, b.y, b.z, true)
+      splash(sx0, waterHeight(sx0, sz0) or wy, sz0, 4)
     elseif low then
-      impactFx(b.x, gh, b.z, 2, 0, 1, 0)
+      -- ... and the spot where it really touched the ground (not where the step ended, which is further on)
+      local gx, gy, gz = crossAt(ox, oy, oz, b.x, b.y, b.z, false)
+      impactFx(gx, groundHeight(gx, gz), gz, 2, 0, 1, 0)
     end
     if not gone then
       local ex, ez = b.x - ox, b.z - oz
