@@ -460,7 +460,7 @@ end
                     importButton
                 ),
                 // 3 Edit
-                LinearLayout(this).apply {
+                LinearLayout(this@MainActivity).apply {
                     orientation = LinearLayout.VERTICAL
                     addView(row(btn("Points", true) { startPointEdit() }, btn("Shape", true) { showShapeMenu() }))
                     addView(row(
