@@ -91,6 +91,11 @@ class MainActivity : Activity(), SensorEventListener {
     private lateinit var brushSliders: Array<SeekBar>
     private lateinit var importButton: Button
     private lateinit var buildButton: Button
+    private var pointEdit: PointEdit? = null
+    private lateinit var pointsView: PointsView
+    private lateinit var pointBar: LinearLayout
+    private lateinit var pointInfo: TextView
+    private lateinit var pointAxisBtn: Button
     private lateinit var photoBtn: Button
     private lateinit var skyPhotoBtn: Button
     private lateinit var skyModeBtn: Button
@@ -455,7 +460,10 @@ end
                     importButton
                 ),
                 // 3 Edit
-                row(
+                LinearLayout(this).apply {
+                    orientation = LinearLayout.VERTICAL
+                    addView(row(btn("Points", true) { startPointEdit() }, btn("Shape", true) { showShapeMenu() }))
+                    addView(row(
                     btn("Undo") { }.also { b -> b.setOnClickListener { undo() } },
                     btn("Redo") { }.also { b -> b.setOnClickListener { redo() } },
                     btn("Cut", true) { if (scene.cutSelected()) editor.refresh() else toast("Select an object first") },
@@ -466,7 +474,8 @@ end
                         else if (scene.selected != null) { scene.removeSelected(); editor.refresh() }
                         else toast("Select an object first")
                     }
-                ),
+                    ))
+                },
                 // 4 Group
                 row(multiButton, btn("Group", true) { doGroup() }, btn("Ungroup", true) { doUngroup() }),
                 // 5 View
@@ -549,6 +558,7 @@ end
         root.addView(crosshair, FrameLayout.LayoutParams(dp(70), dp(70), Gravity.CENTER))
         bagView = BagView(this) { k -> bagTap = k }.apply { visibility = View.GONE }
         root.addView(bagView, FrameLayout.LayoutParams(-1, -1))
+        buildPointEditViews()
         root.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
             topScroll.maxHeightPx = (root.height * panelFrac).toInt()
             refreshJoystick()
@@ -2906,6 +2916,130 @@ end
             .setNegativeButton("Cancel", null)
             .show()
     }
+
+    // ---------- Edit points and shape ----------
+
+    private fun buildPointEditViews() {
+        pointsView = PointsView(this, editor.renderer) { pointEdit }.apply {
+            visibility = View.GONE
+            onEdited = { editor.refresh(); updatePointInfo() }
+        }
+        root.addView(pointsView, FrameLayout.LayoutParams(-1, -1))
+        fun pb(t: String, f: () -> Unit) = Button(this).apply {
+            text = t
+            textSize = 11f
+            setTextColor(Color.WHITE)
+            setBackgroundColor(0xFF444444.toInt())
+            minWidth = 0; minHeight = 0
+            setPadding(dp(2), dp(8), dp(2), dp(8))
+            layoutParams = LinearLayout.LayoutParams(0, -2, 1f).also { it.setMargins(dp(2), dp(2), dp(2), dp(2)) }
+            setOnClickListener { f() }
+        }
+        pointInfo = TextView(this).apply {
+            setTextColor(0xFFFFD27F.toInt())
+            textSize = 12f
+            setPadding(dp(6), dp(2), dp(6), dp(4))
+        }
+        pointAxisBtn = pb("Move: free") { cyclePointAxis() }
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            addView(pb("Done") { finishPointEdit(true) })
+            addView(pb("Cancel") { finishPointEdit(false) })
+            addView(pb("+Points") { pointEdit?.let { if (it.subdivide()) { editor.refresh(); updatePointInfo() } else toast("Too many points") } })
+            addView(pb("Round") { pointEdit?.let { it.roundOff(); editor.refresh() } })
+            addView(pb("Taper") { pointEdit?.let { it.taper(); editor.refresh() } })
+            addView(pb("Twist") { pointEdit?.let { it.twist(); editor.refresh() } })
+            addView(pointAxisBtn)
+        }
+        pointBar = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(0xDD000000.toInt())
+            visibility = View.GONE
+            addView(row)
+            addView(pointInfo)
+        }
+        root.addView(pointBar, FrameLayout.LayoutParams(-1, -2, Gravity.TOP))
+    }
+
+    private fun cyclePointAxis() {
+        val e = pointEdit ?: return
+        e.axis = (e.axis + 1) % 4
+        pointAxisBtn.text = when (e.axis) { 1 -> "Move: X"; 2 -> "Move: Y"; 3 -> "Move: Z"; else -> "Move: free" }
+    }
+
+    private fun updatePointInfo() {
+        val e = pointEdit ?: return
+        val s = e.sel
+        pointInfo.text = if (s in 0 until e.nPts)
+            "Point " + (s + 1) + " of " + e.nPts + "   x " + String.format(java.util.Locale.US, "%.2f", e.pts[s * 3]) +
+                "  y " + String.format(java.util.Locale.US, "%.2f", e.pts[s * 3 + 1]) + "  z " + String.format(java.util.Locale.US, "%.2f", e.pts[s * 3 + 2])
+        else e.nPts.toString() + " points. Tap a point, then drag it. Drag elsewhere to look around."
+    }
+
+    /** Edit > Points: the selected cube, pyramid, sphere or model shows its points; drag them to change the shape. */
+    private fun startPointEdit() {
+        if (playing) { toast("Stop play mode first"); return }
+        if (pointEdit != null) return
+        val s = scene.selected
+        if (s == null) { toast("Select a cube, pyramid, sphere or model first"); return }
+        record()
+        val pe = PointEdit.start(scene, editor.renderer, s) { key, text -> writeModelFile(key, text) }
+        if (pe == null) { toast("This object cannot be edited by points (or it has too many points)"); return }
+        pointEdit = pe
+        pointAxisBtn.text = "Move: free"
+        editor.selectEnabled = false
+        pointBar.visibility = View.VISIBLE
+        pointsView.visibility = View.VISIBLE
+        updatePointInfo()
+        lastCount = -1
+        editor.refresh()
+    }
+
+    private fun finishPointEdit(commit: Boolean) {
+        val pe = pointEdit ?: return
+        val res = if (commit) (pe.finish() ?: run { toast("Could not save the shape"); null }) else pe.cancel()
+        if (commit && res == null) return
+        pointEdit = null
+        pointsView.visibility = View.GONE
+        pointBar.visibility = View.GONE
+        editor.selectEnabled = true
+        scene.selected = res
+        lastCount = -1
+        editor.refresh()
+        record()
+        toast(if (commit) "Shape saved" else "Cancelled")
+    }
+
+    /** Edit > Shape: give a cube / pyramid / sphere another basic shape. */
+    private fun showShapeMenu() {
+        if (playing) { toast("Stop play mode first"); return }
+        val s = scene.selected
+        if (s == null || (s.shape != Shape.CUBE && s.shape != Shape.PYRAMID && s.shape != Shape.SPHERE)) {
+            toast("Select a cube, pyramid or sphere (a model keeps its shape: use Points)")
+            return
+        }
+        val names = arrayOf("Cube", "Pyramid", "Sphere")
+        val shapes = arrayOf(Shape.CUBE, Shape.PYRAMID, Shape.SPHERE)
+        AlertDialog.Builder(this)
+            .setTitle("Shape")
+            .setItems(names) { _, i ->
+                record()
+                val n = PointEdit.reshape(scene, s, shapes[i])
+                if (n != null) scene.selected = n
+                lastCount = -1
+                editor.refresh()
+                record()
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    /** Writes a .obj model into the models folder and loads it. */
+    private fun writeModelFile(key: String, text: String): ModelData? = try {
+        val bytes = text.toByteArray()
+        File(modelsDir(), key).writeBytes(bytes)
+        ModelData(key, ModelLoader.load(key, bytes)).also { modelCache[key] = it }
+    } catch (e: Throwable) { null }
 
     private fun showImportMenu() {
         val pm = PopupMenu(this, importButton)

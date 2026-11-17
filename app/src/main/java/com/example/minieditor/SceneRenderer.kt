@@ -35,6 +35,8 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
     fun eyeAt(i: Int): Float = eye[i]
     /** The direction the camera looks (the middle of the screen), from the real view matrix: 0 = x, 1 = y, 2 = z. */
     fun fwdAt(i: Int): Float = -view[i * 4 + 2]
+    /** A model's points changed: build its mesh again the next time it is drawn. */
+    fun refreshModel(key: String) { synchronized(scene.lock) { modelMeshes.remove(key) } }
     val target = floatArrayOf(0f, 0.5f, 0f)
 
     private val lock = Any()
