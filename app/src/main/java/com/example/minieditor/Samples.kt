@@ -829,15 +829,17 @@ function aimDir(assist)
   local fx = -math.cos(p) * math.sin(yaw)
   local fy = -math.sin(p)
   local fz = -math.cos(p) * math.cos(yaw)
+  -- the bullet starts ON the camera's line of sight (just in front of the player) and flies along it,
+  -- so it always goes exactly where the crosshair points, at any distance and any angle
+  local ox, oy, oz = self.x + fx * 1.3, self.y + 0.5 + fy * 1.3, self.z + fz * 1.3
   if camera.x ~= nil then
-    -- the bullet flies from the player to the exact point the crosshair meets (a wall, a tree, the ground, an enemy, or far away),
-    -- so it hits where you aim at any distance, also with the camera behind your shoulder
-    local ax, ay, az = aimPoint(fx, fy, fz)
-    local mx, my, mz = self.x, self.y + 0.5, self.z
-    local ddx, ddy, ddz = ax - mx, ay - my, az - mz
-    local dl = math.sqrt(ddx * ddx + ddy * ddy + ddz * ddz)
-    -- only use it when it points the same way as the view (never backwards or far off)
-    if dl > 2 and (ddx * fx + ddy * fy + ddz * fz) / dl > 0.85 then fx, fy, fz = ddx / dl, ddy / dl, ddz / dl end
+    local cx, cy, cz = camera.x, camera.y, camera.z
+    local d = (self.x - cx) * fx + (self.y + 0.5 - cy) * fy + (self.z - cz) * fz + 1.2
+    if d < 0.8 then d = 0.8 end
+    local px, py, pz = cx + fx * d, cy + fy * d, cz + fz * d
+    -- not through a wall: only use that start when nothing solid lies between the player and it
+    local gp = groundHeight(px, pz)
+    if lineClear(self.x, self.y + 0.5, self.z, px, py, pz) and not pointInWall(px, py, pz) and (gp == nil or py > gp + 0.1) then ox, oy, oz = px, py, pz end
   end
   local best = nil
   local bd = 0.97
@@ -858,11 +860,11 @@ function aimDir(assist)
   end
   if best ~= nil then
     -- the snap points at the upper body (chest), not at the belly
-    local dx, dy, dz = best.x - self.x, best.y + 0.25 - self.y, best.z - self.z
-    local d = math.sqrt(dx * dx + dy * dy + dz * dz)
-    return dx / d, dy / d, dz / d
+    local dx, dy, dz = best.x - ox, best.y + 0.25 - oy, best.z - oz
+    local d = math.sqrt(dx * dx + dy * dy + dz * dz) + 0.001
+    return dx / d, dy / d, dz / d, ox, oy, oz
   end
-  return fx, fy, fz
+  return fx, fy, fz, ox, oy, oz
 end
 
 -- a flash at the muzzle for a moment
@@ -1023,8 +1025,7 @@ function shoot()
   aimT = 0.7
   kick = 1
   playSound("shot", W.vol, W.pitch * (0.97 + math.random() * 0.06))
-  local fx0, fy0, fz0 = aimDir(W.assist)
-  local ox, oy, oz = self.x + fx0 * 1.3, self.y + 0.5 + fy0 * 1.3, self.z + fz0 * 1.3
+  local fx0, fy0, fz0, ox, oy, oz = aimDir(W.assist)
   muzzleFlash(ox, oy, oz)
   local sp = W.spread + bloom
   if legAmp > 1 then sp = sp * 1.6 end
