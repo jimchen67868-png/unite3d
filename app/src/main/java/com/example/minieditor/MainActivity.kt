@@ -90,6 +90,7 @@ class MainActivity : Activity(), SensorEventListener {
     private lateinit var brushLabels: Array<TextView>
     private lateinit var brushSliders: Array<SeekBar>
     private lateinit var importButton: Button
+    private lateinit var buildButton: Button
     private lateinit var photoBtn: Button
     private lateinit var skyPhotoBtn: Button
     private lateinit var skyModeBtn: Button
@@ -423,6 +424,7 @@ end
         viewButton = btn("1st person") { toggleFirstPerson() }
         cameraButton = btn("Camera") { showCameraMenu() }
         importButton = btn("Import", true) { showImportMenu() }
+        buildButton = btn("+Build", true) { showBuildMenu() }
 
         val bottom = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -449,6 +451,7 @@ end
                     btn("+Cube", true) { scene.add(Shape.CUBE); editor.refresh() },
                     btn("+Pyramid", true) { scene.add(Shape.PYRAMID); editor.refresh() },
                     btn("+Sphere", true) { scene.add(Shape.SPHERE); editor.refresh() },
+                    buildButton,
                     importButton
                 ),
                 // 3 Edit
@@ -2869,6 +2872,39 @@ end
     private fun decodePhoto(key: String): Bitmap? {
         val f = File(photosDir(), key)
         return if (f.exists()) BitmapFactory.decodeFile(f.path) else null
+    }
+
+    /** Add > +Build: pick a kind, then an object; it is built where the camera looks, as one group. */
+    private fun showBuildMenu() {
+        val cats = Builder.categories
+        AlertDialog.Builder(this)
+            .setTitle("Build")
+            .setItems(cats.map { it.first }.toTypedArray()) { _, ci ->
+                val items = cats[ci].second
+                AlertDialog.Builder(this)
+                    .setTitle(cats[ci].first)
+                    .setItems(items.map { it.name }.toTypedArray()) { _, ii ->
+                        record()
+                        val t = editor.renderer.target
+                        val g = try {
+                            items[ii].make(scene, Math.round(t[0]).toFloat(), Math.round(t[2]).toFloat())
+                        } catch (e: Throwable) {
+                            toast("Could not build: " + (e.message ?: e.javaClass.simpleName))
+                            null
+                        }
+                        if (g != null) {
+                            scene.selected = g
+                            lastCount = -1
+                            editor.refresh()
+                            toast("Built " + items[ii].name + " as one group. Use Ungroup to edit the parts.")
+                        }
+                        record()
+                    }
+                    .setNegativeButton("Back") { _, _ -> showBuildMenu() }
+                    .show()
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
     }
 
     private fun showImportMenu() {
