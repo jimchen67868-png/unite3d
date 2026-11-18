@@ -2946,19 +2946,56 @@ end
             addView(pb("Done") { finishPointEdit(true) })
             addView(pb("Cancel") { finishPointEdit(false) })
             addView(pb("+Points") { pointEdit?.let { if (it.subdivide()) { editor.refresh(); updatePointInfo() } else toast("Too many points") } })
-            addView(pb("Round") { pointEdit?.let { it.roundOff(); editor.refresh() } })
+            addView(pointAxisBtn)
+        }
+        val row2 = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            // Round: with a point or a line selected it rounds that spot; with nothing selected it rounds the whole shape
+            addView(pb("Round") { pointEdit?.let { if (it.sel >= 0) it.roundSelected() else it.roundOff(); editor.refresh(); updatePointInfo() } })
+            addView(pb("Fillet...") { askFillet() })
             addView(pb("Taper") { pointEdit?.let { it.taper(); editor.refresh() } })
             addView(pb("Twist") { pointEdit?.let { it.twist(); editor.refresh() } })
-            addView(pointAxisBtn)
         }
         pointBar = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(0xDD000000.toInt())
             visibility = View.GONE
             addView(row)
+            addView(row2)
             addView(pointInfo)
         }
         root.addView(pointBar, FrameLayout.LayoutParams(-1, -2, Gravity.TOP))
+    }
+
+    private var filletR = 0.15f
+
+    /** Fillet...: ask for a radius, then make the selected line an exact round edge. */
+    private fun askFillet() {
+        val e = pointEdit ?: return
+        if (e.sel < 0 || e.sel2 < 0) { toast("Tap a line (an edge between two faces) first"); return }
+        val input = android.widget.EditText(this).apply {
+            inputType = android.text.InputType.TYPE_CLASS_NUMBER or android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL
+            setText(filletR.toString())
+            setSelectAllOnFocus(true)
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Fillet radius")
+            .setMessage("The radius of the round edge, as a part of the object's size (1 = as big as the whole object). A cube: 0.5 makes the edge fully round. Try 0.1 to 0.3.")
+            .setView(input)
+            .setPositiveButton("Round") { _, _ ->
+                val r = input.text.toString().toFloatOrNull()
+                if (r == null || r <= 0f) {
+                    toast("Type a number above 0")
+                } else {
+                    filletR = r
+                    val err = e.fillet(r)
+                    if (err != null) toast(err)
+                    editor.refresh()
+                    updatePointInfo()
+                }
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
     }
 
     private fun cyclePointAxis() {
@@ -2970,10 +3007,12 @@ end
     private fun updatePointInfo() {
         val e = pointEdit ?: return
         val s = e.sel
-        pointInfo.text = if (s in 0 until e.nPts)
+        pointInfo.text = if (s in 0 until e.nPts && e.sel2 in 0 until e.nPts)
+            "Line: points " + (s + 1) + " and " + (e.sel2 + 1) + " of " + e.nPts + "  (both move together)"
+        else if (s in 0 until e.nPts)
             "Point " + (s + 1) + " of " + e.nPts + "   x " + String.format(java.util.Locale.US, "%.2f", e.pts[s * 3]) +
                 "  y " + String.format(java.util.Locale.US, "%.2f", e.pts[s * 3 + 1]) + "  z " + String.format(java.util.Locale.US, "%.2f", e.pts[s * 3 + 2])
-        else e.nPts.toString() + " points. Tap a point, then drag it. Drag elsewhere to look around."
+        else e.nPts.toString() + " points. Tap a point or a line, then drag it, or tap Round to round it. Drag elsewhere to look around."
     }
 
     /** Edit > Points: the selected cube, pyramid, sphere or model shows its points; drag them to change the shape. */

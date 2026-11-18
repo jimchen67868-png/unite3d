@@ -9,6 +9,8 @@ import android.view.View
 import java.util.Locale
 import kotlin.math.PI
 import kotlin.math.abs
+import kotlin.math.acos
+import kotlin.math.tan
 import kotlin.math.cos
 import kotlin.math.max
 import kotlin.math.min
@@ -30,6 +32,7 @@ class PointEdit private constructor(
     var nPts = 0
     var tris = IntArray(0)       // 3 point numbers per triangle
     var sel = -1
+    var sel2 = -1                // second point of a selected line (-1 when a single point is selected)
     var axis = 0                 // 0 = free, 1 = X, 2 = Y, 3 = Z (the object's own axes)
     private var serial = 0
     private val stamp = System.currentTimeMillis()
@@ -130,6 +133,7 @@ class PointEdit private constructor(
         nPts = count
         tris = t
         sel = -1
+        sel2 = -1
         if (fixWinding) orient()
         return count > 0
     }
@@ -187,6 +191,7 @@ class PointEdit private constructor(
         nPts = total
         tris = t.toIntArray()
         sel = -1
+        sel2 = -1
         orient()
         return true
     }
@@ -285,6 +290,7 @@ class PointEdit private constructor(
         nPts = n
         tris = nt
         sel = -1
+        sel2 = -1
         rebuild()
         return true
     }
@@ -318,6 +324,394 @@ class PointEdit private constructor(
             pts[i * 3 + 2] = cz + dz * (1f - f) + dz / l * r * f
         }
         apply()
+    }
+
+    private fun nearestPoint(x: Float, y: Float, z: Float, not: Int): Int {
+        var best = -1
+        var bd = Float.MAX_VALUE
+        for (i in 0 until nPts) {
+            if (i == not) continue
+            val dx = pts[i * 3] - x; val dy = pts[i * 3 + 1] - y; val dz = pts[i * 3 + 2] - z
+            val d = dx * dx + dy * dy + dz * dz
+            if (d < bd) { bd = d; best = i }
+        }
+        return best
+    }
+
+    private fun averageEdge(): Float {
+        var sum = 0f
+        var n = 0
+        var t = 0
+        while (t + 2 < tris.size) {
+            for (k in 0 until 3) {
+                val a = tris[t + k] * 3; val b = tris[t + (k + 1) % 3] * 3
+                val dx = pts[a] - pts[b]; val dy = pts[a + 1] - pts[b + 1]; val dz = pts[a + 2] - pts[b + 2]
+                sum += sqrt(dx * dx + dy * dy + dz * dz)
+                n++
+            }
+            t += 3
+        }
+        return if (n == 0) 0f else sum / n
+    }
+
+    /**
+     * Rounds the selected line (or the corner at the selected point): the points near it are smoothed, the rest stay.
+     * More points are added first if the mesh is too coarse to round. Press again to round more.
+     */
+    fun roundSelected(): Boolean {
+        if (sel !in 0 until nPts) return false
+        val hasLine = sel2 in 0 until nPts
+        val ax = pts[sel * 3]; val ay = pts[sel * 3 + 1]; val az = pts[sel * 3 + 2]
+        val bx = if (hasLine) pts[sel2 * 3] else ax
+        val by = if (hasLine) pts[sel2 * 3 + 1] else ay
+        val bz = if (hasLine) pts[sel2 * 3 + 2] else az
+        val bb = bounds()
+        val ext = max(bb[3] - bb[0], max(bb[4] - bb[1], bb[5] - bb[2]))
+        val len = sqrt((bx - ax) * (bx - ax) + (by - ay) * (by - ay) + (bz - az) * (bz - az))
+        val r = if (hasLine) (0.3f * len).coerceIn(0.08f * ext, 0.35f * ext) else 0.25f * ext
+        var added = 0
+        while (added < 3 && averageEdge() > r * 0.5f && nPts + tris.size / 2 <= MAX_POINTS) {
+            if (!subdivide()) break
+            added++
+        }
+        if (added > 0) {
+            // the old points are still where they were: find the selected ones again
+            sel = nearestPoint(ax, ay, az, -1)
+            sel2 = if (hasLine) nearestPoint(bx, by, bz, sel) else -1
+        }
+        val nb = Array(nPts) { HashSet<Int>() }
+        var t = 0
+        while (t + 2 < tris.size) {
+            for (k in 0 until 3) {
+                val a = tris[t + k]; val b = tris[t + (k + 1) % 3]
+                if (a != b) { nb[a].add(b); nb[b].add(a) }
+            }
+            t += 3
+        }
+        // how strongly each point is smoothed: 1 on the line, 0 at the distance r from it
+        val w = FloatArray(nPts)
+        val abx = bx - ax; val aby = by - ay; val abz = bz - az
+        val l2 = abx * abx + aby * aby + abz * abz
+        for (i in 0 until nPts) {
+            val px = pts[i * 3] - ax; val py = pts[i * 3 + 1] - ay; val pz = pts[i * 3 + 2] - az
+            var u = if (l2 < 1e-9f) 0f else (px * abx + py * aby + pz * abz) / l2
+            u = u.coerceIn(0f, 1f)
+            val dx = px - abx * u; val dy = py - aby * u; val dz = pz - abz * u
+            val d = sqrt(dx * dx + dy * dy + dz * dz)
+            w[i] = max(0f, 1f - d / r)
+        }
+        for (iter in 0 until 4) {
+            val np = pts.copyOf()
+            for (i in 0 until nPts) {
+                if (w[i] <= 0f || nb[i].isEmpty()) continue
+                var sx = 0f; var sy = 0f; var sz = 0f
+                for (q in nb[i]) { sx += pts[q * 3]; sy += pts[q * 3 + 1]; sz += pts[q * 3 + 2] }
+                val n = nb[i].size
+                val k = 0.5f * w[i]
+                np[i * 3] = pts[i * 3] + (sx / n - pts[i * 3]) * k
+                np[i * 3 + 1] = pts[i * 3 + 1] + (sy / n - pts[i * 3 + 1]) * k
+                np[i * 3 + 2] = pts[i * 3 + 2] + (sz / n - pts[i * 3 + 2]) * k
+            }
+            pts = np
+        }
+        apply()
+        return true
+    }
+
+    // ---------- exact fillet (a round edge with a radius) ----------
+
+    private fun sub3(a: FloatArray, b: FloatArray) = floatArrayOf(a[0] - b[0], a[1] - b[1], a[2] - b[2])
+    private fun dot3(a: FloatArray, b: FloatArray) = a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+    private fun cross3(a: FloatArray, b: FloatArray) = floatArrayOf(a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0])
+    private fun len3(a: FloatArray) = sqrt(dot3(a, a))
+    private fun unit3(a: FloatArray): FloatArray { val l = len3(a); return if (l < 1e-9f) floatArrayOf(0f, 0f, 0f) else floatArrayOf(a[0] / l, a[1] / l, a[2] / l) }
+    private fun at3(a: FloatArray, b: FloatArray, k: Float) = floatArrayOf(a[0] + b[0] * k, a[1] + b[1] * k, a[2] + b[2] * k)
+    private fun pt(i: Int) = floatArrayOf(pts[i * 3], pts[i * 3 + 1], pts[i * 3 + 2])
+    private fun ek(a: Int, b: Int): Long = if (a < b) a.toLong() * 4194304L + b else b.toLong() * 4194304L + a
+
+    /**
+     * Rounds the selected line with an exact circular fillet of the given radius (in the object's own units, where the
+     * object's biggest size is about 1). The line must be a straight corner between two flat faces. Returns null when
+     * it worked, otherwise the reason it did not.
+     */
+    fun fillet(radius: Float): String? {
+        if (sel !in 0 until nPts || sel2 !in 0 until nPts) return "Tap a line first"
+        if (radius <= 0f) return "The radius must be above 0"
+        val bb = bounds()
+        val ext = max(bb[3] - bb[0], max(bb[4] - bb[1], bb[5] - bb[2]))
+        val nT = tris.size / 3
+        val nrm = Array(nT) { t ->
+            unit3(cross3(sub3(pt(tris[t * 3 + 1]), pt(tris[t * 3])), sub3(pt(tris[t * 3 + 2]), pt(tris[t * 3]))))
+        }
+        val edgeTris = HashMap<Long, ArrayList<Int>>()
+        for (t in 0 until nT) for (k in 0 until 3) {
+            edgeTris.getOrPut(ek(tris[t * 3 + k], tris[t * 3 + (k + 1) % 3])) { ArrayList() }.add(t)
+        }
+        val pair = edgeTris[ek(sel, sel2)]
+        if (pair == null || pair.size != 2) return "This line is not a corner between two faces"
+        val tA = pair[0]; val tB = pair[1]
+
+        // all triangles of a flat face (same plane) that touch each other
+        fun region(seed: Int): HashSet<Int> {
+            val set = HashSet<Int>()
+            val st = ArrayList<Int>()
+            set.add(seed); st.add(seed)
+            val rn = nrm[seed]
+            val p0 = pt(tris[seed * 3])
+            while (st.isNotEmpty()) {
+                val t = st.removeAt(st.size - 1)
+                for (k in 0 until 3) {
+                    val list = edgeTris[ek(tris[t * 3 + k], tris[t * 3 + (k + 1) % 3])] ?: continue
+                    for (o in list) {
+                        if (set.contains(o)) continue
+                        if (dot3(nrm[o], rn) < 0.9999f) continue
+                        if (abs(dot3(sub3(pt(tris[o * 3]), p0), rn)) > 0.002f * ext) continue
+                        set.add(o); st.add(o)
+                    }
+                }
+            }
+            return set
+        }
+        val r1 = region(tA)
+        if (r1.contains(tB)) return "This line is flat: there is no corner to round"
+        val r2 = region(tB)
+
+        // the outline of a face as an ordered list of points (it follows the triangle direction)
+        fun loopOf(r: HashSet<Int>): IntArray? {
+            val dir = HashSet<Long>()
+            for (t in r) for (k in 0 until 3) dir.add(tris[t * 3 + k].toLong() * 4194304L + tris[t * 3 + (k + 1) % 3])
+            val next = HashMap<Int, Int>()
+            for (t in r) for (k in 0 until 3) {
+                val a = tris[t * 3 + k]; val b = tris[t * 3 + (k + 1) % 3]
+                if (!dir.contains(b.toLong() * 4194304L + a)) {
+                    if (next.containsKey(a)) return null
+                    next[a] = b
+                }
+            }
+            if (next.size < 3) return null
+            val start = next.keys.first()
+            val out = ArrayList<Int>()
+            var cur = start
+            while (true) {
+                out.add(cur)
+                cur = next[cur] ?: return null
+                if (cur == start) break
+                if (out.size > next.size) return null
+            }
+            if (out.size != next.size) return null
+            return out.toIntArray()
+        }
+        val l1 = loopOf(r1) ?: return "The first face is not a simple flat shape"
+        val l2 = loopOf(r2) ?: return "The second face is not a simple flat shape"
+        val n1c = l1.size; val n2c = l2.size
+
+        // the straight run of points the two faces share
+        val in2 = HashSet<Int>()
+        for (v in l2) in2.add(v)
+        val shared = BooleanArray(n1c) { in2.contains(l1[it]) }
+        var s0 = -1
+        for (i in 0 until n1c) if (shared[i] && !shared[(i + n1c - 1) % n1c]) { if (s0 >= 0) return "The two faces touch in more than one place"; s0 = i }
+        if (s0 < 0) return "The two faces do not share an edge"
+        val chain = ArrayList<Int>()
+        var ci = s0
+        while (shared[ci % n1c]) { chain.add(l1[ci % n1c]); ci++; if (chain.size > n1c) return "The two faces touch in more than one place" }
+        val m = chain.size - 1
+        if (m < 1) return "The shared edge is too short"
+        if (!chain.contains(sel) || !chain.contains(sel2)) return "Select a line on the edge between two faces"
+        val j0 = l2.indexOf(chain[m])
+        if (j0 < 0) return "The faces do not match"
+        for (q in 0..m) if (l2[(j0 + q) % n2c] != chain[m - q]) return "The faces do not share one straight edge"
+        val wp1 = l1[(s0 + n1c - 1) % n1c]; val wn1 = l1[(s0 + m + 1) % n1c]
+        val wp2 = l2[(j0 + n2c - 1) % n2c]; val wn2 = l2[(j0 + m + 1) % n2c]
+
+        val v0 = pt(chain[0]); val vm = pt(chain[m])
+        val u = unit3(sub3(vm, v0))
+        if (len3(u) < 0.5f) return "The edge has no length"
+        for (k in 0..m) {
+            val d = sub3(pt(chain[k]), v0)
+            val along = dot3(d, u)
+            val off = sub3(d, floatArrayOf(u[0] * along, u[1] * along, u[2] * along))
+            if (len3(off) > 0.002f * ext) return "The edge is not straight"
+        }
+        val n1 = nrm[tA]; val n2 = nrm[tB]
+        // a corner that points outwards (not a dent)
+        if (dot3(n1, sub3(pt(wn2), v0)) > -1e-4f * ext) return "This edge is a dent, not a corner (only corners can be rounded)"
+        val alpha = acos(dot3(n1, n2).coerceIn(-1f, 1f))
+        if (alpha < 0.05f || alpha > 3.0f) return "The angle at this edge is too flat or too sharp"
+        val d = radius * tan(alpha / 2f)
+
+        // directions across each face, away from the edge
+        fun across(w: Int): FloatArray {
+            val v = sub3(pt(w), v0)
+            val along = dot3(v, u)
+            return unit3(sub3(v, floatArrayOf(u[0] * along, u[1] * along, u[2] * along)))
+        }
+        val t1 = across(wp1)
+        val t2 = across(wn2)
+        if (len3(t1) < 0.5f || len3(t2) < 0.5f) return "The faces are not usable here"
+
+        // the new points where the flat faces end and the round part begins
+        val newPts = ArrayList<FloatArray>()
+        fun pos(id: Int): FloatArray = if (id < nPts) pt(id) else newPts[id - nPts]
+        fun addNew(p: FloatArray): Int { newPts.add(p); return nPts + newPts.size - 1 }
+        val t1ids = IntArray(m + 1)
+        val t2ids = IntArray(m + 1)
+        for (k in 0..m) {
+            val vk = pt(chain[k])
+            var p1 = at3(vk, t1, d)
+            var p2 = at3(vk, t2, d)
+            if (k == 0 || k == m) {
+                val w1 = if (k == 0) wp1 else wn1
+                val w2 = if (k == 0) wn2 else wp2
+                val e1 = sub3(pt(w1), vk); val e2 = sub3(pt(w2), vk)
+                val den1 = dot3(e1, t1); val den2 = dot3(e2, t2)
+                if (den1 < 1e-6f || den2 < 1e-6f) return "The radius does not fit at the end of the edge"
+                val lam1 = d / den1; val lam2 = d / den2
+                if (lam1 > 0.999f || lam2 > 0.999f) return "The radius is too big for this edge"
+                p1 = at3(vk, e1, lam1)
+                p2 = at3(vk, e2, lam2)
+            }
+            t1ids[k] = addNew(p1)
+            t2ids[k] = addNew(p2)
+        }
+
+        // the round strip: n steps from the first face to the second
+        val steps = ((alpha * 180f / PI.toFloat()) / 15f).toInt().coerceIn(3, 12)
+        val sinA = sin(alpha)
+        val dirs = Array(steps + 1) { i ->
+            val phi = alpha * i / steps
+            val a = sin(alpha - phi) / sinA
+            val b = sin(phi) / sinA
+            floatArrayOf(n1[0] * a + n2[0] * b, n1[1] * a + n2[1] * b, n1[2] * a + n2[2] * b)
+        }
+        val arc = Array(m + 1) { IntArray(steps + 1) }
+        for (k in 0..m) {
+            val p1 = pos(t1ids[k]); val p2 = pos(t2ids[k])
+            val c = at3(p1, n1, -radius)
+            val err = sub3(p2, at3(c, n2, radius))
+            for (i in 0..steps) {
+                arc[k][i] = when (i) {
+                    0 -> t1ids[k]
+                    steps -> t2ids[k]
+                    else -> {
+                        val f = i.toFloat() / steps
+                        addNew(floatArrayOf(
+                            c[0] + dirs[i][0] * radius + err[0] * f,
+                            c[1] + dirs[i][1] * radius + err[1] * f,
+                            c[2] + dirs[i][2] * radius + err[2] * f))
+                    }
+                }
+            }
+        }
+
+        // the two faces again, as flat shapes with the new outline; they must stay a proper convex shape
+        val chainIdx = HashMap<Int, Int>()
+        for (k in 0..m) chainIdx[chain[k]] = k
+        val nl1 = IntArray(n1c) { val k = chainIdx[l1[it]]; if (k != null) t1ids[k] else l1[it] }
+        val nl2 = IntArray(n2c) { val k = chainIdx[l2[it]]; if (k != null) t2ids[k] else l2[it] }
+        val out = ArrayList<Int>()
+        fun fanFace(loop: IntArray, n: FloatArray): Boolean {
+            val cnt = loop.size
+            var apex = -1
+            var areaSum = 0f
+            for (i in 0 until cnt) {
+                val a = pos(loop[(i + cnt - 1) % cnt]); val b = pos(loop[i]); val c = pos(loop[(i + 1) % cnt])
+                val cr = dot3(cross3(sub3(b, a), sub3(c, b)), n)
+                if (cr < -1e-7f * ext * ext) return false
+                if (cr > 1e-6f * ext * ext && apex < 0) apex = i
+            }
+            if (apex < 0) return false
+            for (i in 1 until cnt - 1) {
+                val a = loop[apex]; val b = loop[(apex + i) % cnt]; val c = loop[(apex + i + 1) % cnt]
+                areaSum += dot3(cross3(sub3(pos(b), pos(a)), sub3(pos(c), pos(a))), n)
+                if (len3(cross3(sub3(pos(b), pos(a)), sub3(pos(c), pos(a)))) < 1e-9f) continue
+                out.add(a); out.add(b); out.add(c)
+            }
+            return areaSum > 0f
+        }
+        if (!fanFace(nl1, n1)) return "The radius is too big for the first face"
+        if (!fanFace(nl2, n2)) return "The radius is too big for the second face"
+
+        // the strip along the edge
+        fun addTri(a: Int, b: Int, c: Int, ref: FloatArray) {
+            val nn = cross3(sub3(pos(b), pos(a)), sub3(pos(c), pos(a)))
+            if (len3(nn) < 1e-10f) return
+            if (dot3(nn, ref) >= 0f) { out.add(a); out.add(b); out.add(c) } else { out.add(a); out.add(c); out.add(b) }
+        }
+        for (k in 0 until m) for (i in 0 until steps) {
+            val ref = floatArrayOf(dirs[i][0] + dirs[i + 1][0], dirs[i][1] + dirs[i + 1][1], dirs[i][2] + dirs[i + 1][2])
+            addTri(arc[k][i], arc[k][i + 1], arc[k + 1][i + 1], ref)
+            addTri(arc[k][i], arc[k + 1][i + 1], arc[k + 1][i], ref)
+        }
+
+        // the faces at the two ends of the edge get the round outline instead of the sharp corner
+        val removed = HashSet<Int>()
+        removed.addAll(r1); removed.addAll(r2)
+        fun capEnd(v: Int, y0: Int, y1: Int, q: IntArray): Boolean {
+            val fan = ArrayList<Int>()
+            for (t in 0 until nT) {
+                if (removed.contains(t)) continue
+                if (tris[t * 3] == v || tris[t * 3 + 1] == v || tris[t * 3 + 2] == v) fan.add(t)
+            }
+            if (fan.isEmpty()) return false
+            val link = HashMap<Int, Int>()
+            for (t in fan) {
+                var idx = 0
+                for (k in 0 until 3) if (tris[t * 3 + k] == v) idx = k
+                link[tris[t * 3 + (idx + 1) % 3]] = tris[t * 3 + (idx + 2) % 3]
+            }
+            fun walk(from: Int, to: Int): ArrayList<Int>? {
+                val c = ArrayList<Int>()
+                c.add(from)
+                var cur = from
+                while (cur != to) {
+                    cur = link[cur] ?: return null
+                    c.add(cur)
+                    if (c.size > fan.size + 2) return null
+                }
+                return if (c.size == fan.size + 1) c else null
+            }
+            var y = walk(y0, y1)
+            if (y == null) {
+                val back = walk(y1, y0)
+                if (back != null) { back.reverse(); y = back }
+            }
+            if (y == null) return false
+            val ref = nrm[fan[0]]
+            val mY = y.size - 1
+            val nQ = q.size - 1
+            var i = 0
+            var j = 0
+            while (i < nQ || j < mY) {
+                val advanceY = j < mY && (i >= nQ || (j + 1f) / mY <= (i + 1f) / nQ)
+                if (advanceY) { addTri(q[i], y[j], y[j + 1], ref); j++ } else { addTri(q[i], q[i + 1], y[j], ref); i++ }
+            }
+            for (t in fan) removed.add(t)
+            return true
+        }
+        if (!capEnd(chain[0], wp1, wn2, arc[0])) return "The end of this edge is too complicated to round"
+        if (!capEnd(chain[m], wn1, wp2, arc[m])) return "The end of this edge is too complicated to round"
+
+        // put it all together
+        val nt = ArrayList<Int>()
+        for (t in 0 until nT) {
+            if (removed.contains(t)) continue
+            nt.add(tris[t * 3]); nt.add(tris[t * 3 + 1]); nt.add(tris[t * 3 + 2])
+        }
+        nt.addAll(out)
+        val total = nPts + newPts.size
+        if (total > MAX_POINTS + 400) return "Too many points"
+        val np = pts.copyOf(max(pts.size, total * 3 + 3))
+        for (i in newPts.indices) {
+            np[(nPts + i) * 3] = newPts[i][0]; np[(nPts + i) * 3 + 1] = newPts[i][1]; np[(nPts + i) * 3 + 2] = newPts[i][2]
+        }
+        pts = np
+        nPts = total
+        tris = nt.toIntArray()
+        sel = -1
+        sel2 = -1
+        rebuild()
+        return null
     }
 
     /** The top gets narrower than the bottom. */
@@ -453,20 +847,28 @@ class PointsView(ctx: Context, private val renderer: SceneRenderer, private val 
             }
             t += 3
         }
+        if (e.sel2 >= 0 && e.sel in 0 until e.nPts && e.sel2 < e.nPts && ok[e.sel] && ok[e.sel2]) {
+            p.style = Paint.Style.STROKE
+            p.strokeWidth = 7f
+            p.color = 0xFFFF9020.toInt()
+            c.drawLine(sx[e.sel], sy[e.sel], sx[e.sel2], sy[e.sel2], p)
+        }
         p.style = Paint.Style.FILL
         for (i in 0 until e.nPts) {
             if (!ok[i]) continue
-            if (i == e.sel) continue
+            if (i == e.sel || i == e.sel2) continue
             p.color = 0xFF202020.toInt()
             c.drawCircle(sx[i], sy[i], 8f, p)
             p.color = 0xFF7FD4FF.toInt()
             c.drawCircle(sx[i], sy[i], 6f, p)
         }
-        if (e.sel in 0 until e.nPts && ok[e.sel]) {
-            p.color = 0xFF202020.toInt()
-            c.drawCircle(sx[e.sel], sy[e.sel], 14f, p)
-            p.color = 0xFFFF9020.toInt()
-            c.drawCircle(sx[e.sel], sy[e.sel], 11f, p)
+        for (k in intArrayOf(e.sel, e.sel2)) {
+            if (k in 0 until e.nPts && ok[k]) {
+                p.color = 0xFF202020.toInt()
+                c.drawCircle(sx[k], sy[k], 14f, p)
+                p.color = 0xFFFF9020.toInt()
+                c.drawCircle(sx[k], sy[k], 11f, p)
+            }
         }
         postInvalidateDelayed(40)
     }
@@ -483,16 +885,53 @@ class PointsView(ctx: Context, private val renderer: SceneRenderer, private val 
         return best
     }
 
+    private fun segDist(px: Float, py: Float, ax: Float, ay: Float, bx: Float, by: Float): Float {
+        val dx = bx - ax; val dy = by - ay
+        val l2 = dx * dx + dy * dy
+        var t = if (l2 < 1e-6f) 0f else ((px - ax) * dx + (py - ay) * dy) / l2
+        t = t.coerceIn(0f, 1f)
+        val cx = ax + t * dx - px; val cy = ay + t * dy - py
+        return sqrt(cx * cx + cy * cy)
+    }
+
+    /** The line (two point numbers) closest to the touch, if it is near enough. */
+    private fun nearestLine(e: PointEdit, x: Float, y: Float): IntArray? {
+        var best = -1
+        var ba = 0
+        var bb = 0
+        var bd = 34f
+        var t = 0
+        while (t + 2 < e.tris.size) {
+            for (k in 0 until 3) {
+                val a = e.tris[t + k]; val b = e.tris[t + (k + 1) % 3]
+                if (a >= e.nPts || b >= e.nPts || a == b || !ok[a] || !ok[b]) continue
+                val d = segDist(x, y, sx[a], sy[a], sx[b], sy[b])
+                if (d < bd) { bd = d; best = 1; ba = a; bb = b }
+            }
+            t += 3
+        }
+        return if (best < 0) null else intArrayOf(ba, bb)
+    }
+
     override fun onTouchEvent(ev: MotionEvent): Boolean {
         val e = pe() ?: return false
         when (ev.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 toScreen(e)
                 val i = nearest(e, ev.x, ev.y)
-                if (i < 0) return false          // not on a point: the 3D view gets the touch (look around)
-                e.sel = i
-                grabX = sx[i] - ev.x
-                grabY = sy[i] - ev.y
+                if (i >= 0) {
+                    e.sel = i
+                    e.sel2 = -1
+                    grabX = sx[i] - ev.x
+                    grabY = sy[i] - ev.y
+                } else {
+                    val ln = nearestLine(e, ev.x, ev.y)
+                    if (ln == null) return false      // not on a point or a line: the 3D view gets the touch (look around)
+                    e.sel = ln[0]
+                    e.sel2 = ln[1]
+                    grabX = (sx[ln[0]] + sx[ln[1]]) / 2f - ev.x
+                    grabY = (sy[ln[0]] + sy[ln[1]]) / 2f - ev.y
+                }
                 dragging = true
                 invalidate()
                 onEdited?.invoke()
@@ -512,12 +951,16 @@ class PointsView(ctx: Context, private val renderer: SceneRenderer, private val 
         return true
     }
 
-    /** Moves the selected point so that it is under the finger, on the plane through it that faces the camera. */
+    /** Moves the selected point (or both ends of the selected line) so that it follows the finger, on the plane facing the camera. */
     private fun moveSelected(e: PointEdit, x: Float, y: Float) {
         val i = e.sel
         if (i < 0 || i >= e.nPts) return
+        val j = if (e.sel2 in 0 until e.nPts) e.sel2 else -1
         modelMatrix(e.obj)
-        val cur = floatArrayOf(e.pts[i * 3], e.pts[i * 3 + 1], e.pts[i * 3 + 2], 1f)
+        // the spot that follows the finger: the point, or the middle of the line
+        val cur = FloatArray(4)
+        cur[3] = 1f
+        for (k in 0 until 3) cur[k] = if (j < 0) e.pts[i * 3 + k] else (e.pts[i * 3 + k] + e.pts[j * 3 + k]) / 2f
         val w = FloatArray(4)
         Matrix.multiplyMV(w, 0, m, 0, cur, 0)
         val r = renderer.ray(x, y)
@@ -530,10 +973,11 @@ class PointsView(ctx: Context, private val renderer: SceneRenderer, private val 
         if (!Matrix.invertM(inv, 0, m, 0)) return
         val loc = FloatArray(4)
         Matrix.multiplyMV(loc, 0, inv, 0, nw, 0)
-        val nx = if (e.axis == 0 || e.axis == 1) loc[0] else cur[0]
-        val ny = if (e.axis == 0 || e.axis == 2) loc[1] else cur[1]
-        val nz = if (e.axis == 0 || e.axis == 3) loc[2] else cur[2]
-        e.setPoint(i, nx, ny, nz)
+        val dx = if (e.axis == 0 || e.axis == 1) loc[0] - cur[0] else 0f
+        val dy = if (e.axis == 0 || e.axis == 2) loc[1] - cur[1] else 0f
+        val dz = if (e.axis == 0 || e.axis == 3) loc[2] - cur[2] else 0f
+        e.setPoint(i, e.pts[i * 3] + dx, e.pts[i * 3 + 1] + dy, e.pts[i * 3 + 2] + dz)
+        if (j >= 0) e.setPoint(j, e.pts[j * 3] + dx, e.pts[j * 3 + 1] + dy, e.pts[j * 3 + 2] + dz)
         val now = System.currentTimeMillis()
         if (now - lastApply > 30L) {
             lastApply = now
