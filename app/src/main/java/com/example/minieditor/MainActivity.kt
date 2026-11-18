@@ -96,6 +96,7 @@ class MainActivity : Activity(), SensorEventListener {
     private lateinit var pointBar: LinearLayout
     private lateinit var pointInfo: TextView
     private lateinit var pointAxisBtn: Button
+    private lateinit var zoomBar: LinearLayout
     private lateinit var photoBtn: Button
     private lateinit var skyPhotoBtn: Button
     private lateinit var skyModeBtn: Button
@@ -559,6 +560,9 @@ end
         bagView = BagView(this) { k -> bagTap = k }.apply { visibility = View.GONE }
         root.addView(bagView, FrameLayout.LayoutParams(-1, -1))
         buildPointEditViews()
+        buildZoomButtons()
+        // Build > round shapes: the models are made from text the first time and kept
+        Builder.modelProvider = { key, gen -> modelCache[key] ?: writeModelFile(key, gen()) }
         root.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
             topScroll.maxHeightPx = (root.height * panelFrac).toInt()
             refreshJoystick()
@@ -1169,6 +1173,7 @@ end
 
     private fun startPlay() {
         clearFieldFocus()
+        zoomBar.visibility = View.GONE
         snaps = scene.objects.map {
             Snap(it, floatArrayOf(it.x, it.y, it.z, it.rx, it.ry, it.rz, it.sx, it.sy, it.sz,
                 it.color[0], it.color[1], it.color[2], it.collider.toFloat(),
@@ -1210,6 +1215,7 @@ end
         playing = false
         editor.playing = false
         crosshair.visibility = View.GONE
+        zoomBar.visibility = View.VISIBLE
         joystick.reset()
         buttonViews.forEach { it.reset() }
         bagView.visibility = View.GONE
@@ -2532,7 +2538,7 @@ end
         val dz = maxZ - minZ
         val radius = 0.5f * sqrt(dx * dx + dy * dy + dz * dz)
         val half = Math.toRadians(r.fov / 2.0)
-        r.dist = (radius / sin(half).toFloat() * 1.4f).coerceIn(3f, 1500f)
+        r.dist = (radius / sin(half).toFloat() * 1.4f).coerceIn(1f, 1500f)
         editor.requestRender()
     }
 
@@ -2996,6 +3002,49 @@ end
             }
             .setNegativeButton("Cancel", null)
             .show()
+    }
+
+    /** On-screen zoom buttons (for when pinching does not work): + closer, - further, and one to centre on the selected object. */
+    private fun buildZoomButtons() {
+        val handler = android.os.Handler(android.os.Looper.getMainLooper())
+        fun zb(t: String, repeat: Boolean, tick: () -> Unit): Button {
+            val b = Button(this)
+            b.text = t
+            b.textSize = 18f
+            b.setTextColor(Color.WHITE)
+            b.setBackgroundColor(0xAA333333.toInt())
+            b.minWidth = 0; b.minHeight = 0
+            b.setPadding(0, 0, 0, 0)
+            b.layoutParams = LinearLayout.LayoutParams(dp(46), dp(46)).also { it.setMargins(0, dp(4), 0, dp(4)) }
+            var run: Runnable? = null
+            b.setOnTouchListener { _, ev ->
+                when (ev.actionMasked) {
+                    android.view.MotionEvent.ACTION_DOWN -> {
+                        tick()
+                        if (repeat) {
+                            val r = object : Runnable {
+                                override fun run() { tick(); handler.postDelayed(this, 40) }
+                            }
+                            run = r
+                            handler.postDelayed(r, 350)
+                        }
+                    }
+                    android.view.MotionEvent.ACTION_UP, android.view.MotionEvent.ACTION_CANCEL -> {
+                        run?.let { handler.removeCallbacks(it) }
+                        run = null
+                    }
+                }
+                true
+            }
+            return b
+        }
+        zoomBar = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(zb("+", true) { val r = editor.renderer; r.dist = (r.dist * 0.9f).coerceIn(0.5f, 1500f); editor.requestRender() })
+            addView(zb("-", true) { val r = editor.renderer; r.dist = (r.dist / 0.9f).coerceIn(0.5f, 1500f); editor.requestRender() })
+            addView(zb("o", false) { focusSelected() })
+        }
+        root.addView(zoomBar, FrameLayout.LayoutParams(-2, -2, Gravity.END or Gravity.CENTER_VERTICAL).also { it.rightMargin = dp(6) })
     }
 
     private fun cyclePointAxis() {

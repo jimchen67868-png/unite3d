@@ -27,6 +27,21 @@ object Builder {
     private val BLACK = c(0.08f, 0.08f, 0.09f)
     private val WHITE = c(0.95f, 0.95f, 0.95f)
 
+    /** Set by the editor: gives a round model by file name (it makes the file from the text when needed). */
+    var modelProvider: ((String, () -> String) -> ModelData?)? = null
+
+    private fun roundModel(kind: String): ModelData? {
+        val p = modelProvider ?: return null
+        return p("round_" + kind + "_v1.obj") {
+            when (kind) {
+                "cone" -> RoundMeshes.cone(40)
+                "dome" -> RoundMeshes.dome(12, 40)
+                "ring" -> RoundMeshes.torus(32, 14)
+                else -> RoundMeshes.cylinder(40)
+            }
+        }
+    }
+
     class Opening(val at: Float, val w: Float, val bottom: Float, val top: Float)
 
     /** Collects the parts of one object, then groups them. */
@@ -62,6 +77,20 @@ object Builder {
                  solid: Boolean = false, ry: Float = 0f, rx: Float = 0f, name: String = "Part") =
             part(Shape.PYRAMID, x, y, z, sx, sy, sz, col, solid, ry, rx, 0f, 1f, 0f, name)
 
+        /** A round part (cylinder, cone, dome, ring) from the round meshes; a cube if the model cannot be made. */
+        fun model(kind: String, x: Float, y: Float, z: Float, sx: Float, sy: Float, sz: Float, col: FloatArray,
+                  solid: Boolean = true, ry: Float = 0f, rx: Float = 0f, rz: Float = 0f, name: String = "Part"): SceneObject {
+            val md = roundModel(kind) ?: return part(Shape.CUBE, x, y, z, sx, sy, sz, col, solid, ry, rx, rz, 1f, 0f, name)
+            val o = scene.add(Shape.MODEL, md, name)
+            o.x = bx + x; o.y = y; o.z = bz + z
+            o.sx = sx; o.sy = sy; o.sz = sz
+            o.rx = rx; o.ry = ry; o.rz = rz
+            o.color = col.copyOf()
+            o.collider = if (solid) 1 else 0
+            parts.add(o)
+            return o
+        }
+
         fun glass(x: Float, y: Float, z: Float, sx: Float, sy: Float, sz: Float) =
             part(Shape.CUBE, x, y, z, sx, sy, sz, GLASS, false, 0f, 0f, 0f, 0.35f, 0f, "Glass")
 
@@ -86,6 +115,14 @@ object Builder {
                 cur = b
             }
             seg(cur, len / 2f, 0f, h)
+        }
+
+        /** One part only: no group, just the object. */
+        fun finishSingle(title: String): SceneObject? {
+            val o = parts.firstOrNull() ?: return null
+            o.name = title
+            scene.selected = o
+            return o
         }
 
         fun finish(title: String): SceneObject? {
@@ -258,18 +295,14 @@ object Builder {
 
     private fun cylinder(scene: Scene, bx: Float, bz: Float): SceneObject? {
         val k = Kit(scene, bx, bz)
-        val s = 1.8f
-        k.box(0f, 1.5f, 0f, s, 3f, s, WALL, true, 0f, 0f, 0f, "Cylinder")
-        k.box(0f, 1.5f, 0f, s, 3f, s, WALL, false, 30f, 0f, 0f, "Cylinder")
-        k.box(0f, 1.5f, 0f, s, 3f, s, WALL, false, 60f, 0f, 0f, "Cylinder")
-        return k.finish("Cylinder")
+        k.model("cylinder", 0f, 1.5f, 0f, 2f, 3f, 2f, WALL, true, 0f, 0f, 0f, "Cylinder")
+        return k.finishSingle("Cylinder")
     }
 
     private fun cone(scene: Scene, bx: Float, bz: Float): SceneObject? {
         val k = Kit(scene, bx, bz)
-        k.cone(0f, 1.5f, 0f, 3f, 3f, 3f, WALL, false, 0f, 0f, "Cone")
-        k.cone(0f, 1.5f, 0f, 3f, 3f, 3f, WALL, false, 45f, 0f, "Cone")
-        return k.finish("Cone")
+        k.model("cone", 0f, 1.5f, 0f, 3f, 3f, 3f, WALL, true, 0f, 0f, 0f, "Cone")
+        return k.finishSingle("Cone")
     }
 
     private fun arch(scene: Scene, bx: Float, bz: Float): SceneObject? {
@@ -317,20 +350,25 @@ object Builder {
 
     private fun dome(scene: Scene, bx: Float, bz: Float): SceneObject? {
         val k = Kit(scene, bx, bz)
-        k.ball(0f, 0f, 0f, 8f, 8f, 8f, WALL, false, 0f, "Dome")
+        // the dome model is 1 wide and 0.5 high, so scale 8 gives a dome 8 wide and 4 high; its middle is 2.3 up (it stands on the floor)
+        k.model("dome", 0f, 2.3f, 0f, 8f, 8f, 8f, WALL, true, 0f, 0f, 0f, "Dome")
         k.box(0f, 0.15f, 0f, 8.6f, 0.3f, 8.6f, DARKSTONE, true, 0f, 0f, 0f, "Floor")
         return k.finish("Dome")
     }
 
     private fun pillar(scene: Scene, bx: Float, bz: Float): SceneObject? {
         val k = Kit(scene, bx, bz)
-        k.box(0f, 0.2f, 0f, 1.6f, 0.4f, 1.6f, DARKSTONE, true, 0f, 0f, 0f, "Base")
-        k.box(0f, 2.6f, 0f, 0.9f, 4.4f, 0.9f, STONE, true, 0f, 0f, 0f, "Shaft")
-        k.box(0f, 4.95f, 0f, 1.5f, 0.3f, 1.5f, DARKSTONE, true, 0f, 0f, 0f, "Cap")
+        k.model("cylinder", 0f, 0.2f, 0f, 1.7f, 0.4f, 1.7f, DARKSTONE, true, 0f, 0f, 0f, "Base")
+        k.model("cylinder", 0f, 2.6f, 0f, 1.0f, 4.4f, 1.0f, STONE, true, 0f, 0f, 0f, "Shaft")
+        k.model("cylinder", 0f, 4.95f, 0f, 1.6f, 0.3f, 1.6f, DARKSTONE, true, 0f, 0f, 0f, "Cap")
         return k.finish("Pillar")
     }
 
-    // ================= Vehicles and props =================
+    private fun ring(scene: Scene, bx: Float, bz: Float): SceneObject? {
+        val k = Kit(scene, bx, bz)
+        k.model("ring", 0f, 0.45f, 0f, 3f, 3f, 3f, STONE, false, 0f, 0f, 0f, "Ring")
+        return k.finishSingle("Ring")
+    }
 
     private fun car(scene: Scene, bx: Float, bz: Float): SceneObject? {
         val k = Kit(scene, bx, bz)
@@ -338,7 +376,7 @@ object Builder {
         k.box(0f, 1.25f, 0.3f, 1.7f, 0.55f, 2.2f, c(0.72f, 0.12f, 0.12f), false, 0f, 0f, 0f, "Cabin")
         k.glass(0f, 1.3f, 0.3f, 1.74f, 0.42f, 2.24f)
         for (sx in intArrayOf(-1, 1)) for (sz in intArrayOf(-1, 1)) {
-            k.ball(sx * 0.95f, 0.4f, sz * 1.35f, 0.3f, 0.8f, 0.8f, BLACK, false, 0f, "Wheel")
+            k.model("cylinder", sx * 0.95f, 0.4f, sz * 1.35f, 0.8f, 0.3f, 0.8f, BLACK, false, 0f, 0f, 90f, "Wheel")
         }
         k.box(-0.65f, 0.75f, -2.12f, 0.4f, 0.2f, 0.06f, c(1f, 0.95f, 0.6f), false, 0f, 0f, 0f, "Light").emit = 1f
         k.box(0.65f, 0.75f, -2.12f, 0.4f, 0.2f, 0.06f, c(1f, 0.95f, 0.6f), false, 0f, 0f, 0f, "Light").emit = 1f
@@ -415,8 +453,8 @@ object Builder {
 
     private fun streetLamp(scene: Scene, bx: Float, bz: Float): SceneObject? {
         val k = Kit(scene, bx, bz)
-        k.box(0f, 0.15f, 0f, 0.5f, 0.3f, 0.5f, DARKSTONE, true, 0f, 0f, 0f, "Base")
-        k.box(0f, 2.5f, 0f, 0.14f, 4.8f, 0.14f, BLACK, false, 0f, 0f, 0f, "Pole")
+        k.model("cylinder", 0f, 0.15f, 0f, 0.5f, 0.3f, 0.5f, DARKSTONE, true, 0f, 0f, 0f, "Base")
+        k.model("cylinder", 0f, 2.5f, 0f, 0.14f, 4.8f, 0.14f, BLACK, false, 0f, 0f, 0f, "Pole")
         k.box(0.4f, 4.9f, 0f, 0.9f, 0.1f, 0.12f, BLACK, false, 0f, 0f, 0f, "Arm")
         k.ball(0.8f, 4.75f, 0f, 0.4f, 0.3f, 0.4f, c(1f, 0.95f, 0.7f), false, 1f, "Bulb")
         return k.finish("Street lamp")
@@ -426,12 +464,11 @@ object Builder {
         val k = Kit(scene, bx, bz)
         val red = c(0.7f, 0.2f, 0.15f)
         for (p in listOf(floatArrayOf(0f, 0f), floatArrayOf(0.9f, 0.1f), floatArrayOf(0.4f, 0.9f))) {
-            k.box(p[0], 0.5f, p[1], 0.7f, 1f, 0.7f, red, true, 0f, 0f, 0f, "Barrel")
-            k.box(p[0], 0.5f, p[1], 0.7f, 1f, 0.7f, red, false, 45f, 0f, 0f, "Barrel")
-            k.box(p[0], 0.25f, p[1], 0.8f, 0.06f, 0.8f, DARKSTONE, false, 22f, 0f, 0f, "Band")
-            k.box(p[0], 0.75f, p[1], 0.8f, 0.06f, 0.8f, DARKSTONE, false, 22f, 0f, 0f, "Band")
+            k.model("cylinder", p[0], 0.5f, p[1], 0.7f, 1f, 0.7f, red, true, 0f, 0f, 0f, "Barrel")
+            k.model("cylinder", p[0], 0.25f, p[1], 0.74f, 0.06f, 0.74f, DARKSTONE, false, 0f, 0f, 0f, "Band")
+            k.model("cylinder", p[0], 0.75f, p[1], 0.74f, 0.06f, 0.74f, DARKSTONE, false, 0f, 0f, 0f, "Band")
         }
-        k.box(0.45f, 1.5f, 0.3f, 0.7f, 1f, 0.7f, red, true, 0f, 0f, 0f, "Barrel")
+        k.model("cylinder", 0.45f, 1.5f, 0.3f, 0.7f, 1f, 0.7f, red, true, 0f, 0f, 0f, "Barrel")
         return k.finish("Barrels")
     }
 
@@ -469,6 +506,7 @@ object Builder {
             Item("Stairs (10 steps)") { s, x, z -> stairs(s, x, z) },
             Item("Ziggurat (5 levels)") { s, x, z -> ziggurat(s, x, z) },
             Item("Dome") { s, x, z -> dome(s, x, z) },
+            Item("Ring (donut)") { s, x, z -> ring(s, x, z) },
             Item("Pillar") { s, x, z -> pillar(s, x, z) }
         ),
         "Vehicles and props" to listOf(
