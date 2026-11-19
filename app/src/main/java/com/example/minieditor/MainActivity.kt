@@ -149,6 +149,7 @@ class MainActivity : Activity(), SensorEventListener {
     private lateinit var inspectorView: LinearLayout
     private lateinit var scriptView: LinearLayout
     private lateinit var scriptField: EditText
+    private lateinit var scriptFind: EditText
     private var suggestRow: LinearLayout? = null
     private var suggestScroll: android.widget.HorizontalScrollView? = null
     private lateinit var nameField: EditText
@@ -369,6 +370,18 @@ end
         setOnClickListener { if (structural && playing) toast("Stop play mode first") else { record(); onClick(); record() } }
     }
 
+    /** A row of buttons that slides sideways when there are more than fit on the screen. */
+    private fun scrollRow(vararg views: Button) = android.widget.HorizontalScrollView(this).apply {
+        isHorizontalScrollBarEnabled = false
+        addView(LinearLayout(this@MainActivity).apply {
+            orientation = LinearLayout.HORIZONTAL
+            for (b in views) {
+                b.layoutParams = LinearLayout.LayoutParams(dp(92), -2).also { it.setMargins(dp(2), dp(2), dp(2), dp(2)) }
+                addView(b)
+            }
+        })
+    }
+
     /** A row of tab buttons; tapping one shows only that box. Returns the row. */
     private fun tabbedBoxes(names: List<String>, boxes: List<View>, first: Int = 0): LinearLayout {
         val buttons = ArrayList<Button>()
@@ -453,13 +466,34 @@ end
                 // 1 Play
                 row(playButton, viewButton),
                 // 2 Add
-                row(
-                    btn("+Cube", true) { scene.add(Shape.CUBE); editor.refresh() },
-                    btn("+Pyramid", true) { scene.add(Shape.PYRAMID); editor.refresh() },
-                    btn("+Sphere", true) { scene.add(Shape.SPHERE); editor.refresh() },
-                    buildButton,
-                    importButton
-                ),
+                LinearLayout(this@MainActivity).apply {
+                    orientation = LinearLayout.VERTICAL
+                    addView(row(
+                        btn("+Cube", true) { scene.add(Shape.CUBE); editor.refresh() },
+                        btn("+Pyramid", true) { scene.add(Shape.PYRAMID); editor.refresh() },
+                        btn("+Sphere", true) { scene.add(Shape.SPHERE); editor.refresh() },
+                        buildButton,
+                        importButton
+                    ))
+                    // all the other things to add: slide sideways to see them all
+                    addView(scrollRow(
+                        btn("+Stick", true) { if (scene.addJoystick() == null) toast("Joystick already added") else editor.refresh() },
+                        btn("+Button", true) { scene.addButton(); editor.refresh() },
+                        btn("+Light", true) { if (scene.addLight(Shape.LIGHT) == null) toast("Max 4 point lights") else editor.refresh() },
+                        btn("+Sun", true) { if (scene.addLight(Shape.SUN) == null) toast("Sun already added") else editor.refresh() },
+                        btn("+Block", true) { scene.addBlock(); editor.refresh() },
+                        btn("+Camera", true) { if (scene.addCamera() == null) toast("Camera already added") else editor.refresh() },
+                        btn("+Terrain", true) { scene.addTerrain(); editor.refresh() },
+                        btn("+Bone", true) { scene.addBone(); editor.refresh() },
+                        btn("+Water", true) { scene.addWater(); editor.refresh() },
+                        btn("+Mirror", true) { scene.addMirror(); editor.refresh() },
+                        btn("+Tree", true) { scene.addTree(0); editor.refresh() },
+                        btn("+Pine", true) { scene.addTree(1); editor.refresh() },
+                        btn("+Grass", true) { scene.addGrass(); editor.refresh() },
+                        btn("+Fire", true) { scene.addFire(); editor.refresh() },
+                        btn("+Smoke", true) { scene.addSmoke(); editor.refresh() }
+                    ))
+                },
                 // 3 Edit
                 LinearLayout(this@MainActivity).apply {
                     orientation = LinearLayout.VERTICAL
@@ -984,7 +1018,7 @@ end
         val pm = PopupMenu(this, attachBtn)
         pm.menu.add(0, 0, 0, "None (free)")
         bones.forEachIndexed { i, b -> pm.menu.add(0, 100 + i, 1 + i, b.name) }
-        if (bones.isEmpty()) toast("Add a Bone first (Hierarchy, +Bone)")
+        if (bones.isEmpty()) toast("Add a Bone first (Add tab, +Bone)")
         pm.setOnMenuItemClickListener { item ->
             if (item.itemId == 0) Rig.detach(o) else Rig.bind(o, bones[item.itemId - 100])
             lastCount = -1
@@ -1253,6 +1287,47 @@ end
 
     // ---------- Script panel ----------
 
+    /** Finds the next (or the previous) place in this object's script that has the typed text; it wraps round. */
+    private fun findInScript(forward: Boolean) {
+        val q = scriptFind.text.toString()
+        if (q.isEmpty()) { toast("Type what to find"); return }
+        if (!scriptField.isEnabled) { toast("Select an object first"); return }
+        val low = scriptField.text.toString().lowercase()
+        val lq = q.lowercase()
+        var count = 0
+        var k = low.indexOf(lq)
+        while (k >= 0) { count++; k = low.indexOf(lq, k + 1) }
+        if (count == 0) { toast("Not found in this script"); return }
+        val ss = scriptField.selectionStart.coerceAtLeast(0)
+        val se = scriptField.selectionEnd.coerceAtLeast(0)
+        var i = if (forward) low.indexOf(lq, if (se > ss) ss + 1 else se) else low.lastIndexOf(lq, ss - 1)
+        if (i < 0) i = if (forward) low.indexOf(lq) else low.lastIndexOf(lq)
+        scriptField.requestFocus()
+        scriptField.setSelection(i, i + lq.length)
+        try { scriptField.bringPointIntoView(i) } catch (e: Throwable) { }
+        var n = 0
+        k = low.indexOf(lq)
+        while (k in 0..i) { n++; k = low.indexOf(lq, k + 1) }
+        toast(n.toString() + " of " + count)
+    }
+
+    /** Lists every object whose script has the typed text; tap one to select it. */
+    private fun findInAllScripts() {
+        val q = scriptFind.text.toString().trim()
+        if (q.isEmpty()) { toast("Type what to find"); return }
+        val hits = scene.objects.filter { it.script.contains(q, ignoreCase = true) }
+        if (hits.isEmpty()) { toast("No script has that text"); return }
+        AlertDialog.Builder(this)
+            .setTitle(hits.size.toString() + " objects have \"" + q + "\" in their script")
+            .setItems(hits.map { it.name }.toTypedArray()) { _, i ->
+                clearFieldFocus()
+                scene.selected = hits[i]
+                editor.refresh()
+            }
+            .setNegativeButton("Close", null)
+            .show()
+    }
+
     private fun buildScript() {
         scriptField = object : EditText(this@MainActivity) {
             override fun onSelectionChanged(selStart: Int, selEnd: Int) {
@@ -1295,9 +1370,24 @@ end
             setTextColor(0xFFAAAAAA.toInt())
             setPadding(dp(8), dp(4), dp(8), dp(4))
         }
+        scriptFind = EditText(this).apply {
+            styleField(this)
+            hint = "Find in script"
+            setHintTextColor(0xFF888888.toInt())
+            layoutParams = LinearLayout.LayoutParams(0, -2, 3f).also { it.setMargins(dp(2), dp(2), dp(2), dp(2)) }
+            setOnEditorActionListener { _, a, _ -> if (a == EditorInfo.IME_ACTION_DONE) { findInScript(true); true } else false }
+        }
         scriptView = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             visibility = View.GONE
+            addView(LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                addView(scriptFind)
+                addView(btn("<") { findInScript(false) })
+                addView(btn(">") { findInScript(true) })
+                addView(btn("All") { findInAllScripts() })
+            })
             addView(help)
             addView(scriptField)
             addView(suggestScroll)
@@ -1491,56 +1581,49 @@ end
 
     // ---------- Hierarchy ----------
 
+    private var hierFilter = ""
+
     private fun buildHierarchy() {
         hierList = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         val scroll = ScrollView(this).apply {
             addView(hierList)
-            layoutParams = LinearLayout.LayoutParams(-1, dp(180))
+            layoutParams = LinearLayout.LayoutParams(-1, dp(220))
+        }
+        val search = EditText(this).apply {
+            styleField(this)
+            hint = "Search objects by name"
+            setHintTextColor(0xFF888888.toInt())
+            layoutParams = LinearLayout.LayoutParams(0, -2, 4f).also { it.setMargins(dp(2), dp(2), dp(2), dp(2)) }
+            addTextChangedListener(object : TextWatcher {
+                override fun beforeTextChanged(s: CharSequence?, st: Int, c: Int, a: Int) {}
+                override fun onTextChanged(s: CharSequence?, st: Int, b: Int, c: Int) {}
+                override fun afterTextChanged(s: Editable?) {
+                    hierFilter = s?.toString() ?: ""
+                    rebuildHierarchy()
+                }
+            })
         }
         hierarchyView = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             visibility = View.GONE
             addView(row(
-                btn("+Stick", true) { if (scene.addJoystick() == null) toast("Joystick already added") else editor.refresh() },
-                btn("+Button", true) { scene.addButton(); editor.refresh() },
                 btn("Copy", true) { scene.duplicate(); editor.refresh() },
                 btn("Delete", true) { scene.removeSelected(); editor.refresh() },
                 btn("Clear", true) { scene.objects.clear(); scene.selected = null; editor.refresh() }
             ))
-            addView(row(
-                btn("+Light", true) { if (scene.addLight(Shape.LIGHT) == null) toast("Max 4 point lights") else editor.refresh() },
-                btn("+Sun", true) { if (scene.addLight(Shape.SUN) == null) toast("Sun already added") else editor.refresh() },
-                btn("+Block", true) { scene.addBlock(); editor.refresh() }
-            ))
-            addView(row(
-                btn("+Camera", true) { if (scene.addCamera() == null) toast("Camera already added") else editor.refresh() },
-                btn("+Terrain", true) { scene.addTerrain(); editor.refresh() },
-                btn("+Bone", true) { scene.addBone(); editor.refresh() },
-                btn("+Water", true) { scene.addWater(); editor.refresh() },
-                btn("+Mirror", true) { scene.addMirror(); editor.refresh() }
-            ))
-            addView(row(
-                btn("+Tree", true) { scene.addTree(0); editor.refresh() },
-                btn("+Pine", true) { scene.addTree(1); editor.refresh() },
-                btn("+Grass", true) { scene.addGrass(); editor.refresh() },
-                btn("+Fire", true) { scene.addFire(); editor.refresh() },
-                btn("+Smoke", true) { scene.addSmoke(); editor.refresh() }
-            ))
+            addView(LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                addView(search)
+                addView(btn("X") { search.setText("") })
+            })
             addView(scroll)
         }
     }
 
     private fun rebuildHierarchy() {
         hierList.removeAllViews()
-        // attached objects are listed under their bone
-        val order = ArrayList<Pair<SceneObject, Int>>()
-        fun walk(o: SceneObject, depth: Int) {
-            if (depth > 16) return
-            order.add(Pair(o, depth))
-            if (o.uid != 0) for (c in scene.objects) if (c.parentId == o.uid && c !== o) walk(c, depth + 1)
-        }
-        for (o in scene.objects) if (o.shape != Shape.SETTINGS && Rig.find(scene, o.parentId) == null) walk(o, 0)
-        for ((o, depth) in order) {
+        fun addRow(o: SceneObject, depth: Int) {
             val sel = o === scene.selected
             hierList.addView(TextView(this).apply {
                 text = (if (sel) "▶ " else "    ") + "    ".repeat(depth) + (if (depth > 0) "└ " else "") + o.name +
@@ -1560,6 +1643,28 @@ end
                 setPadding(dp(10), dp(8), dp(10), dp(8))
                 setOnClickListener { clearFieldFocus(); scene.selected = o; editor.refresh() }
             })
+        }
+        val f = hierFilter.trim().lowercase()
+        if (f.isNotEmpty()) {
+            // searching: a flat list of every object whose name has the text
+            val hits = scene.objects.filter { it.shape != Shape.SETTINGS && it.name.lowercase().contains(f) }
+            hierList.addView(TextView(this).apply {
+                text = hits.size.toString() + " found"
+                textSize = 12f
+                setTextColor(0xFF999999.toInt())
+                setPadding(dp(10), dp(6), dp(10), dp(2))
+            })
+            for (o in hits) addRow(o, 0)
+        } else {
+            // attached objects are listed under their bone
+            val order = ArrayList<Pair<SceneObject, Int>>()
+            fun walk(o: SceneObject, depth: Int) {
+                if (depth > 16) return
+                order.add(Pair(o, depth))
+                if (o.uid != 0) for (c in scene.objects) if (c.parentId == o.uid && c !== o) walk(c, depth + 1)
+            }
+            for (o in scene.objects) if (o.shape != Shape.SETTINGS && Rig.find(scene, o.parentId) == null) walk(o, 0)
+            for ((o, depth) in order) addRow(o, depth)
         }
         lastCount = scene.objects.size
         lastSel = scene.selected
@@ -2478,7 +2583,7 @@ end
             6 -> focusSelected()
             7 -> frameAll()
             12 -> {
-                if (scene.objects.none { o -> o.shape == Shape.CAMERA }) toast("Add a Camera object first (Hierarchy)")
+                if (scene.objects.none { o -> o.shape == Shape.CAMERA }) toast("Add a Camera object first (Add tab, +Camera)")
                 else r.previewCam = !r.previewCam
             }
             13 -> alignCameraObject()
@@ -2496,7 +2601,7 @@ end
     /** Puts the Camera object where the editor camera is now, looking the same way. */
     private fun alignCameraObject() {
         val cam = scene.objects.firstOrNull { o -> o.shape == Shape.CAMERA }
-        if (cam == null) { toast("Add a Camera object first (Hierarchy)"); return }
+        if (cam == null) { toast("Add a Camera object first (Add tab, +Camera)"); return }
         val r = editor.renderer
         val p = Math.toRadians(r.pitch.toDouble())
         val y = Math.toRadians(r.yaw.toDouble())
