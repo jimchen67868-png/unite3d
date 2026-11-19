@@ -1250,8 +1250,13 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         val soft = (st?.soft ?: 0.4f).coerceIn(0f, 1f)
         val tint = st?.tint ?: floatArrayOf(0f, 0f, 0f)
         val terrains = scene.objects.filter { it.shape == Shape.TERRAIN && it.heights != null }
+        // only things near the camera cast a shadow that matters: far ones are tiny and not worth the draw calls
+        val ex = eye[0]
+        val ez = eye[2]
+        val near2 = 170f * 170f
         val casters = scene.objects.filter { o ->
-            terrains.none { t -> TerrainGen.heightAt(t, o.x, o.z) != null } &&
+            (o.x - ex) * (o.x - ex) + (o.z - ez) * (o.z - ez) < near2 &&
+                terrains.none { t -> TerrainGen.heightAt(t, o.x, o.z) != null } &&
                 o.shadow && !o.shape.isScreen && !o.shape.isLight && o.shape != Shape.SETTINGS && o.shape != Shape.CAMERA && o.shape != Shape.TERRAIN && o.shape != Shape.BONE && o.shape != Shape.WATER && o.shape != Shape.GRASS && !o.shape.isEmitter && max(o.sx, max(o.sy, o.sz)) >= 0.35f &&
                 o.y + 0.5f * o.sy > gh + 0.04f
         }
@@ -1277,7 +1282,8 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         val lights = scene.objects.filter { it.shape == Shape.LIGHT }.take(4).filter { l -> l.y >= gh + 0.3f && l.sx >= 0.05f }
         if (!sunOk && lights.isEmpty()) return
 
-        val samples = if (soft > 0.02f) 5 else 1
+        // the soft edge draws every shadow several times: fewer copies when there are many casters
+        val samples = if (soft <= 0.02f) 1 else if (casters.size <= 120) 5 else if (casters.size <= 300) 3 else 1
         val ox = floatArrayOf(0f, 1f, -1f, 0f, 0f)
         val oz = floatArrayOf(0f, 0f, 0f, 1f, -1f)
         GLES20.glEnable(GLES20.GL_BLEND)
@@ -2112,10 +2118,13 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
             if (o.opacity <= 0.025f && o.shape != Shape.WATER && !o.shape.isEmitter) continue   // fully invisible (hidden parts, invisible body)
             if (o.hud) { if (!mirror) huds.add(o); continue }
             if (o.shape.isEmitter) { emitters.add(o); continue }
-            if ((o.shape == Shape.CUBE || o.shape == Shape.SPHERE || o.shape == Shape.PYRAMID || o.shape == Shape.TREE) && o.swing == 0f && o !== sel) {
+            if ((o.shape == Shape.CUBE || o.shape == Shape.SPHERE || o.shape == Shape.PYRAMID || o.shape == Shape.TREE || o.shape == Shape.MODEL) && o.swing == 0f && o !== sel) {
                 // a ball around the object (big enough for any turn); outside the view = skip
                 val rad = Math.sqrt((o.sx * o.sx + o.sy * o.sy + o.sz * o.sz).toDouble()).toFloat() * 0.65f + 0.6f
                 val cy = if (o.shape == Shape.TREE) o.y + o.sy * 0.5f else o.y
+                // too small to see from this far (under about 0.6% of the distance): skip
+                val ddx = o.x - eyeC[0]; val ddy = cy - eyeC[1]; val ddz = o.z - eyeC[2]
+                if (rad * rad < (ddx * ddx + ddy * ddy + ddz * ddz) * 0.000036f) continue
                 var out = false
                 for (p in 0 until 6) {
                     if (fr[p * 4] * o.x + fr[p * 4 + 1] * cy + fr[p * 4 + 2] * o.z + fr[p * 4 + 3] < -rad) { out = true; break }
