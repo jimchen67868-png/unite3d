@@ -38,6 +38,8 @@ class ScriptEngine(private val scene: Scene, private val log: (String) -> Unit) 
     private val tableOwner = java.util.IdentityHashMap<LuaTable, SceneObject>()   // Lua table -> its object (destroy() finds it fast)
     private var waterObjs: List<SceneObject> = emptyList()   // the water surfaces, looked up once in a while instead of scanning every object
     private var waterStamp = -1000
+    private var terrainObjs: List<SceneObject> = emptyList()
+    private var terrainStamp = -1000
     private var frameNo = 0
     private var pullNo = 0
     private var fired = false
@@ -196,8 +198,12 @@ class ScriptEngine(private val scene: Scene, private val log: (String) -> Unit) 
             val x = args.optdouble(1, 0.0).toFloat()
             val z = args.optdouble(2, 0.0).toFloat()
             var best: Float? = null
-            for (o in tables.keys) {
-                if (o.shape != Shape.TERRAIN) continue
+            // only the terrain objects are looked at (found again now and then), not every object in the scene
+            if (frameNo - terrainStamp > 120) {
+                terrainObjs = scene.objects.filter { it.shape == Shape.TERRAIN }
+                terrainStamp = frameNo
+            }
+            for (o in terrainObjs) {
                 val h = TerrainGen.heightAt(o, x, z) ?: continue
                 best = if (best == null) h else maxOf(best, h)
             }

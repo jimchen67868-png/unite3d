@@ -2405,13 +2405,17 @@ end
 function slide(pl, wx, wz, h, oldH)
   if pl == nil or pl.wallAt == nil then return wx, wz, false end
   local x0, z0 = self.x, self.z
-  if blockedAt(pl, x0, z0, oldH) then return wx, wz, false end   -- already inside something: let it drive out
   local dx, dz = wx - x0, wz - z0
+  if dx * dx + dz * dz < 0.000001 and h == oldH then return wx, wz, false end   -- standing still: nothing to test
   local steps = math.max(1, math.ceil(math.sqrt(dx * dx + dz * dz) / 0.3))
   local nx, nz = x0, z0
   for i = 1, steps do
     local tx, tz = x0 + dx * i / steps, z0 + dz * i / steps
-    if blockedAt(pl, tx, tz, h) then return nx, nz, true end
+    if blockedAt(pl, tx, tz, h) then
+      -- already inside something (not just blocked now)? then let it drive out
+      if i == 1 and blockedAt(pl, x0, z0, oldH) then return wx, wz, false end
+      return nx, nz, true
+    end
     nx, nz = tx, tz
   end
   return nx, nz, false
@@ -2421,6 +2425,8 @@ function update(dt)
   local pl = find("Player")
   local driven = pl ~= nil and pl.car == self.name and pl.seat == 1
   self.driven = driven
+  -- parked and still: nothing to do (this saves a lot of work when there are many vehicles)
+  if not driven and speed == 0 and placed and wheelSteer * wheelSteer < 0.01 then return end
   local throttle = 0
   local steer = 0
   if driven and input.joyActive then
@@ -2566,13 +2572,17 @@ end
 function slide(pl, wx, wz, h, oldH)
   if pl == nil or pl.wallAt == nil then return wx, wz, false end
   local x0, z0 = self.x, self.z
-  if blockedAt(pl, x0, z0, oldH) then return wx, wz, false end   -- already inside something: let it drive out
   local dx, dz = wx - x0, wz - z0
+  if dx * dx + dz * dz < 0.000001 and h == oldH then return wx, wz, false end   -- standing still: nothing to test
   local steps = math.max(1, math.ceil(math.sqrt(dx * dx + dz * dz) / 0.3))
   local nx, nz = x0, z0
   for i = 1, steps do
     local tx, tz = x0 + dx * i / steps, z0 + dz * i / steps
-    if blockedAt(pl, tx, tz, h) then return nx, nz, true end
+    if blockedAt(pl, tx, tz, h) then
+      -- already inside something (not just blocked now)? then let it drive out
+      if i == 1 and blockedAt(pl, x0, z0, oldH) then return wx, wz, false end
+      return nx, nz, true
+    end
     nx, nz = tx, tz
   end
   return nx, nz, false
@@ -2582,6 +2592,8 @@ function update(dt)
   local pl = find("Player")
   local driven = pl ~= nil and pl.car == self.name and pl.seat == 1
   self.driven = driven
+  -- parked and still: nothing to do (this saves a lot of work when there are many vehicles)
+  if not driven and speed == 0 and placed and wheelSteer * wheelSteer < 0.01 then return end
   local throttle = 0
   local steer = 0
   if driven and input.joyActive then
@@ -2724,13 +2736,16 @@ end
 function slide(pl, wx, wz, h, oldH)
   if pl == nil or pl.wallAt == nil then return wx, wz, false end
   local x0, z0 = self.x, self.z
-  if blockedAt(pl, x0, self.y, z0, oldH) then return wx, wz, false end   -- already inside something: let it fly out
   local dx, dz = wx - x0, wz - z0
+  if dx * dx + dz * dz < 0.000001 and h == oldH then return wx, wz, false end   -- standing still: nothing to test
   local steps = math.max(1, math.ceil(math.sqrt(dx * dx + dz * dz) / 0.3))
   local nx, nz = x0, z0
   for i = 1, steps do
     local tx, tz = x0 + dx * i / steps, z0 + dz * i / steps
-    if blockedAt(pl, tx, self.y, tz, h) then return nx, nz, true end
+    if blockedAt(pl, tx, self.y, tz, h) then
+      if i == 1 and blockedAt(pl, x0, self.y, z0, oldH) then return wx, wz, false end   -- already inside something: let it fly out
+      return nx, nz, true
+    end
     nx, nz = tx, tz
   end
   return nx, nz, false
@@ -2785,7 +2800,7 @@ function update(dt)
     end
   end
   -- up into a ceiling or down onto a roof: it stops there
-  if pl ~= nil and pl.wallAt ~= nil and vy ~= 0 and blockedAt(pl, nx, ny, nz, heading) and not blockedAt(pl, nx, self.y, nz, heading) then
+  if pl ~= nil and pl.wallAt ~= nil and math.abs(vy) > 0.3 and blockedAt(pl, nx, ny, nz, heading) and not blockedAt(pl, nx, self.y, nz, heading) then
     if pl.car == self.name and math.abs(vy) > 9 then pl.hp = pl.hp - (math.abs(vy) - 9) * 3 end
     ny = self.y
     vy = 0
