@@ -97,6 +97,13 @@ class MainActivity : Activity(), SensorEventListener {
     private lateinit var pointInfo: TextView
     private lateinit var pointAxisBtn: Button
     private lateinit var zoomBar: LinearLayout
+    // speed readout while playing
+    private var perfText = ""
+    private var perfFrames = 0
+    private var perfScriptNs = 0L
+    private var perfT0 = 0L
+    private var perfLast = 0L
+    private var perfWorst = 0L
     private lateinit var photoBtn: Button
     private lateinit var skyPhotoBtn: Button
     private lateinit var skyModeBtn: Button
@@ -477,6 +484,7 @@ end
                     ))
                     // all the other things to add: slide sideways to see them all
                     addView(scrollRow(
+                        btn("Find...", true) { showAddSearch() },
                         btn("+Stick", true) { if (scene.addJoystick() == null) toast("Joystick already added") else editor.refresh() },
                         btn("+Button", true) { scene.addButton(); editor.refresh() },
                         btn("+Light", true) { if (scene.addLight(Shape.LIGHT) == null) toast("Max 4 point lights") else editor.refresh() },
@@ -1060,6 +1068,21 @@ end
             val dt = if (lastFrame == 0L) 0.016f
             else ((frameTimeNanos - lastFrame) / 1_000_000_000f).coerceAtMost(0.1f)
             lastFrame = frameTimeNanos
+            perfFrames++
+            if (perfLast != 0L && frameTimeNanos - perfLast > perfWorst) perfWorst = frameTimeNanos - perfLast
+            perfLast = frameTimeNanos
+            if (perfT0 == 0L) perfT0 = frameTimeNanos
+            if (frameTimeNanos - perfT0 >= 1_000_000_000L) {
+                perfText = "fps " + perfFrames + "  script " + String.format(Locale.US, "%.1f", perfScriptNs / 1e6 / perfFrames) +
+                    " ms  drawn " + editor.renderer.statDrawn + "  shadows " + editor.renderer.statShadow +
+                    "  worst " + (perfWorst / 1000000L) + " ms  heap " + ((Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory()) / 1048576L) + " MB  gc " +
+                    (try { android.os.Debug.getRuntimeStat("art.gc.gc-count") } catch (e: Throwable) { "?" })
+                perfWorst = 0L
+                perfFrames = 0
+                perfScriptNs = 0L
+                perfT0 = frameTimeNanos
+                updateInfo()
+            }
             if (playing) updateButtonVisibility()
             readButtons()
             engine?.let {
@@ -1083,7 +1106,9 @@ end
                 it.joyTap = joystick.consumeTap()
                 it.bagTapIn = bagTap
                 bagTap = ""
+                val tUpd = System.nanoTime()
                 it.update(dt)
+                perfScriptNs += System.nanoTime() - tUpd
                 it.bagTapIn = ""
                 bagView.setData(it.bagText)
                 val wantBag = it.bagOpen
@@ -2498,6 +2523,7 @@ end
         info.text = (if (playing) "PLAYING  |  " else "") + (o?.name ?: "Nothing selected") +
             (if (o != null && !o.shape.isScreen && o.shape != Shape.SETTINGS) String.format(Locale.US, " (%.2f, %.2f, %.2f)", o.x, o.y, o.z) else "") +
             "  |  " + scene.objects.size + " objects" + (if (playing) "" else if (editor.multiMode) "  |  MULTI: " + scene.multi.size + " picked" else if (editor.locked) "  |  LOCKED: drag " + editor.mode.name.lowercase() + (if (editor.axis > 0) " " + arrayOf("", "X", "Y", "Z")[editor.axis] else "") else if (editor.selectEnabled) "  |  tap to select" else "  |  select off")
+        if (playing && perfText.isNotEmpty()) info.text = info.text.toString() + "  |  " + perfText
         if (scene.selected?.shape != Shape.TERRAIN && editor.sculpt != 0) editor.sculpt = 0
         if (panel == Panel.HIER && (scene.objects.size != lastCount || scene.selected !== lastSel)) rebuildHierarchy()
         if (panel == Panel.INSPECT) refreshInspector()
@@ -2937,27 +2963,75 @@ end
     }
 
     private fun showSoundsDialog() {
-        val files = soundFiles()
-        val items = ArrayList<String>()
-        items.add("+ Import sound or music...")
-        for (f in files) items.add(f.name + "  (" + (f.length() / 1024) + " KB)")
-        AlertDialog.Builder(this)
-            .setTitle("Sounds and music")
-            .setItems(items.toTypedArray()) { _, which ->
-                if (which == 0) pickSound()
-                else {
-                    val f = files[which - 1]
-                    AlertDialog.Builder(this)
-                        .setTitle(f.name)
-                        .setMessage("In a script:\n  playSound(\"" + f.name + "\")\n  playMusic(\"" + f.name + "\")")
-                        .setPositiveButton("Play") { _, _ -> previewSound(f) }
-                        .setNeutralButton("Delete") { _, _ -> stopPreview(); f.delete(); toast("Deleted " + f.name) }
-                        .setNegativeButton("Close") { _, _ -> stopPreview() }
-                        .show()
-                }
+        val all = ArrayList(soundFiles())
+        val shown = ArrayList<File>()
+        val labels = ArrayList<String>()
+        val adapter = object : android.widget.ArrayAdapter<String>(this, android.R.layout.simple_list_item_1, labels) {
+            override fun getView(position: Int, convertView: View?, parent: android.view.ViewGroup): View {
+                val t = super.getView(position, convertView, parent) as TextView
+                t.setTextColor(if (position == 0) 0xFF7FD4FF.toInt() else Color.WHITE)
+                t.textSize = 15f
+                return t
             }
-            .setNegativeButton("Close", null)
-            .show()
+        }
+        val search = EditText(this).apply {
+            styleField(this)
+            hint = "Search sounds and music"
+            setHintTextColor(0xFF888888.toInt())
+        }
+        val list = android.widget.ListView(this).apply { this.adapter = adapter }
+        fun refill() {
+            val q = search.text.toString().trim().lowercase()
+            shown.clear()
+            labels.clear()
+            labels.add("+ Import sound or music...")
+            for (f in all) if (q.isEmpty() || f.name.lowercase().contains(q)) {
+                shown.add(f)
+                labels.add(f.name + "  (" + (f.length() / 1024) + " KB)")
+            }
+            adapter.notifyDataSetChanged()
+        }
+        refill()
+        search.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, st: Int, c: Int, a: Int) {}
+            override fun onTextChanged(s: CharSequence?, st: Int, b: Int, c: Int) {}
+            override fun afterTextChanged(s: Editable?) { refill() }
+        })
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(0xFF202020.toInt())
+            setPadding(dp(10), dp(8), dp(10), dp(4))
+            addView(search, LinearLayout.LayoutParams(-1, -2))
+            addView(list, LinearLayout.LayoutParams(-1, dp(320)))
+        }
+        val dlg = AlertDialog.Builder(this)
+            .setTitle("Sounds and music (" + all.size + ")")
+            .setView(box)
+            .setNegativeButton("Close") { _, _ -> stopPreview() }
+            .create()
+        list.setOnItemClickListener { _, _, pos, _ ->
+            if (pos == 0) {
+                dlg.dismiss()
+                pickSound()
+            } else {
+                val f = shown[pos - 1]
+                AlertDialog.Builder(this)
+                    .setTitle(f.name)
+                    .setMessage("In a script:\n  playSound(\"" + f.name + "\")\n  playMusic(\"" + f.name + "\")")
+                    .setPositiveButton("Play") { _, _ -> previewSound(f) }
+                    .setNeutralButton("Delete") { _, _ ->
+                        stopPreview()
+                        f.delete()
+                        all.remove(f)
+                        refill()
+                        toast("Deleted " + f.name)
+                    }
+                    .setNegativeButton("Close") { _, _ -> stopPreview() }
+                    .show()
+            }
+        }
+        dlg.setOnDismissListener { stopPreview() }
+        dlg.show()
     }
 
     private fun pickSound() {
@@ -2996,6 +3070,116 @@ end
     }
 
     /** Add > +Build: pick a kind, then an object; it is built where the camera looks, as one group. */
+    private fun buildAtTarget(item: Builder.Item) {
+        val t = editor.renderer.target
+        val g = try {
+            item.make(scene, Math.round(t[0]).toFloat(), Math.round(t[2]).toFloat())
+        } catch (e: Throwable) {
+            toast("Could not build: " + (e.message ?: e.javaClass.simpleName))
+            null
+        }
+        if (g != null) {
+            scene.selected = g
+            lastCount = -1
+            editor.refresh()
+            toast("Built " + item.name + ". Use Ungroup to edit the parts of a group.")
+        }
+    }
+
+    // ---------- Search in the Add tab ----------
+
+    private class AddItem(val name: String, val group: String, val words: String, val run: () -> Unit)
+
+    /** Everything that can be added, with a few extra words to find it by. */
+    private fun addCatalog(): List<AddItem> {
+        val l = ArrayList<AddItem>()
+        fun a(name: String, group: String, words: String, run: () -> Unit) { l.add(AddItem(name, group, words, run)) }
+        a("Cube", "Basic", "box block square") { scene.add(Shape.CUBE); editor.refresh() }
+        a("Pyramid", "Basic", "cone point roof") { scene.add(Shape.PYRAMID); editor.refresh() }
+        a("Sphere", "Basic", "ball round globe") { scene.add(Shape.SPHERE); editor.refresh() }
+        a("Joystick (stick)", "Controls", "stick move control touch") { if (scene.addJoystick() == null) toast("Joystick already added") else editor.refresh() }
+        a("Button", "Controls", "touch tap fire jump control") { scene.addButton(); editor.refresh() }
+        a("Light (point light)", "Lights", "lamp bulb glow") { if (scene.addLight(Shape.LIGHT) == null) toast("Max 4 point lights") else editor.refresh() }
+        a("Sun", "Lights", "sunlight day shadow") { if (scene.addLight(Shape.SUN) == null) toast("Sun already added") else editor.refresh() }
+        a("Block (physics block)", "Basic", "solid wall brick") { scene.addBlock(); editor.refresh() }
+        a("Camera", "Scene", "view game camera") { if (scene.addCamera() == null) toast("Camera already added") else editor.refresh() }
+        a("Terrain", "Scene", "ground hills land map height") { scene.addTerrain(); editor.refresh() }
+        a("Bone", "Scene", "joint group attach rig skeleton") { scene.addBone(); editor.refresh() }
+        a("Water", "Scene", "sea lake river ocean waves") { scene.addWater(); editor.refresh() }
+        a("Mirror", "Scene", "reflection glass") { scene.addMirror(); editor.refresh() }
+        a("Tree", "Nature", "oak plant wood forest leaves") { scene.addTree(0); editor.refresh() }
+        a("Pine", "Nature", "fir tree plant forest conifer") { scene.addTree(1); editor.refresh() }
+        a("Grass", "Nature", "plant meadow lawn field") { scene.addGrass(); editor.refresh() }
+        a("Fire", "Effects", "flame burn campfire") { scene.addFire(); editor.refresh() }
+        a("Smoke", "Effects", "cloud steam fog") { scene.addSmoke(); editor.refresh() }
+        for ((cat, items) in Builder.categories) for (item in items) {
+            a(item.name, "Build: " + cat, "build ready made complex") { buildAtTarget(item) }
+        }
+        a("Import 3D model...", "Import", "obj glb file load mesh") { showImportMenu() }
+        return l
+    }
+
+    /** Add > Find...: type a word and tap what you want to add (cube, tree, house, car, light ...). */
+    private fun showAddSearch() {
+        val all = addCatalog()
+        val shown = ArrayList<AddItem>()
+        val labels = ArrayList<String>()
+        val adapter = object : android.widget.ArrayAdapter<String>(this, android.R.layout.simple_list_item_1, labels) {
+            override fun getView(position: Int, convertView: View?, parent: android.view.ViewGroup): View {
+                val t = super.getView(position, convertView, parent) as TextView
+                t.setTextColor(Color.WHITE)
+                t.textSize = 15f
+                return t
+            }
+        }
+        val search = EditText(this).apply {
+            styleField(this)
+            hint = "Search: cube, tree, house, car, light..."
+            setHintTextColor(0xFF888888.toInt())
+        }
+        val list = android.widget.ListView(this).apply { this.adapter = adapter }
+        fun refill() {
+            val words = search.text.toString().trim().lowercase().split(" ").filter { it.isNotEmpty() }
+            shown.clear()
+            labels.clear()
+            for (it in all) {
+                val hay = (it.name + " " + it.group + " " + it.words).lowercase()
+                if (words.all { w -> hay.contains(w) }) {
+                    shown.add(it)
+                    labels.add(it.name + "   (" + it.group + ")")
+                }
+            }
+            adapter.notifyDataSetChanged()
+        }
+        refill()
+        search.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, st: Int, c: Int, a: Int) {}
+            override fun onTextChanged(s: CharSequence?, st: Int, b: Int, c: Int) {}
+            override fun afterTextChanged(s: Editable?) { refill() }
+        })
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(0xFF202020.toInt())
+            setPadding(dp(10), dp(8), dp(10), dp(4))
+            addView(search, LinearLayout.LayoutParams(-1, -2))
+            addView(list, LinearLayout.LayoutParams(-1, dp(320)))
+        }
+        val dlg = AlertDialog.Builder(this)
+            .setTitle("Add: search")
+            .setView(box)
+            .setNegativeButton("Close", null)
+            .create()
+        list.setOnItemClickListener { _, _, pos, _ ->
+            val item = shown[pos]
+            dlg.dismiss()
+            if (playing) { toast("Stop play mode first"); return@setOnItemClickListener }
+            record()
+            item.run()
+            record()
+        }
+        dlg.show()
+    }
+
     private fun showBuildMenu() {
         val cats = Builder.categories
         AlertDialog.Builder(this)
@@ -3006,19 +3190,7 @@ end
                     .setTitle(cats[ci].first)
                     .setItems(items.map { it.name }.toTypedArray()) { _, ii ->
                         record()
-                        val t = editor.renderer.target
-                        val g = try {
-                            items[ii].make(scene, Math.round(t[0]).toFloat(), Math.round(t[2]).toFloat())
-                        } catch (e: Throwable) {
-                            toast("Could not build: " + (e.message ?: e.javaClass.simpleName))
-                            null
-                        }
-                        if (g != null) {
-                            scene.selected = g
-                            lastCount = -1
-                            editor.refresh()
-                            toast("Built " + items[ii].name + " as one group. Use Ungroup to edit the parts.")
-                        }
+                        buildAtTarget(items[ii])
                         record()
                     }
                     .setNegativeButton("Back") { _, _ -> showBuildMenu() }

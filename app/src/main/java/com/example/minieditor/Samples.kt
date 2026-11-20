@@ -2418,7 +2418,7 @@ function slide(pl, wx, wz, h, oldH)
   local x0, z0 = self.x, self.z
   local dx, dz = wx - x0, wz - z0
   if dx * dx + dz * dz < 0.000001 and h == oldH then return wx, wz, false end   -- standing still: nothing to test
-  local steps = math.max(1, math.ceil(math.sqrt(dx * dx + dz * dz) / 0.3))
+  local steps = math.max(1, math.min(10, math.ceil(math.sqrt(dx * dx + dz * dz) / 0.3)))
   local nx, nz = x0, z0
   for i = 1, steps do
     local tx, tz = x0 + dx * i / steps, z0 + dz * i / steps
@@ -2436,6 +2436,7 @@ function update(dt)
   local pl = find("Player")
   local driven = pl ~= nil and pl.car == self.name and pl.seat == 1
   self.driven = driven
+  crashT = (crashT or 0) - dt
   -- parked and still: nothing to do (this saves a lot of work when there are many vehicles)
   if not driven and speed == 0 and placed and wheelSteer * wheelSteer < 0.01 then return end
   local throttle = 0
@@ -2468,7 +2469,8 @@ function update(dt)
   local fz = -math.cos(r)
   local nx, nz, hit = slide(pl, self.x + fx * speed * dt, self.z + fz * speed * dt, heading, oldHeading)
   if hit then
-    if math.abs(speed) > 4 then
+    if math.abs(speed) > 4 and (crashT or 0) <= 0 then
+      crashT = 0.6   -- one crash sound and one hurt per 0.6 s, not one per frame
       playSound("hit", 0.7, 0.6)
       -- a hard crash hurts the people inside
       if pl ~= nil and pl.car == self.name and math.abs(speed) > 14 then pl.hp = pl.hp - (math.abs(speed) - 14) * 1.5 end
@@ -2585,7 +2587,7 @@ function slide(pl, wx, wz, h, oldH)
   local x0, z0 = self.x, self.z
   local dx, dz = wx - x0, wz - z0
   if dx * dx + dz * dz < 0.000001 and h == oldH then return wx, wz, false end   -- standing still: nothing to test
-  local steps = math.max(1, math.ceil(math.sqrt(dx * dx + dz * dz) / 0.3))
+  local steps = math.max(1, math.min(10, math.ceil(math.sqrt(dx * dx + dz * dz) / 0.3)))
   local nx, nz = x0, z0
   for i = 1, steps do
     local tx, tz = x0 + dx * i / steps, z0 + dz * i / steps
@@ -2603,6 +2605,7 @@ function update(dt)
   local pl = find("Player")
   local driven = pl ~= nil and pl.car == self.name and pl.seat == 1
   self.driven = driven
+  crashT = (crashT or 0) - dt
   -- parked and still: nothing to do (this saves a lot of work when there are many vehicles)
   if not driven and speed == 0 and placed and wheelSteer * wheelSteer < 0.01 then return end
   local throttle = 0
@@ -2635,7 +2638,8 @@ function update(dt)
   local fz = -math.cos(r)
   local nx, nz, hit = slide(pl, self.x + fx * speed * dt, self.z + fz * speed * dt, heading, oldHeading)
   if hit then
-    if math.abs(speed) > 4 then
+    if math.abs(speed) > 4 and (crashT or 0) <= 0 then
+      crashT = 0.6   -- one crash sound and one hurt per 0.6 s, not one per frame
       playSound("hit", 0.7, 0.6)
       -- a hard crash hurts the people inside
       if pl ~= nil and pl.car == self.name and math.abs(speed) > 14 then pl.hp = pl.hp - (math.abs(speed) - 14) * 1.5 end
@@ -2749,7 +2753,7 @@ function slide(pl, wx, wz, h, oldH)
   local x0, z0 = self.x, self.z
   local dx, dz = wx - x0, wz - z0
   if dx * dx + dz * dz < 0.000001 and h == oldH then return wx, wz, false end   -- standing still: nothing to test
-  local steps = math.max(1, math.ceil(math.sqrt(dx * dx + dz * dz) / 0.3))
+  local steps = math.max(1, math.min(10, math.ceil(math.sqrt(dx * dx + dz * dz) / 0.3)))
   local nx, nz = x0, z0
   for i = 1, steps do
     local tx, tz = x0 + dx * i / steps, z0 + dz * i / steps
@@ -2784,6 +2788,7 @@ function update(dt)
   if rt == 0 and rotor < 0.03 then rotor = 0 end
   local flying = rotor > 0.8
   local top = 40
+  crashT = (crashT or 0) - dt
   local oldHeading = heading
   if flying then
     vy = vy + (climb * 7 - vy) * math.min(1, dt * 2)
@@ -2799,7 +2804,8 @@ function update(dt)
   local nx, nz, hit = slide(pl, self.x + fx * speed * dt, self.z + fz * speed * dt, heading, oldHeading)
   local ny = self.y + vy * dt
   if hit then
-    if math.abs(speed) > 4 then
+    if math.abs(speed) > 4 and (crashT or 0) <= 0 then
+      crashT = 0.6   -- one crash sound and one hurt per 0.6 s, not one per frame
       playSound("hit", 0.8, 0.5)
       -- a hard crash hurts the people inside
       if pl ~= nil and pl.car == self.name and math.abs(speed) > 14 then pl.hp = pl.hp - (math.abs(speed) - 14) * 1.5 end

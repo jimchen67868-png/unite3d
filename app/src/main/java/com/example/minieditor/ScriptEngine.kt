@@ -41,6 +41,13 @@ class ScriptEngine(private val scene: Scene, private val log: (String) -> Unit) 
     private var terrainObjs: List<SceneObject> = emptyList()
     private var terrainStamp = -1000
     private var frameNo = 0
+    private val snapBuf = ArrayList<Map.Entry<SceneObject, LuaTable>>()
+    /** A copy of the object list that stays valid when scripts add or remove objects while we go through it (one list, reused). */
+    private fun snapshot(): ArrayList<Map.Entry<SceneObject, LuaTable>> {
+        snapBuf.clear()
+        snapBuf.addAll(tables.entries)
+        return snapBuf
+    }
     private var pullNo = 0
     private var fired = false
     private val nameIndex = HashMap<String, SceneObject>()   // find() looks names up here first
@@ -345,7 +352,7 @@ class ScriptEngine(private val scene: Scene, private val log: (String) -> Unit) 
      */
     private fun pullAll() {
         pullNo++
-        for ((o, t) in tables.entries.toList()) {
+        for ((o, t) in snapshot()) {
             val c = pushCache[o]
             if (c != null && c[18] >= 90f && !instByObj.containsKey(o) && ((pullNo + System.identityHashCode(o)) and 7) != 0) continue
             if (pull(o, t)) {
@@ -556,7 +563,7 @@ class ScriptEngine(private val scene: Scene, private val log: (String) -> Unit) 
                 }
             }
         }
-        for ((o, t) in tables.entries.toList()) {
+        for ((o, t) in snapshot()) {
             push(o, t)
             if (o.collider != 0) t.set("grounded", LuaValue.valueOf(grounded.contains(o)))
         }
@@ -583,7 +590,7 @@ class ScriptEngine(private val scene: Scene, private val log: (String) -> Unit) 
         updateInput()
         pushWorld()
         for (t in tables.values) t.set("grounded", LuaValue.FALSE)
-        for ((o, t) in tables.entries.toList()) {
+        for ((o, t) in snapshot()) {
             if (o.script.isBlank()) continue
             try {
                 val g = newGlobals()
@@ -635,7 +642,7 @@ class ScriptEngine(private val scene: Scene, private val log: (String) -> Unit) 
         if (watchFrame == 0) {
             for ((o, _) in tables) if (o.collider != 0 && o.shape == Shape.CUBE && !instByObj.containsKey(o)) watchPos[o] = floatArrayOf(o.x, o.y, o.z)
         }
-        for ((o, t) in tables.entries.toList()) push(o, t)
+        for ((o, t) in snapshot()) push(o, t)
         updateInput()
         pushWorld()
         for (inst in instances.toList()) {
