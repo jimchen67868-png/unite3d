@@ -14,7 +14,8 @@ function start()
   closedZ = self.z
   amt = 0
   want = 0
-  checkT = 0
+  checkT = math.random() * 0.15   -- doors do not all look at the same moment (that made a little stutter every 0.15 s)
+  self.collider = 1
   slide = self.sx + 0.15
   player = find("Player")
   bots = {}
@@ -32,7 +33,13 @@ end
 function update(dt)
   checkT = checkT - dt
   if checkT <= 0 then
-    checkT = 0.15
+    -- far from the player: look less often
+    local far = true
+    if player ~= nil then
+      local pdx, pdz = player.x - self.x, player.z - self.z
+      far = pdx * pdx + pdz * pdz > 2500
+    end
+    if far then checkT = 0.5 + math.random() * 0.3 else checkT = 0.15 end
     local n = near(player)
     if not n then
       for k = 1, NBOTS do
@@ -49,12 +56,16 @@ function update(dt)
       playSound("door", 0.6, 0.95 + math.random() * 0.1)
     end
   end
-  amt = amt + (want - amt) * math.min(1, dt * 5)
-  self.x = closedX - slide * amt
-  self.y = closedY
-  self.z = closedZ
-  self.isOpen = amt > 0.6
-  if amt > 0.5 then self.collider = 0 else self.collider = 1 end
+  -- only move while it is opening or closing (a door that is settled costs nothing)
+  if amt ~= want then
+    amt = amt + (want - amt) * math.min(1, dt * 5)
+    if math.abs(want - amt) < 0.002 then amt = want end
+    self.x = closedX - slide * amt
+    self.y = closedY
+    self.z = closedZ
+    self.isOpen = amt > 0.6
+    if amt > 0.5 then self.collider = 0 else self.collider = 1 end
+  end
 end
 """
 
