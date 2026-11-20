@@ -33,6 +33,9 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
     @Volatile var tpFollow: SceneObject? = null
     @Volatile var tpDist = 3.6f
     fun eyeAt(i: Int): Float = eye[i]
+    /** For the speed readout: how many objects were drawn in the last frame and how many cast a shadow. */
+    @Volatile var statDrawn = 0
+    @Volatile var statShadow = 0
     /** The direction the camera looks (the middle of the screen), from the real view matrix: 0 = x, 1 = y, 2 = z. */
     fun fwdAt(i: Int): Float = -view[i * 4 + 2]
     /** A model's points changed: build its mesh again the next time it is drawn. */
@@ -1282,6 +1285,7 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         val lights = scene.objects.filter { it.shape == Shape.LIGHT }.take(4).filter { l -> l.y >= gh + 0.3f && l.sx >= 0.05f }
         if (!sunOk && lights.isEmpty()) return
 
+        statShadow = casters.size
         // the soft edge draws every shadow several times: fewer copies when there are many casters
         val samples = if (soft <= 0.02f) 1 else if (casters.size <= 120) 5 else if (casters.size <= 300) 3 else 1
         val ox = floatArrayOf(0f, 1f, -1f, 0f, 0f)
@@ -2099,6 +2103,7 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         val seeThrough = ArrayList<SceneObject>()
         val huds = ArrayList<SceneObject>()
         val emitters = ArrayList<SceneObject>()
+        var kept = 0
         // the six planes of the view (from the view-projection matrix): objects fully outside are not drawn at all
         val fr = FloatArray(24)
         for (p in 0 until 6) {
@@ -2124,16 +2129,22 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
                 val cy = if (o.shape == Shape.TREE) o.y + o.sy * 0.5f else o.y
                 // too small to see from this far (under about 0.6% of the distance): skip
                 val ddx = o.x - eyeC[0]; val ddy = cy - eyeC[1]; val ddz = o.z - eyeC[2]
-                if (rad * rad < (ddx * ddx + ddy * ddy + ddz * ddz) * 0.000036f) continue
+                val d2 = ddx * ddx + ddy * ddy + ddz * ddz
+                if (rad * rad < d2 * 0.000036f) continue
+                // a draw distance: anything not big is not drawn beyond this (trees earlier, they have many triangles)
+                val maxD = if (o.shape == Shape.TREE) 260f else 380f
+                if (rad < 14f && d2 > maxD * maxD) continue
                 var out = false
                 for (p in 0 until 6) {
                     if (fr[p * 4] * o.x + fr[p * 4 + 1] * cy + fr[p * 4 + 2] * o.z + fr[p * 4 + 3] < -rad) { out = true; break }
                 }
                 if (out) continue
             }
+            kept++
             if (o.shape == Shape.WATER || o.opacity < 0.99f) { seeThrough.add(o); continue }
             drawObject(o, vpc, sel, 1f)
         }
+        if (!mirror) statDrawn = kept
         if (seeThrough.isNotEmpty()) {
             seeThrough.sortByDescending { o ->
                 (o.x - eyeC[0]) * (o.x - eyeC[0]) + (o.y - eyeC[1]) * (o.y - eyeC[1]) + (o.z - eyeC[2]) * (o.z - eyeC[2])
