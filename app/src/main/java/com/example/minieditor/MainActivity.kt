@@ -103,6 +103,7 @@ class MainActivity : Activity(), SensorEventListener {
     private var perfScriptNs = 0L
     private var perfT0 = 0L
     private var perfLast = 0L
+    private var perfGpuT = 0
     private var perfWorst = 0L
     private lateinit var photoBtn: Button
     private lateinit var skyPhotoBtn: Button
@@ -1077,7 +1078,9 @@ end
                     " ms  drawn " + editor.renderer.statDrawn + "  shadows " + editor.renderer.statShadow +
                     "  worst " + (perfWorst / 1000000L) + " ms  heap " + ((Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory()) / 1048576L) + " MB  gc " +
                     (try { android.os.Debug.getRuntimeStat("art.gc.gc-count") } catch (e: Throwable) { "?" })
-                perfText += "  |  " + (engine?.profile ?: "")
+                perfText += "  |  " + (engine?.profile ?: "") + "  |  " + editor.renderer.statGpu
+                perfGpuT++
+                if (perfGpuT >= 3) { perfGpuT = 0; editor.renderer.gpuProfileRequest = true }   // one measured frame every 3 seconds
                 perfWorst = 0L
                 perfFrames = 0
                 perfScriptNs = 0L

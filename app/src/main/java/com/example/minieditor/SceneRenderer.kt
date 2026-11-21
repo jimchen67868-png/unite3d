@@ -36,6 +36,20 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
     /** For the speed readout: how many objects were drawn in the last frame and how many cast a shadow. */
     @Volatile var statDrawn = 0
     @Volatile var statShadow = 0
+    /** The speed readout asks for one measured frame now and then: each kind of drawing is timed (the GPU is waited for). */
+    @Volatile var gpuProfileRequest = false
+    @Volatile var statGpu = ""
+    private var gpuProf = false
+    private val gpuNs = LongArray(9)
+
+    private inline fun gpuTime(cat: Int, block: () -> Unit) {
+        if (!gpuProf) { block(); return }
+        GLES20.glFinish()
+        val t0 = System.nanoTime()
+        block()
+        GLES20.glFinish()
+        gpuNs[cat] += System.nanoTime() - t0
+    }
     /** The direction the camera looks (the middle of the screen), from the real view matrix: 0 = x, 1 = y, 2 = z. */
     fun fwdAt(i: Int): Float = -view[i * 4 + 2]
     /** A model's points changed: build its mesh again the next time it is drawn. */
@@ -2104,6 +2118,10 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         val huds = ArrayList<SceneObject>()
         val emitters = ArrayList<SceneObject>()
         var kept = 0
+        if (!mirror) {
+            gpuProf = gpuProfileRequest
+            if (gpuProf) java.util.Arrays.fill(gpuNs, 0L)
+        }
         // the six planes of the view (from the view-projection matrix): objects fully outside are not drawn at all
         val fr = FloatArray(24)
         for (p in 0 until 6) {
@@ -2142,7 +2160,8 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
             }
             kept++
             if (o.shape == Shape.WATER || o.opacity < 0.99f) { seeThrough.add(o); continue }
-            drawObject(o, vpc, sel, 1f)
+            val cat = when (o.shape) { Shape.TERRAIN -> 0; Shape.TREE -> 2; Shape.GRASS -> 3; Shape.MODEL -> 4; else -> 5 }
+            gpuTime(cat) { drawObject(o, vpc, sel, 1f) }
         }
         if (!mirror) statDrawn = kept
         if (seeThrough.isNotEmpty()) {
@@ -2152,7 +2171,7 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
             GLES20.glEnable(GLES20.GL_BLEND)
             GLES20.glBlendFunc(GLES20.GL_SRC_ALPHA, GLES20.GL_ONE_MINUS_SRC_ALPHA)
             GLES20.glDepthMask(false)
-            for (o in seeThrough) drawObject(o, vpc, sel, o.opacity.coerceIn(0.02f, 1f))
+            for (o in seeThrough) gpuTime(if (o.shape == Shape.WATER) 1 else 6) { drawObject(o, vpc, sel, o.opacity.coerceIn(0.02f, 1f)) }
             GLES20.glDepthMask(true)
             GLES20.glDisable(GLES20.GL_BLEND)
         }
@@ -2163,7 +2182,7 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
             }
             GLES20.glEnable(GLES20.GL_BLEND)
             GLES20.glDepthMask(false)
-            for (o in emitters) drawEmitter(o, vpc, camAxes)
+            gpuTime(8) { for (o in emitters) drawEmitter(o, vpc, camAxes) }
             GLES20.glDepthMask(true)
             GLES20.glDisable(GLES20.GL_BLEND)
         }
@@ -2178,7 +2197,15 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         }
 
         GLES20.glUniform1fv(uLVis, 4, visOnes, 0)
-        drawShadows(vpc)
+        gpuTime(7) { drawShadows(vpc) }
+        if (!mirror && gpuProf) {
+            val n = arrayOf("terrain", "water", "trees", "grass", "models", "cubes", "glass", "shadows", "fx")
+            val sb = StringBuilder("gpu ms:")
+            for (i in 0 until 9) sb.append(' ').append(n[i]).append(' ').append(gpuNs[i] / 1000000L)
+            statGpu = sb.toString()
+            gpuProfileRequest = false
+            gpuProf = false
+        }
 
         // Light markers: drawn on top of everything, kept a constant size on screen so they stay visible when zoomed out
         if (!playing && !mirror) {
