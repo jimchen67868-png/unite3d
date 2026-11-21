@@ -1078,9 +1078,7 @@ end
                     " ms  drawn " + editor.renderer.statDrawn + "  shadows " + editor.renderer.statShadow +
                     "  worst " + (perfWorst / 1000000L) + " ms  heap " + ((Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory()) / 1048576L) + " MB  gc " +
                     (try { android.os.Debug.getRuntimeStat("art.gc.gc-count") } catch (e: Throwable) { "?" })
-                perfText += "  |  " + (engine?.profile ?: "") + "  |  " + editor.renderer.statGpu
-                perfGpuT++
-                if (perfGpuT >= 3) { perfGpuT = 0; editor.renderer.gpuProfileRequest = true }   // one measured frame every 3 seconds
+                perfText += "  |  " + (engine?.profile ?: "") + "  |  " + editor.renderer.statCpu
                 perfWorst = 0L
                 perfFrames = 0
                 perfScriptNs = 0L

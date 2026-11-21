@@ -576,12 +576,20 @@ class ScriptEngine(private val scene: Scene, private val log: (String) -> Unit) 
             push(o, t)
             if (o.collider != 0) t.set("grounded", LuaValue.valueOf(grounded.contains(o)))
         }
-        for (i in 0 until n) {
-            for (j in i + 1 until n) {
-                if (!moved[i] && !moved[j]) continue
-                if (overlap(cols[i], cols[j], -0.002f) == null) continue
-                fire(cols[i], cols[j])
-                fire(cols[j], cols[i])
+        // only objects that moved can start a new contact: test those against all the others (not every pair)
+        val mv = IntArray(n)
+        var mc = 0
+        for (i in 0 until n) if (moved[i]) mv[mc++] = i
+        for (k in 0 until mc) {
+            val i = mv[k]
+            for (j in 0 until n) {
+                if (j == i) continue
+                if (moved[j] && j < i) continue   // this pair was done when j was the moved one
+                val lo = if (i < j) i else j
+                val hi = if (i < j) j else i
+                if (overlap(cols[lo], cols[hi], -0.002f) == null) continue
+                fire(cols[lo], cols[hi])
+                fire(cols[hi], cols[lo])
             }
         }
         if (fired) pullAll()   // only when a collision script ran (it may have changed things)

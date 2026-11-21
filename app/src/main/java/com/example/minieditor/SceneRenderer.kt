@@ -40,6 +40,13 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
     @Volatile var gpuProfileRequest = false
     @Volatile var statGpu = ""
     private var gpuProf = false
+    // cheap timers (CPU side, no waiting): where the time of drawing a frame goes
+    @Volatile var statCpu = ""
+    private var cpuN = 0
+    private var cpuTot = 0L
+    private var cpuBake = 0L
+    private var cpuScene = 0L
+    private var cpuShadow = 0L
     private val gpuNs = LongArray(9)
 
     private inline fun gpuTime(cat: Int, block: () -> Unit) {
@@ -1941,7 +1948,9 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         GLES20.glUniform1f(uHasEnv, 0f)
         GLES20.glUniform1i(uEnv, 1)
         GLES20.glUniform1i(uShadow, 2)
+        val cB0 = System.nanoTime()
         bakeTerrainShadows()
+        val cB1 = System.nanoTime()
 
         // Mirrors: draw the scene again from the mirrored camera into a texture (up to 2 mirrors)
         mirrorIndex.clear()
@@ -1954,7 +1963,17 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
                 renderMirrorPass(i, mo, vpc, eyeC, camAxes, settings)
             }
         }
+        val cS0 = System.nanoTime()
         renderScene(vpc, eyeC, camAxes, settings, false)
+        val cS1 = System.nanoTime()
+        cpuBake += cB1 - cB0
+        cpuScene += cS1 - cS0
+        cpuTot += cS1 - cB0
+        cpuN++
+        if (cpuN >= 60) {
+            statCpu = "draw ms: bake " + (cpuBake / 1000000L / cpuN) + " scene " + (cpuScene / 1000000L / cpuN) + " (shadows " + (cpuShadow / 1000000L / cpuN) + ")"
+            cpuN = 0; cpuBake = 0L; cpuScene = 0L; cpuTot = 0L; cpuShadow = 0L
+        }
     }
 
     private fun ensureMirrorTargets(): Boolean {
@@ -2201,7 +2220,9 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         }
 
         GLES20.glUniform1fv(uLVis, 4, visOnes, 0)
+        val shT0 = System.nanoTime()
         gpuTime(7) { drawShadows(vpc) }
+        cpuShadow += System.nanoTime() - shT0
         if (!mirror && gpuProf) {
             val n = arrayOf("terrain", "water", "trees", "grass", "models", "cubes", "glass", "shadows", "fx")
             val sb = StringBuilder("gpu ms:")
