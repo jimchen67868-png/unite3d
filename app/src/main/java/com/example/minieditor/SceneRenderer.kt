@@ -1382,9 +1382,13 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
         val ll = sqrt(lx * lx + ly * ly + lz * lz)
         val sunOk = ll > 0f && ly / ll > 0.08f && sunPower > 0.05f
         val lights = scene.objects.filter { it.shape == Shape.LIGHT }.take(4).filter { it.sx >= 0.05f }
+        // the shadows baked onto the terrain only come from things that stay where they are. Anything that has a script
+        // or is attached to something (cars, bikes, helicopters, soldiers, doors) moves: baking it again every time it
+        // moved made the whole terrain shadow be calculated again and again. They still get their flat shadow near the camera.
         val casters = scene.objects.filter { o ->
             o.shadow && !o.shape.isScreen && !o.shape.isLight && o.shape != Shape.SETTINGS && o.shape != Shape.CAMERA &&
-                o.shape != Shape.TERRAIN && o.shape != Shape.BONE && o.shape != Shape.WATER && o.shape != Shape.GRASS && !o.shape.isEmitter && max(o.sx, max(o.sy, o.sz)) >= 0.35f
+                o.shape != Shape.TERRAIN && o.shape != Shape.BONE && o.shape != Shape.WATER && o.shape != Shape.GRASS && !o.shape.isEmitter && max(o.sx, max(o.sy, o.sz)) >= 0.35f &&
+                (!playing || (o.parentId == 0 && o.script.isBlank()))
         }
 
         hBegin()
