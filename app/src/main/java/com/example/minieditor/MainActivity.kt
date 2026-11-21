@@ -1077,6 +1077,7 @@ end
                     " ms  drawn " + editor.renderer.statDrawn + "  shadows " + editor.renderer.statShadow +
                     "  worst " + (perfWorst / 1000000L) + " ms  heap " + ((Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory()) / 1048576L) + " MB  gc " +
                     (try { android.os.Debug.getRuntimeStat("art.gc.gc-count") } catch (e: Throwable) { "?" })
+                perfText += "  |  " + (engine?.profile ?: "")
                 perfWorst = 0L
                 perfFrames = 0
                 perfScriptNs = 0L

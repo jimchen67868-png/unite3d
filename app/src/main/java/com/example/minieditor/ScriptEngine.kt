@@ -28,6 +28,7 @@ class ScriptEngine(private val scene: Scene, private val log: (String) -> Unit) 
     private class Inst(val obj: SceneObject, val globals: Globals, val sethook: LuaValue?) {
         var failed = false
         var onCollide: LuaValue? = null
+        var ns = 0L   // time spent in this script (for the speed readout)
     }
 
     private val tables = LinkedHashMap<SceneObject, LuaTable>()
@@ -41,6 +42,14 @@ class ScriptEngine(private val scene: Scene, private val log: (String) -> Unit) 
     private var terrainObjs: List<SceneObject> = emptyList()
     private var terrainStamp = -1000
     private var frameNo = 0
+    // the speed readout: where the time of one update goes (ms per frame), and which scripts are the slowest
+    @Volatile var profile = ""
+    private var profFrames = 0
+    private var tLua = 0L
+    private var tPull = 0L
+    private var tRig = 0L
+    private var tCollide = 0L
+    private var tKeep = 0L
     private val snapBuf = ArrayList<Map.Entry<SceneObject, LuaTable>>()
     /** A copy of the object list that stays valid when scripts add or remove objects while we go through it (one list, reused). */
     private fun snapshot(): ArrayList<Map.Entry<SceneObject, LuaTable>> {
@@ -645,11 +654,15 @@ class ScriptEngine(private val scene: Scene, private val log: (String) -> Unit) 
         for ((o, t) in snapshot()) push(o, t)
         updateInput()
         pushWorld()
+        val p0 = System.nanoTime()
         for (inst in instances.toList()) {
             inst.globals.set("time", time.toDouble())
             inst.globals.set("dt", dt.toDouble())
+            val s0 = System.nanoTime()
             callFn(inst, "update", dt.toDouble())
+            inst.ns += System.nanoTime() - s0
         }
+        val p1 = System.nanoTime()
         // everything that moves objects happens under the same lock the renderer holds while drawing,
         // so a frame is never drawn with the body moved but its parts still where they were
         synchronized(scene.lock) {
@@ -657,10 +670,33 @@ class ScriptEngine(private val scene: Scene, private val log: (String) -> Unit) 
             pullWorld()
             pullCamera()
             flushSpawns()
+            val p2 = System.nanoTime()
             Rig.apply(scene)
+            val p3 = System.nanoTime()
             collide()
+            val p4 = System.nanoTime()
             keepStill()
+            val p5 = System.nanoTime()
             Rig.apply(scene)
+            val p6 = System.nanoTime()
+            tPull += p2 - p1
+            tRig += (p3 - p2) + (p6 - p5)
+            tCollide += p4 - p3
+            tKeep += p5 - p4
+        }
+        tLua += p1 - p0
+        profFrames++
+        if (profFrames >= 60) {
+            val f = profFrames
+            val sb = StringBuilder()
+            sb.append("lua ").append(tLua / 1000000L / f).append(" pull ").append(tPull / 1000000L / f)
+                .append(" rig ").append(tRig / 1000000L / f).append(" collide ").append(tCollide / 1000000L / f)
+                .append(" keep ").append(tKeep / 1000000L / f).append(" ms. slowest scripts: ")
+            for (i in instances.sortedByDescending { it.ns }.take(3)) sb.append(i.obj.name).append(' ').append(i.ns / 1000000L / f).append("  ")
+            profile = sb.toString()
+            for (i in instances) i.ns = 0L
+            tLua = 0L; tPull = 0L; tRig = 0L; tCollide = 0L; tKeep = 0L
+            profFrames = 0
         }
         watchFrame++
         if (watchFrame == 10) reportStill()
