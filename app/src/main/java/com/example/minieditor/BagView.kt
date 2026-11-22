@@ -26,6 +26,11 @@ class BagView(ctx: Context, private val onTap: (String) -> Unit) : View(ctx) {
 
     // the layout is made in a 150 x 100 box and scaled to the screen
     private fun weaponR(i: Int) = RectF(6f + i * 45f, 24f, 6f + i * 45f + 42f, 46f)
+    private fun dropR(i: Int): RectF { val w = weaponR(i); return RectF(w.left + 25f, w.top + 15f, w.right - 2f, w.top + 21.5f) }
+    private val filled = BooleanArray(3)
+    private fun ammoDropR(i: Int): RectF { val x = 6f + i * 34.5f; return RectF(x + 18.5f, 56.8f, x + 31f, 62.2f) }
+    private val gDropR = RectF(51f, 80.5f, 72.5f, 86.5f)
+    private val mDropR = RectF(121f, 80.5f, 142.5f, 86.5f)
     private val medR = RectF(76f, 79f, 144f, 95f)
     private val grenR = RectF(6f, 79f, 74f, 95f)
     private val closeR = RectF(136f, 3f, 147f, 14f)
@@ -35,6 +40,9 @@ class BagView(ctx: Context, private val onTap: (String) -> Unit) : View(ctx) {
         raw = text
         rows.clear()
         for (line in text.split("\n")) if (line.isNotEmpty()) rows.add(line.split("|"))
+        java.util.Arrays.fill(filled, false)
+        var wi = 0
+        for (r in rows) if (r[0] == "W" || r[0] == "E") { if (wi < 3) filled[wi] = r[0] == "W"; wi++ }
         invalidate()
     }
 
@@ -48,7 +56,11 @@ class BagView(ctx: Context, private val onTap: (String) -> Unit) : View(ctx) {
 
     private fun hitKey(x: Float, y: Float): String? {
         if (closeR.contains(x, y)) return "close"
+        for (i in 0 until 3) if (filled[i] && dropR(i).contains(x, y)) return "d" + (i + 1)
         for (i in 0 until 3) if (weaponR(i).contains(x, y)) return "w" + (i + 1)
+        for (i in 0 until 4) if (ammoDropR(i).contains(x, y)) return "da" + (i + 1)
+        if (gDropR.contains(x, y)) return "dgren"
+        if (mDropR.contains(x, y)) return "dmed"
         if (medR.contains(x, y)) return "med"
         return null
     }
@@ -111,7 +123,10 @@ class BagView(ctx: Context, private val onTap: (String) -> Unit) : View(ctx) {
                 if (active) text(c, "IN HANDS", wr.right - 3f, wr.top + 6f, 3.2f, 0xFFF5A623.toInt(), Paint.Align.RIGHT)
                 text(c, r.getOrElse(1) { "" }, wr.left + 4f, wr.top + 14f, 6f, 0xFFFFFFFF.toInt())
                 text(c, "${num(r, 2)} / ${num(r, 3)}", wr.left + 4f, wr.top + 20.5f, 4.4f, 0xFFDDE3EA.toInt())
-                text(c, r.getOrElse(4) { "" }, wr.right - 3f, wr.top + 20.5f, 3.6f, 0xFF9AA4B0.toInt(), Paint.Align.RIGHT)
+                text(c, r.getOrElse(4) { "" }, wr.right - 3f, wr.top + 12.5f, 3.4f, 0xFF9AA4B0.toInt(), Paint.Align.RIGHT)
+                val dr = dropR(slot)
+                box(c, dr, 0xFF3A1E1E.toInt(), 0xFFD9453A.toInt(), 0.5f)
+                text(c, "DROP", (dr.left + dr.right) / 2f, dr.bottom - 1.6f, 3.6f, 0xFFFF8A80.toInt(), Paint.Align.CENTER)
             } else {
                 box(c, wr, 0xFF161B21.toInt(), 0xFF2A323B.toInt(), 0.5f)
                 text(c, "EMPTY", (wr.left + wr.right) / 2f, (wr.top + wr.bottom) / 2f + 1.5f, 4.2f, 0xFF566270.toInt(), Paint.Align.CENTER)
@@ -139,6 +154,9 @@ class BagView(ctx: Context, private val onTap: (String) -> Unit) : View(ctx) {
             text(c, r.getOrElse(1) { "" }, x + 5f, 62f, 4.4f, 0xFFFFFFFF.toInt())
             text(c, "${num(r, 2)}", x + 5f, 68.2f, 5.6f, col)
             text(c, "/${num(r, 3)}", x + 30f, 68.2f, 3f, 0xFF7A8592.toInt(), Paint.Align.RIGHT)
+            val ad = ammoDropR(ai)
+            box(c, ad, 0xFF3A1E1E.toInt(), 0xFFD9453A.toInt(), 0.4f)
+            text(c, "DROP", (ad.left + ad.right) / 2f, ad.bottom - 1.4f, 3.2f, 0xFFFF8A80.toInt(), Paint.Align.CENTER)
             ai++
         }
 
@@ -155,6 +173,8 @@ class BagView(ctx: Context, private val onTap: (String) -> Unit) : View(ctx) {
         c.drawCircle(grenR.left + 8f, (grenR.top + grenR.bottom) / 2f, 4.5f, p)
         text(c, "GRENADES", grenR.left + 16f, grenR.top + 7f, 4.4f, 0xFFFFFFFF.toInt())
         text(c, "$gn / $gm", grenR.left + 16f, grenR.top + 13.5f, 5f, 0xFFDDE3EA.toInt())
+        box(c, gDropR, 0xFF3A1E1E.toInt(), 0xFFD9453A.toInt(), 0.4f)
+        text(c, "DROP", (gDropR.left + gDropR.right) / 2f, gDropR.bottom - 1.5f, 3.4f, 0xFFFF8A80.toInt(), Paint.Align.CENTER)
         val medOn = mn > 0
         box(c, medR, 0xFF1E252D.toInt(), if (medOn) 0xFFD9453A.toInt() else 0xFF3A424C.toInt(), if (medOn) 0.9f else 0.5f)
         p.style = Paint.Style.FILL
@@ -165,6 +185,8 @@ class BagView(ctx: Context, private val onTap: (String) -> Unit) : View(ctx) {
         text(c, "MEDKITS", medR.left + 16f, medR.top + 7f, 4.4f, 0xFFFFFFFF.toInt())
         text(c, "$mn / $mm", medR.left + 16f, medR.top + 13.5f, 5f, 0xFFDDE3EA.toInt())
         if (medOn) text(c, "TAP TO USE", medR.right - 3f, medR.top + 13.5f, 3.4f, 0xFFD9453A.toInt(), Paint.Align.RIGHT)
+        box(c, mDropR, 0xFF3A1E1E.toInt(), 0xFFD9453A.toInt(), 0.4f)
+        text(c, "DROP", (mDropR.left + mDropR.right) / 2f, mDropR.bottom - 1.5f, 3.4f, 0xFFFF8A80.toInt(), Paint.Align.CENTER)
         c.restore()
     }
 

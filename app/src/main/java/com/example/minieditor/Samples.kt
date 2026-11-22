@@ -206,6 +206,7 @@ function start()
   walls = {}
   grid = {}
   doors = {}
+  drops = {}
   nearDoor = nil
   doorT = 0
   doorBtn = find("Door")
@@ -339,12 +340,12 @@ function addAmmo(key, n)
   log("+" .. n .. " " .. AMMONAMES[key] .. " ammo  (" .. ammoBag[key] .. ")")
 end
 
-function addWeapon(key)
+function addWeapon(key, magOverride)
   local w = WEAPONS[key]
   if w == nil then return end
   for i = 1, #slots do
     if slots[i] == key then
-      addAmmo(w.ammo, w.mag)
+      addAmmo(w.ammo, magOverride or w.mag)
       log("You already carry the " .. w.name .. " - took its ammo")
       return
     end
@@ -352,7 +353,7 @@ function addWeapon(key)
   storeAmmo()
   if #slots < MAXWEAPONS then
     slots[#slots + 1] = key
-    mags[key] = w.mag
+    mags[key] = magOverride or w.mag
     log("Picked up the " .. w.name .. "  (bag: " .. #slots .. " / " .. MAXWEAPONS .. " weapons)")
     switchWeapon(#slots)
   else
@@ -361,12 +362,154 @@ function addWeapon(key)
     ammoBag[WEAPONS[old].ammo] = math.min(AMMOCAP[WEAPONS[old].ammo], (ammoBag[WEAPONS[old].ammo] or 0) + (mags[old] or 0))
     mags[old] = nil
     slots[cur] = key
-    mags[key] = w.mag
+    mags[key] = magOverride or w.mag
     syncAmmo()
     applyGunLook()
     log("Swapped the " .. WEAPONS[old].name .. " for the " .. w.name)
   end
-  addAmmo(w.ammo, w.mag)
+  if magOverride == nil then addAmmo(w.ammo, w.mag) end
+end
+
+-- ===== dropping a weapon =====
+ACOL = { r556 = { 0.95, 0.8, 0.15 }, r9 = { 0.95, 0.5, 0.1 }, g12 = { 0.85, 0.2, 0.2 }, r762 = { 0.25, 0.45, 0.95 } }
+
+-- puts a small thing on the ground in front of the player: kind = "weapon", "med", "ammo" or "gren"
+function placeDrop(kind, key, amt, sx, sy, sz, r, g, b)
+  local yaw = math.rad(input.yaw)
+  local x = self.x - math.sin(yaw) * 1.4 + (math.random() - 0.5) * 0.5
+  local z = self.z - math.cos(yaw) * 1.4 + (math.random() - 0.5) * 0.5
+  local gy = groundHeight(x, z)
+  local ok, o = pcall(spawn, "cube", x, gy + 0.14, z)
+  if not ok then return false end
+  o.sx = sx
+  o.sy = sy
+  o.sz = sz
+  o.r = r
+  o.g = g
+  o.b = b
+  o.emit = 0.45
+  o.shadow = false
+  o.collider = 0
+  o.ry = math.deg(yaw)
+  drops[#drops + 1] = { o = o, kind = kind, key = key, mag = amt, amt = amt, t = 0, armed = false, y = gy + 0.14 }
+  if #drops > 30 then
+    destroy(drops[1].o)
+    table.remove(drops, 1)
+  end
+  return true
+end
+
+function spawnDrop(key, m)
+  local w = WEAPONS[key]
+  local c = ACOL[w.ammo]
+  placeDrop("weapon", key, m, 0.16, 0.12, 0.9 * w.len, c[1], c[2], c[3])
+end
+
+-- ammo: a pack of bullets is dropped each time (30 / 25 / 5 / 5 by kind)
+DROPPACK = { r556 = 30, r9 = 25, g12 = 5, r762 = 5 }
+
+function dropAmmo(key)
+  if self.car ~= nil then log("Get out of the vehicle first") return end
+  storeAmmo()
+  local have = ammoBag[key] or 0
+  if have <= 0 then log("You have no " .. AMMONAMES[key] .. " ammo to drop") return end
+  local n = math.min(have, DROPPACK[key])
+  if not placeDrop("ammo", key, n, 0.3, 0.18, 0.22, ACOL[key][1], ACOL[key][2], ACOL[key][3]) then return end
+  ammoBag[key] = have - n
+  syncAmmo()
+  playSound("pickup", 0.6, 0.7)
+  log("Dropped " .. n .. " " .. AMMONAMES[key] .. " bullets. Walk over them to take them again")
+end
+
+function dropMed()
+  if self.car ~= nil then log("Get out of the vehicle first") return end
+  if medkits <= 0 then log("You have no medkit to drop") return end
+  if not placeDrop("med", nil, 1, 0.34, 0.2, 0.42, 0.95, 0.3, 0.3) then return end
+  medkits = medkits - 1
+  playSound("pickup", 0.6, 0.7)
+  log("Dropped a medkit. Walk over it to take it again")
+end
+
+function dropGren()
+  if self.car ~= nil then log("Get out of the vehicle first") return end
+  if grenades <= 0 then log("You have no grenade to drop") return end
+  if not placeDrop("gren", nil, 1, 0.2, 0.2, 0.3, 0.3, 0.5, 0.25) then return end
+  grenades = grenades - 1
+  playSound("pickup", 0.6, 0.7)
+  log("Dropped a grenade. Walk over it to take it again")
+end
+
+-- takes a dropped thing into the bag; false when the bag has no room for it (it stays on the ground)
+function pickDrop(d)
+  if d.kind == "weapon" then
+    addWeapon(d.key, d.mag)
+    return true
+  elseif d.kind == "med" then
+    if medkits >= MAXMED then return false end
+    medkits = math.min(MAXMED, medkits + d.amt)
+    playSound("pickup", 0.8)
+    log("Medkit in the bag (" .. medkits .. ")")
+    return true
+  elseif d.kind == "gren" then
+    if grenades >= MAXGREN then return false end
+    grenades = math.min(MAXGREN, grenades + d.amt)
+    playSound("pickup", 0.8)
+    log("Grenade in the bag (" .. grenades .. ")")
+    return true
+  elseif d.kind == "ammo" then
+    if (ammoBag[d.key] or 0) >= AMMOCAP[d.key] then return false end
+    playSound("pickup", 0.8)
+    addAmmo(d.key, d.amt)
+    return true
+  end
+  return true
+end
+
+-- drops the weapon in slot n (the one in your hands if n is not given); you keep at least one weapon
+function dropWeapon(n)
+  if self.car ~= nil then log("Get out of the vehicle first") return end
+  n = n or cur
+  if slots[n] == nil then return end
+  if #slots <= 1 then log("You must keep one weapon") return end
+  storeAmmo()
+  local key = slots[n]
+  local m = mags[key] or 0
+  table.remove(slots, n)
+  mags[key] = nil
+  if n < cur then
+    cur = cur - 1
+  elseif cur > #slots then
+    cur = #slots
+  end
+  reloadT = 0
+  syncAmmo()
+  aimLevel = 0
+  applyAim()
+  applyGunLook()
+  fireT = 0.3
+  spawnDrop(key, m)
+  playSound("pickup", 0.6, 0.7)
+  log("Dropped the " .. WEAPONS[key].name .. " (" .. m .. " rounds in it). Walk over it to pick it up again")
+end
+
+-- dropped weapons turn slowly on the ground; walk away from one and back to take it again
+function updateDrops(dt)
+  for i = #drops, 1, -1 do
+    local d = drops[i]
+    d.t = d.t + dt
+    d.o.ry = d.o.ry + 50 * dt
+    d.o.y = d.y + math.sin(d.t * 3) * 0.05
+    local dx, dz = d.o.x - self.x, d.o.z - self.z
+    local dd = dx * dx + dz * dz
+    if not d.armed then
+      if dd > 6.5 then d.armed = true end
+    elseif dd < 2.25 and self.car == nil and not self.dead then
+      if pickDrop(d) then
+        destroy(d.o)
+        table.remove(drops, i)
+      end
+    end
+  end
 end
 
 -- loot scripts leave their gifts in these fields of the player; they are put into the bag here
@@ -451,6 +594,16 @@ function bagTapped(k)
     setBag(false)
   elseif k == "med" then
     useMedkit()
+  elseif k == "dmed" then
+    dropMed()
+  elseif k == "dgren" then
+    dropGren()
+  elseif string.sub(k, 1, 2) == "da" then
+    local order = { "r556", "r9", "g12", "r762" }
+    local key = order[tonumber(string.sub(k, 3))]
+    if key ~= nil then dropAmmo(key) end
+  elseif string.sub(k, 1, 1) == "d" and #k == 2 then
+    dropWeapon(tonumber(string.sub(k, 2)))
   elseif string.sub(k, 1, 1) == "w" then
     local n = tonumber(string.sub(k, 2))
     if n ~= nil and slots[n] ~= nil and n ~= cur then switchWeapon(n) end
@@ -1725,6 +1878,7 @@ function update(dt)
   -- cars: DRIVE = driver seat, SEAT = passenger seats, JUMP = get out
   updateCarButtons()
   updateDoorButton(dt)
+  updateDrops(dt)
   if input.buttonsPressed["Door"] and nearDoor ~= nil then nearDoor.toggle = (nearDoor.toggle or 0) + 1 end
   handleItems(dt)
   if input.buttonsPressed["Drive"] then
