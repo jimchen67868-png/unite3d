@@ -4,7 +4,8 @@ package com.example.minieditor
 object Samples {
 
     /** A sliding door: opens when the player or a soldier comes close, closes when they leave. Bullets are blocked while it is shut. */
-    private val BR_DOOR = """-- DOOR: slides open when somebody is close, shuts when they walk away.
+    private val BR_DOOR = """-- DOOR: slides open when somebody is close, shuts when they walk away. The player can also tap the DOOR button next to it
+-- to open or close it by hand; it then stays like that for a while (soldiers still open it when they come).
 local NBOTS = 8
 
 function start()
@@ -16,6 +17,11 @@ function start()
   want = 0
   checkT = math.random() * 0.15   -- doors do not all look at the same moment (that made a little stutter every 0.15 s)
   self.collider = 1
+  self.toggle = 0
+  lastToggle = 0
+  manual = false
+  manualOpen = false
+  manualT = 0
   slide = self.sx + 0.15
   player = find("Player")
   bots = {}
@@ -31,6 +37,21 @@ function near(o)
 end
 
 function update(dt)
+  -- the player tapped DOOR next to this door
+  local tg = self.toggle or 0
+  if tg ~= lastToggle then
+    lastToggle = tg
+    manual = true
+    manualOpen = want < 0.5
+    manualT = 25
+    if manualOpen then want = 1 else want = 0 end
+    playSound("door", 0.6, 0.95 + math.random() * 0.1)
+    checkT = 0.3
+  end
+  if manual then
+    manualT = manualT - dt
+    if manualT <= 0 then manual = false end
+  end
   checkT = checkT - dt
   if checkT <= 0 then
     -- far from the player: look less often
@@ -40,7 +61,8 @@ function update(dt)
       far = pdx * pdx + pdz * pdz > 2500
     end
     if far then checkT = 0.5 + math.random() * 0.3 else checkT = 0.15 end
-    local n = near(player)
+    local n = false
+    if not manual then n = near(player) end
     if not n then
       for k = 1, NBOTS do
         if near(bots[k]) then
@@ -50,7 +72,7 @@ function update(dt)
       end
     end
     local target = 0
-    if n then target = 1 end
+    if n or (manual and manualOpen) then target = 1 end
     if target ~= want then
       want = target
       playSound("door", 0.6, 0.95 + math.random() * 0.1)
@@ -157,11 +179,11 @@ function start()
   rippleT = 0
   strokeT = 0
   -- the bag: weapons (max 3), ammo of four kinds, grenades and medkits
-  slots = { "rifle", "pistol" }
+  slots = { "rifle", "sniper", "pistol" }
   cur = 1
   W = WEAPONS[slots[cur]]
-  mags = { rifle = 30, pistol = 12 }
-  ammoBag = { r556 = 90, r9 = 36, g12 = 0, r762 = 0 }
+  mags = { rifle = 30, sniper = WEAPONS.sniper.mag, pistol = 12 }
+  ammoBag = { r556 = 90, r9 = 36, g12 = 0, r762 = 25 }
   grenades = 2
   medkits = 1
   bagOpenState = false
@@ -183,11 +205,17 @@ function start()
   bullets = {}
   walls = {}
   grid = {}
+  doors = {}
+  nearDoor = nil
+  doorT = 0
+  doorBtn = find("Door")
+  if doorBtn ~= nil then doorBtn.opacity = 0 end
   local di = 1
   while true do
     local dd = find("Door " .. di)
     if dd == nil then break end
     addWall(dd, dd)
+    doors[di] = dd
     di = di + 1
   end
   local i = 1
@@ -473,6 +501,29 @@ function updateCarButtons()
   if fly then vf = 1 end
   if climbBtn ~= nil then climbBtn.opacity = vf end
   if descBtn ~= nil then descBtn.opacity = vf end
+end
+
+-- the door that is close enough to open or close by hand; the DOOR button shows only then
+function updateDoorButton(dt)
+  doorT = doorT - dt
+  if doorT > 0 then return end
+  doorT = 0.15
+  nearDoor = nil
+  if self.car == nil and not self.dead then
+    local bd = 12.25
+    for i = 1, #doors do
+      local d = doors[i]
+      local dx, dz = d.x - self.x, d.z - self.z
+      local dd = dx * dx + dz * dz
+      if dd < bd and math.abs(d.y - self.y) < 3.5 then
+        nearDoor = d
+        bd = dd
+      end
+    end
+  end
+  if doorBtn ~= nil then
+    if nearDoor ~= nil then doorBtn.opacity = 1 else doorBtn.opacity = 0 end
+  end
 end
 
 function nearestCar()
@@ -1673,6 +1724,8 @@ function update(dt)
 
   -- cars: DRIVE = driver seat, SEAT = passenger seats, JUMP = get out
   updateCarButtons()
+  updateDoorButton(dt)
+  if input.buttonsPressed["Door"] and nearDoor ~= nil then nearDoor.toggle = (nearDoor.toggle or 0) + 1 end
   handleItems(dt)
   if input.buttonsPressed["Drive"] then
     if self.car == nil then
@@ -4454,6 +4507,7 @@ end
         scene.addButton()?.let { it.name = "View"; it.x = 62f; it.y = 52f; it.sx = 0.8f }
         scene.addButton()?.let { it.name = "Drive"; it.x = 90f; it.y = 30f; it.sx = 0.9f }
         scene.addButton()?.let { it.name = "Seat"; it.x = 75f; it.y = 34f; it.sx = 0.8f }
+        scene.addButton()?.let { it.name = "Door"; it.x = 58f; it.y = 30f; it.sx = 0.9f }
         scene.addButton()?.let { it.name = "Climb"; it.x = 90f; it.y = 14f; it.sx = 0.9f }
         scene.addButton()?.let { it.name = "Descend"; it.x = 75f; it.y = 16f; it.sx = 0.9f }
         scene.addButton()?.let { it.name = "Weapon"; it.x = 46f; it.y = 66f; it.sx = 0.9f }
