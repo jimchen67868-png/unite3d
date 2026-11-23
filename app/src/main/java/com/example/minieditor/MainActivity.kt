@@ -1988,12 +1988,12 @@ end
                 })
             }
             catExtra.addView(shadowPanel)
-            windLabels = Array(2) {
+            windLabels = Array(3) {
                 TextView(this@MainActivity).apply {
                     textSize = 12f; setTextColor(0xFFDDDDDD.toInt()); setPadding(dp(4), dp(6), dp(4), 0)
                 }
             }
-            windSliders = Array(2) { i ->
+            windSliders = Array(3) { i ->
                 SeekBar(this@MainActivity).apply {
                     max = 100
                     setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
@@ -2010,6 +2010,7 @@ end
                 visibility = View.GONE
                 addView(windLabels[0]); addView(windSliders[0])
                 addView(windLabels[1]); addView(windSliders[1])
+                addView(windLabels[2]); addView(windSliders[2])
             }
             catExtra.addView(windPanel)
             waveLabels = Array(3) {
@@ -2141,7 +2142,7 @@ end
     private fun applyWind(i: Int, p: Int) {
         val o = scene.selected ?: return
         if (o.shape != Shape.SETTINGS) return
-        if (i == 0) o.wind = p / 100f else o.windDir = p * 3.6f
+        if (i == 0) o.wind = p / 100f else if (i == 1) o.windDir = p * 3.6f else o.viewDist = 50f + p * 14.5f
         editor.refresh()
         ensureWaterLoop()
     }
@@ -2441,6 +2442,8 @@ end
             if (!shSliders[2].isPressed) shSliders[2].progress = ((o.rz + 5f) / 0.15f).toInt().coerceIn(0, 100)
             windLabels[0].text = String.format(Locale.US, "Wind strength   %.2f  (0 = calm)", o.wind)
             windLabels[1].text = String.format(Locale.US, "Wind direction   %.0f deg  (0 = +X, 90 = +Z)", o.windDir)
+            windLabels[2].text = String.format(Locale.US, "View distance   %.0f m  (small things farther away are not drawn)", o.viewDist)
+            if (!windSliders[2].isPressed) windSliders[2].progress = ((o.viewDist - 50f) / 14.5f).toInt().coerceIn(0, 100)
             if (!windSliders[0].isPressed) windSliders[0].progress = (o.wind * 100f).toInt().coerceIn(0, 100)
             if (!windSliders[1].isPressed) windSliders[1].progress = (((o.windDir % 360f) + 360f) % 360f / 3.6f).toInt().coerceIn(0, 100)
             skyPhotoBtn.text = "Sky photo: " + (if (o.photo.isEmpty()) "none" else "on")

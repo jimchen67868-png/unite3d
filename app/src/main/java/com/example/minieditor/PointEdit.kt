@@ -65,7 +65,7 @@ class PointEdit private constructor(
             o.parentId = s.parentId
             o.rel = s.rel?.copyOf()
             o.spec = s.spec; o.gloss = s.gloss; o.emit = s.emit; o.opacity = s.opacity; o.pattern = s.pattern
-            o.soft = s.soft; o.cone = s.cone; o.tint = s.tint.copyOf(); o.wind = s.wind; o.windDir = s.windDir
+            o.soft = s.soft; o.cone = s.cone; o.tint = s.tint.copyOf(); o.wind = s.wind; o.windDir = s.windDir; o.viewDist = s.viewDist
             return o
         }
 

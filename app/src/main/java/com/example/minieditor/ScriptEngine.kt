@@ -74,7 +74,7 @@ class ScriptEngine(private val scene: Scene, private val log: (String) -> Unit) 
     private val pressedT = LuaTable()
     private val camPushed = FloatArray(2)
     private var fpPushed = false
-    private val worldPushed = FloatArray(6)
+    private val worldPushed = FloatArray(7)
     private var time = 0f
     private var spawnCount = 0
     private val maxObjects = 2400
@@ -472,6 +472,8 @@ class ScriptEngine(private val scene: Scene, private val log: (String) -> Unit) 
         worldPushed[5] = s?.windDir ?: 0f
         world.set("wind", worldPushed[4].toDouble())
         world.set("windDir", worldPushed[5].toDouble())
+        worldPushed[6] = s?.viewDist ?: 380f
+        world.set("viewDist", worldPushed[6].toDouble())
     }
 
     private fun pullWorld() {
@@ -482,6 +484,7 @@ class ScriptEngine(private val scene: Scene, private val log: (String) -> Unit) 
         num(world, "timeScale")?.let { if (it != worldPushed[3]) s.sx = it.coerceIn(0f, 5f) }
         num(world, "wind")?.let { if (it != worldPushed[4]) s.wind = it.coerceIn(0f, 1f) }
         num(world, "windDir")?.let { if (it != worldPushed[5]) s.windDir = it }
+        num(world, "viewDist")?.let { if (it != worldPushed[6]) s.viewDist = it.coerceIn(50f, 3000f) }
     }
 
     /** Box overlap per axis (positive = penetration). null if any axis is separated by more than -eps. */

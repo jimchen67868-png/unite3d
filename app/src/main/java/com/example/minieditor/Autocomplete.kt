@@ -58,7 +58,7 @@ object Autocomplete {
         "touching", "x", "y", "tiltX", "tiltY", "moveX", "moveZ", "joyX", "joyY", "joyMoveX", "joyMoveZ",
         "joyActive", "joyTap", "jump", "jumpPressed", "buttons", "buttonsPressed", "yaw", "ax", "ay", "az"
     )
-    private val worldFields = listOf("gravity", "fog", "ambient", "timeScale", "wind", "windDir")
+    private val worldFields = listOf("gravity", "fog", "ambient", "timeScale", "wind", "windDir", "viewDist")
     private val cameraFields = listOf("firstPerson", "target", "yaw", "pitch")
     private val mathFns = listOf("abs", "ceil", "cos", "deg", "exp", "floor", "fmod", "log", "max", "min", "rad", "random", "randomseed", "sin", "sqrt", "tan", "atan")
     private val stringFns = listOf("format", "sub", "len", "upper", "lower", "find", "rep")

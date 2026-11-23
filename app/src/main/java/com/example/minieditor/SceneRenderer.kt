@@ -2157,6 +2157,7 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
             val l = Math.sqrt((a * a + b * b + c * c).toDouble()).toFloat().coerceAtLeast(1e-6f)
             fr[p * 4] = a / l; fr[p * 4 + 1] = b / l; fr[p * 4 + 2] = c / l; fr[p * 4 + 3] = d / l
         }
+        val viewD = (settings?.viewDist ?: 380f).coerceIn(50f, 3000f)   // the draw distance from Settings
         for (o in scene.objects) {
             if (o.shape.isLight || o.shape == Shape.CAMERA || o.shape == Shape.BONE) continue
             if (mirror && o.shape == Shape.MIRROR) continue
@@ -2173,7 +2174,7 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
                 val d2 = ddx * ddx + ddy * ddy + ddz * ddz
                 if (rad * rad < d2 * 0.000036f) continue
                 // a draw distance: anything not big is not drawn beyond this (trees earlier, they have many triangles)
-                val maxD = if (o.shape == Shape.TREE) 260f else 380f
+                val maxD = if (o.shape == Shape.TREE) viewD * 0.68f else viewD
                 if (rad < 14f && d2 > maxD * maxD) continue
                 var out = false
                 for (p in 0 until 6) {
