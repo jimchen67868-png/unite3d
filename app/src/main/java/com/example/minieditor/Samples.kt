@@ -232,7 +232,7 @@ function start()
   zone = find("Zone")
   home = { x = self.x, z = self.z }
   cars = {}
-  for _, prefix in ipairs({ "Car ", "Bike ", "Heli " }) do
+  for _, prefix in ipairs({ "Car ", "Bike ", "Heli ", "Boat " }) do
     local ci = 1
     while true do
       local cc = find(prefix .. ci)
@@ -3150,6 +3150,145 @@ function update(dt)
 end
 """
 
+    private val BR_BOAT = """-- A boat for four. Swim or walk up and tap DRIVE (driver) or SEAT. Joystick: up = gas, down = brake and reverse, left / right = steer.
+-- It floats on the waves and stays in deep water (the beach stops it).
+SEATS = { { -0.5, -0.9, 0.62 }, { 0.5, -0.9, 0.62 }, { -0.5, 0.9, 0.62 }, { 0.5, 0.9, 0.62 } }   -- driver, front passenger, two in the back
+
+function start()
+  speed = 0
+  heading = self.ry
+  self.speed = 0
+  self.driven = false
+  self.kind = "boat"
+  self.nseats = 4
+  self.seatsDef = SEATS
+  self.camDist = 9
+  bobT = math.random() * 6
+  tiltX = 0
+  tiltZ = 0
+  foam = {}
+  foamT = 0
+  crashT = 0
+end
+
+-- is the water here deep enough for the boat?
+function deepAt(x, z)
+  local w = waterHeight(x, z)
+  if w == nil then return false end
+  return groundHeight(x, z) < w - 0.45
+end
+
+function update(dt)
+  local pl = find("Player")
+  local driven = pl ~= nil and pl.car == self.name and pl.seat == 1
+  self.driven = driven
+  bobT = bobT + dt
+  crashT = crashT - dt
+  local throttle = 0
+  local steer = 0
+  if driven and input.joyActive then
+    throttle = input.joyY
+    steer = input.joyX
+  end
+  if throttle > 0.1 then
+    local a = 7 * throttle
+    if speed < 0 then a = a + 6 end
+    speed = speed + a * dt
+  elseif throttle < -0.1 then
+    if speed > 0.5 then
+      speed = speed - 9 * dt
+    else
+      speed = speed + 5 * throttle * dt
+    end
+  else
+    local drag = 2.2 * dt
+    if speed > 0 then speed = math.max(0, speed - drag) else speed = math.min(0, speed + drag) end
+  end
+  speed = math.max(-5, math.min(19, speed))
+  local dir = 1
+  if speed < 0 then dir = -1 end
+  local oldHeading = heading
+  heading = heading - steer * 42 * math.min(1, math.abs(speed) / 3) * dir * dt
+  local r = math.rad(heading)
+  local fx = -math.sin(r)
+  local fz = -math.cos(r)
+  local nx = self.x + fx * speed * dt
+  local nz = self.z + fz * speed * dt
+  -- the front, the back and the middle must be in deep water; otherwise the boat has touched the beach
+  if not (deepAt(nx, nz) and deepAt(nx + fx * 2.8, nz + fz * 2.8) and deepAt(nx - fx * 2.8, nz - fz * 2.8)) then
+    if math.abs(speed) > 4 and crashT <= 0 then
+      crashT = 0.8
+      playSound("hit", 0.5, 0.7)
+      if pl ~= nil and pl.car == self.name and math.abs(speed) > 12 then pl.hp = pl.hp - (math.abs(speed) - 12) * 1.2 end
+    end
+    speed = -speed * 0.3
+    nx, nz = self.x, self.z
+    heading = oldHeading
+    r = math.rad(heading)
+    fx = -math.sin(r)
+    fz = -math.cos(r)
+  end
+  local cs, sn = math.cos(r), math.sin(r)
+  -- float on the waves: height from the water under the boat, tilted by the water at the front / back / sides
+  local w0 = waterHeight(nx, nz) or self.y
+  local wF = waterHeight(nx + fx * 2.2, nz + fz * 2.2) or w0
+  local wB = waterHeight(nx - fx * 2.2, nz - fz * 2.2) or w0
+  local wR = waterHeight(nx + cs * 1.0, nz - sn * 1.0) or w0
+  local wL = waterHeight(nx - cs * 1.0, nz + sn * 1.0) or w0
+  local wantX = math.deg(math.atan2(wF - wB, 4.4)) + math.max(0, speed) * 0.25   -- the bow lifts a little when going fast
+  local wantZ = math.deg(math.atan2(wR - wL, 2.0)) - steer * speed * 0.15       -- it leans into a turn
+  local k = math.min(1, dt * 4)
+  tiltX = tiltX + (wantX - tiltX) * k
+  tiltZ = tiltZ + (wantZ - tiltZ) * k
+  self.x = nx
+  self.z = nz
+  self.y = (w0 + wF + wB) / 3 + 0.22 + math.sin(bobT * 1.7) * 0.03
+  self.ry = heading
+  self.rx = tiltX
+  self.rz = tiltZ
+  self.speed = speed
+  -- whoever sits in the boat is carried along with the NEW position
+  if pl ~= nil and pl.car == self.name then
+    local st = SEATS[pl.seat or 1]
+    pl.x = nx + cs * st[1] + sn * st[2]
+    pl.z = nz - sn * st[1] + cs * st[2]
+    pl.y = self.y + st[3]
+    pl.vy = 0
+  end
+  -- a wake of foam behind the boat you drive
+  foamT = foamT - dt
+  if driven and speed > 2 and foamT <= 0 then
+    foamT = 0.13
+    local ok, o = pcall(spawn, "sphere", nx - fx * 3.1, w0 + 0.08, nz - fz * 3.1)
+    if ok then
+      o.sx = 0.6
+      o.sy = 0.12
+      o.sz = 0.6
+      o.r = 0.95
+      o.g = 0.98
+      o.b = 1
+      o.opacity = 0.6
+      o.emit = 0.2
+      o.shadow = false
+      o.collider = 0
+      foam[#foam + 1] = { o = o, t = 0 }
+    end
+  end
+  for i = #foam, 1, -1 do
+    local f = foam[i]
+    f.t = f.t + dt
+    local s2 = 0.6 + f.t * 1.4
+    f.o.sx = s2
+    f.o.sz = s2
+    f.o.opacity = math.max(0, 0.6 * (1 - f.t / 1.6))
+    if f.t > 1.6 then
+      destroy(f.o)
+      table.remove(foam, i)
+    end
+  end
+end
+"""
+
     private val BR_MEDKIT = """-- Medkit: walk over it to put it in your bag (tap HEAL to use it). It comes back after 25 seconds.
 function start()
   phase = math.random() * 6
@@ -4367,6 +4506,47 @@ end
             }
         }
 
+        // ---- boats (4 seats) floating on the sea near the shore ----
+        var boatN = 0
+        fun buildBoat(x: Float, z: Float, yawDeg: Float) {
+            boatN++
+            val cols = arrayOf(floatArrayOf(0.92f, 0.92f, 0.90f), floatArrayOf(0.15f, 0.35f, 0.75f), floatArrayOf(0.85f, 0.25f, 0.15f))
+            val col = cols[rnd.nextInt(cols.size)]
+            val dark = floatArrayOf(0.07f, 0.07f, 0.08f)
+            val fabric = floatArrayOf(0.35f, 0.33f, 0.30f)
+            val wood = floatArrayOf(0.62f, 0.46f, 0.3f)
+            val y = seaY + 0.25f
+            val body = mk(scene, Shape.CUBE, "Boat " + boatN, x, y, z, 2.4f, 0.5f, 6f, col, BR_BOAT)
+            body.collider = 0
+            body.shadow = false
+            val bparts = ArrayList<SceneObject>()
+            fun bPart(shape: Shape, dx: Float, dy: Float, dz: Float, psx: Float, psy: Float, psz: Float, c: FloatArray): SceneObject {
+                val p = if (shape == Shape.CUBE) mk(scene, Shape.CUBE, "Boat " + boatN + " part", x + dx, y + dy, z + dz, psx, psy, psz, c)
+                else { val o = scene.add(shape, null, "Boat " + boatN + " part"); o.x = x + dx; o.y = y + dy; o.z = z + dz; o.sx = psx; o.sy = psy; o.sz = psz; o.color = c; o }
+                p.shadow = false
+                bparts.add(p)
+                return p
+            }
+            val side = floatArrayOf(col[0] * 0.85f, col[1] * 0.85f, col[2] * 0.85f)
+            bPart(Shape.CUBE, -1.1f, 0.5f, 0f, 0.2f, 0.7f, 6f, side)                       // the two sides
+            bPart(Shape.CUBE, 1.1f, 0.5f, 0f, 0.2f, 0.7f, 6f, side)
+            bPart(Shape.CUBE, 0f, 0.5f, 2.9f, 2.4f, 0.7f, 0.2f, side)                      // the back
+            val bow = bPart(Shape.PYRAMID, 0f, 0.35f, -3.9f, 2.4f, 1.8f, 0.9f, col)       // the pointed front (front is -z)
+            bow.rx = -90f
+            bPart(Shape.CUBE, 0f, 0.28f, 0f, 2.0f, 0.06f, 5.6f, wood)                      // the deck
+            bPart(Shape.CUBE, 0f, 0.5f, -1.5f, 1.3f, 0.45f, 0.35f, dark)                   // the dashboard
+            bPart(Shape.CUBE, 0f, 1.0f, -1.7f, 2.0f, 0.7f, 0.06f, floatArrayOf(0.55f, 0.68f, 0.78f)).opacity = 0.3f   // the windscreen
+            for (sx in floatArrayOf(-0.5f, 0.5f)) {                                        // the two front seats
+                bPart(Shape.CUBE, sx, 0.42f, -0.9f, 0.5f, 0.1f, 0.5f, fabric)
+                bPart(Shape.CUBE, sx, 0.72f, -0.62f, 0.5f, 0.5f, 0.1f, fabric)
+            }
+            bPart(Shape.CUBE, 0f, 0.42f, 1.0f, 1.6f, 0.1f, 0.5f, fabric)                   // the back bench
+            bPart(Shape.CUBE, 0f, 0.72f, 1.28f, 1.6f, 0.5f, 0.1f, fabric)
+            bPart(Shape.CUBE, 0f, 0.35f, 3.15f, 0.35f, 0.9f, 0.4f, dark)                   // the outboard motor
+            for (p in bparts) Rig.bind(p, body)
+            body.ry = yawDeg
+        }
+
         // ---- roads between the houses ----
         class RoadSeg(val x0: Float, val z0: Float, val x1: Float, val z1: Float)
         val roadSegs = ArrayList<RoadSeg>()
@@ -4494,6 +4674,47 @@ end
                 heliSpots.add(floatArrayOf(hx, hz))
                 buildHelipad(hx, hz, lg)
                 buildHeli(hx, hz, rnd.nextFloat() * 360f, lg)
+            }
+            // boats on the water a little way off the beach, lying along the shore
+            val nBoats = if (mega) 4 else if (giant) 3 else if (huge) 2 else 1
+            val boatSpots = ArrayList<FloatArray>()
+            var boatTries = 0
+            fun isLand(x: Float, z: Float): Boolean = (ground(x, z) ?: -1000f) >= seaY + 0.5f
+            fun isDeep(x: Float, z: Float): Boolean = (ground(x, z) ?: -1000f) <= seaY - 0.8f
+            while (boatSpots.size < nBoats && boatTries++ < 500) {
+                val ang = rnd.nextFloat() * 2.0 * Math.PI
+                val ca = Math.cos(ang).toFloat()
+                val sa = Math.sin(ang).toFloat()
+                // walk out from the middle of the map until the land ends: that is the shore
+                var rr = 0.1f * map
+                var wasLand = false
+                var shoreR = -1f
+                while (rr < 0.75f * map) {
+                    val gx = ca * rr
+                    val gz = sa * rr
+                    if (isLand(gx, gz)) wasLand = true
+                    else if (wasLand && isDeep(gx, gz)) { shoreR = rr; break }
+                    rr += 5f
+                }
+                if (shoreR < 0f) continue
+                var spot: FloatArray? = null
+                var dd = 7f
+                while (dd < 45f && spot == null) {
+                    val bx = ca * (shoreR + dd)
+                    val bz = sa * (shoreR + dd)
+                    var deepAll = isDeep(bx, bz)
+                    for (q in 0 until 8) {
+                        if (!deepAll) break
+                        val qa = q * Math.PI / 4.0
+                        if (!isDeep(bx + Math.cos(qa).toFloat() * 5f, bz + Math.sin(qa).toFloat() * 5f)) deepAll = false
+                    }
+                    if (deepAll) spot = floatArrayOf(bx, bz)
+                    dd += 4f
+                }
+                val sp = spot ?: continue
+                if (boatSpots.any { Math.hypot((it[0] - sp[0]).toDouble(), (it[1] - sp[1]).toDouble()) < 150.0 }) continue
+                boatSpots.add(sp)
+                buildBoat(sp[0], sp[1], (ang * 180.0 / Math.PI).toFloat() + 90f)
             }
         }
 
