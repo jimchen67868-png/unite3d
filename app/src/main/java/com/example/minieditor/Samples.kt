@@ -145,6 +145,9 @@ MAXWEAPONS = 3
 MAXGREN = 5
 MAXMED = 4
 grenList = {}
+shells = {}
+tankT = 0
+tankAimT = 0
 bloom = 0
 SEATS = { { -0.45, -0.3 }, { 0.45, -0.3 }, { -0.45, 0.7 }, { 0.45, 0.7 } }   -- driver, front passenger, rear left, rear right
 
@@ -194,6 +197,9 @@ function start()
   camera.bagOpen = false
   camera.bagText = ""
   grenList = {}
+  shells = {}
+  tankT = 0
+  tankAimT = 0
   bloom = 0
   mag = mags[slots[cur]]
   reserve = ammoBag[W.ammo]
@@ -232,7 +238,7 @@ function start()
   zone = find("Zone")
   home = { x = self.x, z = self.z }
   cars = {}
-  for _, prefix in ipairs({ "Car ", "Bike ", "Heli ", "Boat " }) do
+  for _, prefix in ipairs({ "Car ", "Bike ", "Heli ", "Boat ", "Plane ", "Tank " }) do
     local ci = 1
     while true do
       local cc = find(prefix .. ci)
@@ -649,7 +655,7 @@ function updateCarButtons()
   if show then v = 1 end
   if driveBtn ~= nil then driveBtn.opacity = v end
   if seatBtn ~= nil then seatBtn.opacity = v end
-  local fly = self.car ~= nil and self.seat == 1 and carObj ~= nil and carObj.kind == "heli"
+  local fly = self.car ~= nil and self.seat == 1 and carObj ~= nil and (carObj.kind == "heli" or carObj.kind == "plane")
   local vf = 0
   if fly then vf = 1 end
   if climbBtn ~= nil then climbBtn.opacity = vf end
@@ -703,7 +709,7 @@ function seatName(n)
   local k = nil
   if carObj ~= nil then k = carObj.kind end
   if n == 1 then
-    if k == "heli" then return "pilot seat" end
+    if k == "heli" or k == "plane" then return "pilot seat" end
     return "driver seat"
   end
   if k == "bike" then return "passenger seat" end
@@ -724,6 +730,10 @@ function enterCar(c, seat)
   playSound("door", 0.8, 0.8)
   if seat == 1 and c.kind == "heli" then
     log("Pilot seat: the rotor spins up. Joystick up / down = forward / back, left / right = turn. CLIMB and DESCEND buttons = height. You can shoot. DRIVE = get out (after landing)")
+  elseif seat == 1 and c.kind == "plane" then
+    log("Pilot seat: joystick up / down = engine power, left / right = steer and bank. Take off: full power along the runway, then hold CLIMB. DESCEND = nose down. DRIVE = get out (after landing and stopping)")
+  elseif seat == 1 and c.kind == "tank" then
+    log("Tank driver: joystick up / down = forward / back, left / right = turn (also on the spot). The cannon follows the crosshair. FIRE = shell (every 2.5 s). Enemies in front get run over. DRIVE = get out")
   elseif seat == 1 then
     log("Driver seat: joystick up = gas, down = brake / reverse, left and right = steer. You can shoot. DRIVE = get out, SEAT = other seat, JUMP = jump out")
   else
@@ -733,6 +743,10 @@ end
 
 function leaveCar(force)
   local c = carObj
+  if not force and c ~= nil and c.kind == "plane" and ((c.agl or 0) > 1 or math.abs(c.speed or 0) > 5) then
+    log("Land and stop the plane first")
+    return
+  end
   if not force and c ~= nil and c.kind == "heli" and (c.agl or 0) > 2.5 then
     log("Land first - you cannot get out in the air")
     return
@@ -740,7 +754,7 @@ function leaveCar(force)
   if c ~= nil then
     local r = math.rad(c.ry)
     local side = 3
-    if c.kind == "heli" then side = 4 end
+    if c.kind == "heli" then side = 4 elseif c.kind == "plane" then side = 3.5 elseif c.kind == "tank" then side = 3.6 end
     if seatDef(c, self.seat or 1)[1] < 0 then side = -side end
     self.x = c.x + math.cos(r) * side
     self.z = c.z - math.sin(r) * side
@@ -765,6 +779,10 @@ function startReload()
 end
 
 function handleShooting(dt)
+  if carObj ~= nil and carObj.kind == "tank" and self.seat == 1 then
+    tankFire(dt)   -- the tank driver fires the cannon, not the rifle
+    return
+  end
   fireT = fireT - dt
   if reloadT > 0 then
     reloadT = reloadT - dt
@@ -801,6 +819,15 @@ function carRide(dt)
   self.z = c.z - math.sin(r) * st[1] + math.cos(r) * st[2]
   self.y = c.y + st[3]
   self.vy = 0
+  -- the tank's turret follows the crosshair
+  if c.kind == "tank" and self.seat == 1 then
+    tankAimT = tankAimT - dt
+    if tankAimT <= 0 then
+      tankAimT = 0.05
+      local tfx, tfy, tfz = camDir()
+      c.tx, c.ty, c.tz = aimPoint(tfx, tfy, tfz)
+    end
+  end
   -- shooting from any seat: the aim follows the camera, the glass does not stop bullets
   handleShooting(dt)
   aimT = aimT - dt
@@ -838,7 +865,7 @@ function carRide(dt)
   if P.armL ~= nil then P.armL.swing = arm end
   if P.armR ~= nil then P.armR.swing = arm end
   -- the driver's camera swings round behind the vehicle (unless you drag the screen)
-  if self.seat == 1 and c.kind ~= "heli" and not input.touching and math.abs(c.speed or 0) > 0.5 then
+  if self.seat == 1 and c.kind ~= "heli" and c.kind ~= "tank" and not input.touching and math.abs(c.speed or 0) > 0.5 then
     local d = ((c.ry - input.yaw + 540) % 360) - 180
     camera.yaw = input.yaw + d * math.min(1, dt * 2.2)
   end
@@ -1404,6 +1431,100 @@ function updateBullets(dt)
   end
 end
 
+-- ===== tank cannon =====
+-- the direction the camera really looks
+function camDir()
+  local yaw = math.rad(input.yaw)
+  local p = math.rad(camera.pitch)
+  local fx = -math.cos(p) * math.sin(yaw)
+  local fy = -math.sin(p)
+  local fz = -math.cos(p) * math.cos(yaw)
+  local cl = 0
+  if camera.fx ~= nil then cl = camera.fx * camera.fx + camera.fy * camera.fy + camera.fz * camera.fz end
+  if cl > 0.9 then
+    local l = math.sqrt(cl)
+    fx, fy, fz = camera.fx / l, camera.fy / l, camera.fz / l
+  end
+  return fx, fy, fz
+end
+
+function tankFire(dt)
+  tankT = tankT - dt
+  local c = carObj
+  if c == nil then return end
+  if input.buttonsPressed["Fire"] or input.buttons["Fire"] then
+    if tankT > 0 then
+      if input.buttonsPressed["Fire"] then log("The cannon is loading... " .. math.ceil(tankT) .. " s") end
+      return
+    end
+    if c.mx == nil or c.aimx == nil then return end
+    local ok, s = pcall(spawn, "sphere", c.mx, c.my, c.mz)
+    if not ok then
+      log("Too many objects - cannot fire")
+      return
+    end
+    tankT = 2.5
+    playSound("boom", 0.9, 1.4)
+    muzzleFlash(c.mx, c.my, c.mz)
+    s.sx = 0.28
+    s.sy = 0.28
+    s.sz = 0.5
+    s.r = 1
+    s.g = 0.75
+    s.b = 0.25
+    s.emit = 1
+    s.shadow = false
+    s.ry = math.deg(math.atan2(c.aimx, c.aimz))
+    s.rx = -math.deg(math.asin(math.max(-1, math.min(1, c.aimy))))
+    s.vx = c.aimx * 100
+    s.vy = c.aimy * 100
+    s.vz = c.aimz * 100
+    s.life = 4
+    shells[#shells + 1] = s
+    c.recoil = 1
+    camera.pitch = camera.pitch - 1.5
+  end
+end
+
+function updateShells(dt)
+  for i = #shells, 1, -1 do
+    local s = shells[i]
+    s.life = s.life - dt
+    s.vy = s.vy - 1.5 * dt
+    local dx, dy, dz = s.vx * dt, s.vy * dt, s.vz * dt
+    local n = math.ceil(math.sqrt(dx * dx + dy * dy + dz * dz) / 0.5)
+    if n < 1 then n = 1 end
+    if n > 40 then n = 40 end
+    local sx, sy, sz = dx / n, dy / n, dz / n
+    local x, y, z = s.x, s.y, s.z
+    local boom = false
+    for k = 1, n do
+      x, y, z = x + sx, y + sy, z + sz
+      local g = groundHeight(x, z)
+      local wy = waterHeight(x, z)
+      if pointInWall(x, y, z) or treeAt(x, y, z) or (g ~= nil and y < g) or (wy ~= nil and y < wy) or (#nearCars > 0 and carAt(x, y, z)) then
+        boom = true
+        break
+      end
+      for b = 1, NBOTS do
+        local e = bots[b]
+        if e ~= nil and not e.dead and e.hp > 0 then
+          local ex, ez = x - e.x, z - e.z
+          if ex * ex + ez * ez < 1.5 and math.abs(y - e.y) < 1.3 then boom = true end
+        end
+      end
+      if boom then break end
+    end
+    s.x, s.y, s.z = x, y, z
+    s.ry = math.deg(math.atan2(s.vx, s.vz))
+    if boom or s.life <= 0 then
+      explode(x, y + 0.2, z, 8, 220, 60)
+      destroy(s)
+      table.remove(shells, i)
+    end
+  end
+end
+
 -- ===== grenades =====
 function throwGrenade()
   if grenades <= 0 then
@@ -1540,16 +1661,18 @@ function blastFx(x, y, z)
   end
 end
 
-function explode(x, y, z)
+function explode(x, y, z, R, dmgB, dmgP)
+  R = R or 9
+  dmgB = dmgB or 150
+  dmgP = dmgP or 90
   playSound("boom", 1, 0.9 + math.random() * 0.2)
-  local R = 9
   for k = 1, NBOTS do
     local e = bots[k]
     if e ~= nil and not e.dead and e.hp > 0 then
       local dx, dy, dz = e.x - x, e.y - y, e.z - z
       local d = math.sqrt(dx * dx + dy * dy + dz * dz)
       if d < R then
-        local dmg = 150 * (1 - d / R)
+        local dmg = dmgB * (1 - d / R)
         if not lineClear(x, y + 0.3, z, e.x, e.y, e.z) then dmg = dmg * 0.25 end
         e.hp = e.hp - dmg
         camera.hit = (e.hp <= 0) and 2 or 1
@@ -1560,8 +1683,9 @@ function explode(x, y, z)
   local dx, dy, dz = self.x - x, self.y - y, self.z - z
   local d = math.sqrt(dx * dx + dy * dy + dz * dz)
   if d < R and not self.dead then
-    local dmg = 90 * (1 - d / R)
+    local dmg = dmgP * (1 - d / R)
     if not lineClear(x, y + 0.3, z, self.x, self.y, self.z) then dmg = dmg * 0.25 end
+    if carObj ~= nil and carObj.kind == "tank" then dmg = dmg * 0.3 end   -- the armour
     self.hp = self.hp - dmg
     log("The blast hit you!  HP " .. math.max(0, math.floor(self.hp)))
   end
@@ -1863,6 +1987,7 @@ function update(dt)
   updateFx(dt)
   updateDecals(dt)
   updateGrenades(dt)
+  updateShells(dt)
   if self.dead then
     if bagOpenState then setBag(false) end
     deadT = deadT + dt
@@ -3065,6 +3190,458 @@ end
 
 function oncollide(other)
   if math.abs(speed) > 6 then speed = speed * 0.5 end
+end
+"""
+
+    private val BR_PLANE = """-- A small plane for two. Walk up and tap DRIVE (pilot) or SEAT (passenger).
+-- Joystick up / down = engine power up / down (down also brakes on the ground), left / right = steer on the ground, bank and turn in the air.
+-- Take off: full power along the runway; at speed it lifts off (or hold CLIMB). CLIMB / DESCEND = nose up / down. Too slow in the air and it stalls.
+-- Land gently, stop, then tap DRIVE to get out.
+SEATS = { { 0, -0.2, 0.7 }, { 0, 1.2, 0.7 } }
+H = 1.22   -- the height of the middle of the plane over the ground when it stands on its wheels
+
+function clamp(v, a, b)
+  if v < a then return a end
+  if v > b then return b end
+  return v
+end
+
+function start()
+  speed = 0
+  thr = 0
+  vy = 0
+  heading = self.ry
+  pitch = 0
+  roll = 0
+  spin = 0
+  ps = 0
+  air = false
+  self.speed = 0
+  self.driven = false
+  self.agl = 0
+  self.kind = "plane"
+  self.nseats = 2
+  self.seatsDef = SEATS
+  self.camDist = 15
+  self.legSwing = 80
+  local nm = self.name
+  blade1 = find(nm .. " prop1")
+  blade2 = find(nm .. " prop2")
+  placed = false
+  crashT = 0
+end
+
+function put(o, lx, ly, lz, nx, nz, cs, sn, cp, sp, ry2, rx2, rz2)
+  if o == nil then return end
+  local y2 = ly * cp - lz * sp
+  local z2 = ly * sp + lz * cp
+  o.x = nx + lx * cs + z2 * sn
+  o.z = nz - lx * sn + z2 * cs
+  o.y = self.y + y2
+  o.ry = ry2
+  o.rx = rx2
+  o.rz = rz2
+end
+
+-- nose, wing tips, tail: the plane stops at walls and tree trunks (the player script knows where they are)
+CP = { { 0, -3.8 }, { -4.4, -0.3 }, { 4.4, -0.3 }, { -2.4, -0.3 }, { 2.4, -0.3 }, { 0, 3.6 }, { -1.6, 4.5 }, { 1.6, 4.5 }, { 0, 4.9 } }
+
+function blockedAt(pl, x, y, z, h)
+  local r = math.rad(h)
+  local cs, sn = math.cos(r), math.sin(r)
+  for i = 1, #CP do
+    local p = CP[i]
+    local wx = x + p[1] * cs + p[2] * sn
+    local wz = z - p[1] * sn + p[2] * cs
+    if pl.wallAt(wx, y - 0.4, wz) or pl.wallAt(wx, y + 0.4, wz) or pl.treeAt(wx, y - 0.4, wz) or pl.treeAt(wx, y + 0.4, wz) then return true end
+  end
+  return false
+end
+
+function slide(pl, wx, wz, h, oldH)
+  if pl == nil or pl.wallAt == nil then return wx, wz, false end
+  local x0, z0 = self.x, self.z
+  local dx, dz = wx - x0, wz - z0
+  if dx * dx + dz * dz < 0.000001 and h == oldH then return wx, wz, false end
+  local steps = math.max(1, math.min(10, math.ceil(math.sqrt(dx * dx + dz * dz) / 0.4)))
+  local nx, nz = x0, z0
+  for i = 1, steps do
+    local tx, tz = x0 + dx * i / steps, z0 + dz * i / steps
+    if blockedAt(pl, tx, self.y, tz, h) then
+      if i == 1 and blockedAt(pl, x0, self.y, z0, oldH) then return wx, wz, false end
+      return nx, nz, true
+    end
+    nx, nz = tx, tz
+  end
+  return nx, nz, false
+end
+
+function update(dt)
+  local pl = find("Player")
+  local pilot = pl ~= nil and pl.car == self.name and pl.seat == 1
+  self.driven = pilot
+  crashT = crashT - dt
+  -- parked and still: nothing to do
+  if not pilot and not air and speed < 0.05 and placed and ps < 0.02 then
+    self.speed = 0
+    return
+  end
+  local joyX, joyY, climb = 0, 0, 0
+  if pilot then
+    if input.joyActive then
+      joyX = input.joyX
+      joyY = input.joyY
+    end
+    if input.buttons["Climb"] then climb = 1 end
+    if input.buttons["Descend"] then climb = -1 end
+    thr = clamp(thr + joyY * 0.7 * dt, 0, 1)
+  else
+    thr = 0
+  end
+  -- engine, drag and brakes
+  local sinP = math.sin(math.rad(pitch))
+  local brake = pilot and joyY < -0.3 and not air
+  local acc
+  if thr > 0.02 then
+    acc = clamp((thr * 58 - speed) * 0.5, -3, 4.2)
+  elseif air then
+    acc = -1.5
+  else
+    acc = -3
+  end
+  if brake then acc = acc - 14 end
+  if air then acc = acc - sinP * 12 end
+  speed = math.max(0, speed + acc * dt)
+  -- steering and the nose
+  local lift = clamp((speed - 13) / 9, 0, 1)
+  local oldHeading = heading
+  if air then
+    local ctl = math.min(1, speed / 18)
+    heading = heading - joyX * 38 * ctl * dt
+    roll = roll + (-joyX * 35 * ctl - roll) * math.min(1, dt * 3)
+    local target = 0
+    if climb > 0 then target = 20 elseif climb < 0 then target = -22 end
+    target = target * (0.3 + 0.7 * lift)
+    if lift < 0.35 then target = -28 end   -- too slow: the nose drops (stall)
+    pitch = pitch + (target - pitch) * math.min(1, dt * 2)
+    local want = math.sin(math.rad(pitch)) * speed * lift - (1 - lift) * 16
+    vy = vy + (want - vy) * math.min(1, dt * 2.2)
+  else
+    heading = heading - joyX * 40 * math.min(1, speed / 6) * dt
+    roll = roll * math.max(0, 1 - dt * 5)
+  end
+  local r = math.rad(heading)
+  local fx = -math.sin(r)
+  local fz = -math.cos(r)
+  local hs = speed * math.cos(math.rad(pitch))
+  local nx, nz, hit = slide(pl, self.x + fx * hs * dt, self.z + fz * hs * dt, heading, oldHeading)
+  if hit then
+    if speed > 6 and crashT <= 0 then
+      crashT = 0.7
+      playSound("hit", 0.9, 0.5)
+      if pl ~= nil and pl.car == self.name and speed > 12 then pl.hp = pl.hp - (speed - 12) * 2 end
+    end
+    speed = speed * 0.35
+    if blockedAt(pl, nx, self.y, nz, heading) then
+      heading = oldHeading
+      r = math.rad(heading)
+      fx = -math.sin(r)
+      fz = -math.cos(r)
+    end
+  end
+  -- height
+  local gh = groundHeight(nx, nz) or self.y
+  local minY = gh + H
+  local ny
+  if air then
+    ny = self.y + vy * dt
+    if ny > 350 then
+      ny = 350
+      if vy > 0 then vy = 0 end
+    end
+    -- up into a ceiling or down onto a roof: it stops there
+    if pl ~= nil and pl.wallAt ~= nil and math.abs(vy) > 0.3 and blockedAt(pl, nx, ny, nz, heading) and not blockedAt(pl, nx, self.y, nz, heading) then
+      ny = self.y
+      vy = 0
+    end
+    if ny <= minY then
+      -- touching the ground: a gentle landing is fine, a hard one hurts
+      local hard = vy < -8 or (pitch < -16 and speed > 12) or (math.abs(roll) > 22 and speed > 10)
+      if hard and crashT <= 0 then
+        crashT = 1
+        playSound("hit", 1, 0.5)
+        log("Crash landing!")
+        if pl ~= nil and pl.car == self.name then
+          local dmg = math.max(0, -vy - 5) * 5
+          if math.abs(roll) > 22 then dmg = dmg + 15 end
+          pl.hp = pl.hp - dmg
+        end
+        speed = speed * 0.5
+      end
+      ny = minY
+      air = false
+      vy = 0
+      roll = 0
+    end
+  else
+    -- on the wheels: follows the slope of the ground
+    local gF = groundHeight(nx + fx * 3, nz + fz * 3) or gh
+    local gB = groundHeight(nx - fx * 3, nz - fz * 3) or gh
+    pitch = clamp(math.deg(math.atan2(gF - gB, 6)), -12, 12)
+    ny = math.max(gh, (gF + gB) / 2) + H
+    vy = 0
+    if speed > 26 or (climb > 0 and speed > 20) then   -- fast enough: it lifts off
+      air = true
+      vy = 3
+    end
+  end
+  self.ry = heading
+  self.rx = pitch
+  self.rz = roll
+  self.x = nx
+  self.y = ny
+  self.z = nz
+  self.speed = speed
+  if air then self.agl = math.max(0, ny - minY) else self.agl = 0 end
+  -- the pilot and the passenger are carried with the NEW position
+  if pl ~= nil and pl.car == self.name then
+    local st = SEATS[pl.seat or 1]
+    pl.x = nx + math.cos(r) * st[1] + math.sin(r) * st[2]
+    pl.z = nz - math.sin(r) * st[1] + math.cos(r) * st[2]
+    pl.y = ny + st[3]
+    pl.vy = 0
+  end
+  -- the propeller
+  local want = 0
+  if pilot then want = 1 end
+  ps = ps + (want - ps) * math.min(1, dt * 1.5)
+  if ps < 0.02 and want == 0 then ps = 0 end
+  spin = (spin + ps * (900 + thr * 2200) * dt) % 360
+  if ps > 0.01 or air or speed > 0.01 or not placed then
+    placed = true
+    local cs, sn = math.cos(r), math.sin(r)
+    local pr = math.rad(pitch)
+    local cp, sp = math.cos(pr), math.sin(pr)
+    put(blade1, 0, 0, -4.05, nx, nz, cs, sn, cp, sp, heading, pitch, spin)
+    put(blade2, 0, 0, -4.05, nx, nz, cs, sn, cp, sp, heading, pitch, spin + 90)
+  end
+end
+"""
+
+    private val BR_TANK = """-- A tank for four. Walk up and tap DRIVE (driver) or SEAT (passenger on the deck).
+-- Joystick up / down = forward / back, left / right = turn (also on the spot). The cannon follows the crosshair: FIRE = a shell, one every 2.5 s.
+-- It crushes enemies in front of it, stops at walls and tree trunks, and cannot go into deep water.
+SEATS = { { -0.75, -1.6, 0.85 }, { 0.75, -1.6, 0.85 }, { -0.7, 2.0, 1.05 }, { 0.7, 2.0, 1.05 } }   -- driver, front passenger, two on the back deck
+
+function clamp(v, a, b)
+  if v < a then return a end
+  if v > b then return b end
+  return v
+end
+
+function start()
+  speed = 0
+  heading = self.ry
+  self.speed = 0
+  self.driven = false
+  self.kind = "tank"
+  self.nseats = 4
+  self.seatsDef = SEATS
+  self.camDist = 13
+  self.legSwing = 80
+  self.recoil = 0
+  local nm = self.name
+  turret = find(nm .. " turret")
+  barrel = find(nm .. " barrel")
+  tYaw = self.ry
+  bp = 0
+  placed = false
+  crashT = 0
+  bots = {}
+  local i = 1
+  while true do
+    local b = find("Bot " .. i)
+    if b == nil then break end
+    bots[i] = b
+    i = i + 1
+  end
+end
+
+function put(o, lx, ly, lz, nx, nz, cs, sn, cp, sp, ry2, rx2, rz2)
+  if o == nil then return end
+  local y2 = ly * cp - lz * sp
+  local z2 = ly * sp + lz * cp
+  o.x = nx + lx * cs + z2 * sn
+  o.z = nz - lx * sn + z2 * cs
+  o.y = self.y + y2
+  o.ry = ry2
+  o.rx = rx2
+  o.rz = rz2
+end
+
+CP = { { 0, -2.9 }, { -1.5, -2.9 }, { 1.5, -2.9 }, { -1.7, -1.4 }, { 1.7, -1.4 }, { -1.7, 0 }, { 1.7, 0 }, { -1.7, 1.4 }, { 1.7, 1.4 }, { -1.5, 2.9 }, { 1.5, 2.9 }, { 0, 2.9 } }
+
+-- solid: walls, closed doors, tree trunks and deep water stop the tank
+function blockedAt(pl, x, z, h)
+  local r = math.rad(h)
+  local cs, sn = math.cos(r), math.sin(r)
+  local y0 = self.y - 0.3
+  local y1 = self.y + 0.4
+  for i = 1, #CP do
+    local p = CP[i]
+    local wx = x + p[1] * cs + p[2] * sn
+    local wz = z - p[1] * sn + p[2] * cs
+    if pl.wallAt(wx, y0, wz) or pl.wallAt(wx, y1, wz) or pl.treeAt(wx, y0, wz) or pl.treeAt(wx, y1, wz) then return true end
+    local w = waterHeight(wx, wz)
+    if w ~= nil then
+      local g = groundHeight(wx, wz)
+      if g ~= nil and g < w - 1.6 then return true end
+    end
+  end
+  return false
+end
+
+function slide(pl, wx, wz, h, oldH)
+  if pl == nil or pl.wallAt == nil then return wx, wz, false end
+  local x0, z0 = self.x, self.z
+  local dx, dz = wx - x0, wz - z0
+  if dx * dx + dz * dz < 0.000001 and h == oldH then return wx, wz, false end
+  local steps = math.max(1, math.min(10, math.ceil(math.sqrt(dx * dx + dz * dz) / 0.3)))
+  local nx, nz = x0, z0
+  for i = 1, steps do
+    local tx, tz = x0 + dx * i / steps, z0 + dz * i / steps
+    if blockedAt(pl, tx, tz, h) then
+      if i == 1 and blockedAt(pl, x0, z0, oldH) then return wx, wz, false end
+      return nx, nz, true
+    end
+    nx, nz = tx, tz
+  end
+  return nx, nz, false
+end
+
+function update(dt)
+  local pl = find("Player")
+  local driven = pl ~= nil and pl.car == self.name and pl.seat == 1
+  self.driven = driven
+  crashT = crashT - dt
+  local rc = self.recoil or 0
+  -- parked and still: nothing to do
+  if not driven and speed == 0 and placed and rc <= 0 then return end
+  if rc > 0 then self.recoil = math.max(0, rc - dt * 2.5) end
+  local throttle, steer = 0, 0
+  if driven and input.joyActive then
+    throttle = input.joyY
+    steer = input.joyX
+  end
+  if throttle > 0.1 then
+    local a = 7 * throttle
+    if speed < 0 then a = a + 8 end
+    speed = speed + a * dt
+  elseif throttle < -0.1 then
+    if speed > 0.5 then
+      speed = speed - 14 * dt
+    else
+      speed = speed + 5 * throttle * dt
+    end
+  else
+    local drag = 6 * dt
+    if speed > 0 then speed = math.max(0, speed - drag) else speed = math.min(0, speed + drag) end
+  end
+  speed = clamp(speed, -5, 11)
+  local dir = 1
+  if speed < -0.3 then dir = -1 end
+  local oldHeading = heading
+  heading = heading - steer * 48 * dir * dt   -- tracks: it also turns on the spot
+  local r = math.rad(heading)
+  local fx = -math.sin(r)
+  local fz = -math.cos(r)
+  local nx, nz, hit = slide(pl, self.x + fx * speed * dt, self.z + fz * speed * dt, heading, oldHeading)
+  if hit then
+    if math.abs(speed) > 4 and crashT <= 0 then
+      crashT = 0.6
+      playSound("hit", 0.6, 0.5)
+    end
+    speed = speed * 0.2
+    if blockedAt(pl, nx, nz, heading) then
+      heading = oldHeading
+      r = math.rad(heading)
+      fx = -math.sin(r)
+      fz = -math.cos(r)
+    end
+  end
+  self.ry = heading
+  local gF = groundHeight(nx + fx * 2.6, nz + fz * 2.6)
+  local gB = groundHeight(nx - fx * 2.6, nz - fz * 2.6)
+  local g = groundHeight(nx, nz)
+  if gF ~= nil and gB ~= nil and g ~= nil then
+    self.rx = math.deg(math.atan2(gF - gB, 5.2))
+    self.y = math.max(g, (gF + gB) / 2) + 0.75
+  end
+  self.x = nx
+  self.z = nz
+  self.speed = speed
+  -- crush enemies in front of a moving tank
+  if driven and speed > 2.5 then
+    local cx, cz = nx + fx * 2.4, nz + fz * 2.4
+    for i = 1, #bots do
+      local e = bots[i]
+      if e ~= nil and not e.dead and e.hp > 0 and math.abs(e.y - self.y) < 2.5 then
+        local ex, ez = e.x - cx, e.z - cz
+        if ex * ex + ez * ez < 4.5 then
+          e.hp = e.hp - 150 * dt
+          if e.hp <= 0 then log("Enemy run over!") end
+        end
+      end
+    end
+  end
+  -- whoever sits on the tank is carried with the NEW position
+  if pl ~= nil and pl.car == self.name then
+    local st = SEATS[pl.seat or 1]
+    pl.x = nx + math.cos(r) * st[1] + math.sin(r) * st[2]
+    pl.z = nz - math.sin(r) * st[1] + math.cos(r) * st[2]
+    pl.y = self.y + st[3]
+    pl.vy = 0
+  end
+  -- the turret and the cannon
+  local cs, sn = math.cos(r), math.sin(r)
+  local pitch = math.rad(self.rx)
+  local cp, sp = math.cos(pitch), math.sin(pitch)
+  if turret ~= nil and barrel ~= nil then
+    if driven and self.tx ~= nil then
+      local ddx, ddz = self.tx - turret.x, self.tz - turret.z
+      local want = math.deg(math.atan2(-ddx, -ddz))
+      local diff = ((want - tYaw + 540) % 360) - 180
+      local step = 85 * dt
+      tYaw = tYaw + clamp(diff, -step, step)
+      local hor = math.sqrt(ddx * ddx + ddz * ddz)
+      local wp = math.deg(math.atan2(self.ty - (turret.y + 0.05), math.max(hor, 8)))
+      wp = clamp(wp, -8, 28)
+      bp = bp + clamp(wp - bp, -35 * dt, 35 * dt)
+    end
+    put(turret, 0, 0.75, 0.2, nx, nz, cs, sn, cp, sp, tYaw, 0, 0)
+    local ty = math.rad(tYaw)
+    local br = math.rad(bp)
+    local ax = -math.sin(ty) * math.cos(br)
+    local ay = math.sin(br)
+    local az = -math.cos(ty) * math.cos(br)
+    local back = (self.recoil or 0) * 0.5
+    local rx0 = turret.x - math.sin(ty) * 1.1 - ax * back
+    local ry0 = turret.y + 0.05 - ay * back
+    local rz0 = turret.z - math.cos(ty) * 1.1 - az * back
+    barrel.x = rx0 + ax * 1.8
+    barrel.y = ry0 + ay * 1.8
+    barrel.z = rz0 + az * 1.8
+    barrel.ry = tYaw
+    barrel.rx = bp
+    barrel.rz = 0
+    self.mx = rx0 + ax * 3.7
+    self.my = ry0 + ay * 3.7
+    self.mz = rz0 + az * 3.7
+    self.aimx = ax
+    self.aimy = ay
+    self.aimz = az
+  end
+  placed = true
 end
 """
 
@@ -4547,6 +5124,136 @@ end
             body.ry = yawDeg
         }
 
+        // ---- a runway, a small plane and a tank ----
+        val strips = ArrayList<FloatArray>()      // x, z, half width, half depth of flat places kept free of trees
+        fun buildRunway(x: Float, z: Float, level: Float) {
+            val asphalt = floatArrayOf(0.20f, 0.20f, 0.21f)
+            val white = floatArrayOf(0.95f, 0.95f, 0.92f)
+            val rw = mk(scene, Shape.CUBE, "Runway", x, level + 0.06f, z, 14f, 0.12f, 116f, asphalt)
+            rw.shadow = false
+            for (i in -4..4) {
+                val m = mk(scene, Shape.CUBE, "Runway mark", x, level + 0.125f, z + i * 11f, 0.5f, 0.02f, 5f, white)
+                m.shadow = false
+            }
+            for (sx in floatArrayOf(-6.4f, 6.4f)) {
+                val m = mk(scene, Shape.CUBE, "Runway mark", x + sx, level + 0.125f, z, 0.3f, 0.02f, 112f, white)
+                m.shadow = false
+            }
+            for (ez in floatArrayOf(-52f, 52f)) for (k in 0..6) {
+                val m = mk(scene, Shape.CUBE, "Runway mark", x - 4.5f + k * 1.5f, level + 0.125f, z + ez, 0.6f, 0.02f, 4f, white)
+                m.shadow = false
+            }
+        }
+
+        var planeN = 0
+        fun buildPlane(x: Float, z: Float, yawDeg: Float, level: Float) {
+            planeN++
+            val cols = arrayOf(floatArrayOf(0.92f, 0.92f, 0.90f), floatArrayOf(0.85f, 0.25f, 0.15f), floatArrayOf(0.15f, 0.35f, 0.75f), floatArrayOf(0.90f, 0.75f, 0.15f))
+            val col = cols[rnd.nextInt(cols.size)]
+            val dark = floatArrayOf(0.07f, 0.07f, 0.08f)
+            val fabric = floatArrayOf(0.35f, 0.33f, 0.30f)
+            val trim = floatArrayOf(col[0] * 0.75f, col[1] * 0.75f, col[2] * 0.75f)
+            val y = level + 0.12f + 1.1f
+            val body = mk(scene, Shape.CUBE, "Plane " + planeN, x, y, z, 0.9f, 0.9f, 7f, col, BR_PLANE)
+            body.collider = 0
+            val pparts = ArrayList<SceneObject>()
+            fun pPart(shape: Shape, dx: Float, dy: Float, dz: Float, psx: Float, psy: Float, psz: Float, c: FloatArray): SceneObject {
+                val p = if (shape == Shape.CUBE) mk(scene, Shape.CUBE, "Plane " + planeN + " part", x + dx, y + dy, z + dz, psx, psy, psz, c)
+                else { val o = scene.add(shape, null, "Plane " + planeN + " part"); o.x = x + dx; o.y = y + dy; o.z = z + dz; o.sx = psx; o.sy = psy; o.sz = psz; o.color = c; o }
+                p.shadow = false
+                pparts.add(p)
+                return p
+            }
+            pPart(Shape.CUBE, 0f, -0.05f, -0.2f, 9f, 0.14f, 1.7f, col)                          // the wing
+            pPart(Shape.CUBE, -4.2f, -0.05f, -0.2f, 0.6f, 0.15f, 1.72f, trim)                   // wing tips
+            pPart(Shape.CUBE, 4.2f, -0.05f, -0.2f, 0.6f, 0.15f, 1.72f, trim)
+            pPart(Shape.CUBE, 0f, 0.1f, 4.15f, 0.55f, 0.6f, 1.9f, col)                          // the tail
+            pPart(Shape.CUBE, 0f, 0.95f, 4.3f, 0.1f, 1.3f, 1.1f, trim)                          // the fin
+            pPart(Shape.CUBE, 0f, 0.3f, 4.5f, 3.4f, 0.1f, 0.9f, col)                            // the tail plane
+            pPart(Shape.CUBE, 0f, 0f, -3.75f, 0.75f, 0.75f, 0.55f, dark)                        // the engine cowl
+            pPart(Shape.CUBE, 0f, 0.72f, 0.05f, 0.82f, 0.7f, 2.9f, floatArrayOf(0.55f, 0.68f, 0.78f)).opacity = 0.28f   // the glass cockpit
+            pPart(Shape.CUBE, 0f, 0.38f, -0.2f, 0.5f, 0.08f, 0.5f, fabric)                      // the two seats
+            pPart(Shape.CUBE, 0f, 0.38f, 1.2f, 0.5f, 0.08f, 0.5f, fabric)
+            pPart(Shape.CUBE, 0f, 0.62f, -1.45f, 0.8f, 0.2f, 0.12f, dark)                       // the dashboard
+            for (wx in floatArrayOf(-1.1f, 1.1f)) {
+                pPart(Shape.CUBE, wx * 0.8f, -0.45f, -0.6f, 0.08f, 0.7f, 0.08f, dark)           // legs
+                pPart(Shape.SPHERE, wx, -0.8f, -0.6f, 0.28f, 0.6f, 0.6f, dark)                  // main wheels
+            }
+            pPart(Shape.SPHERE, 0f, -0.55f, 4.1f, 0.2f, 0.4f, 0.4f, dark)                       // tail wheel
+            for (p in pparts) Rig.bind(p, body)
+            // the propeller is turned by the script
+            val yr = Math.toRadians(yawDeg.toDouble())
+            val ycs = Math.cos(yr).toFloat()
+            val ysn = Math.sin(yr).toFloat()
+            for (k in 1..2) {
+                val o = scene.add(Shape.CUBE, null, "Plane " + planeN + " prop" + k)
+                o.x = x + (-4.05f) * ysn
+                o.y = y
+                o.z = z + (-4.05f) * ycs
+                o.sx = 2.3f; o.sy = 0.14f; o.sz = 0.05f
+                o.color = dark
+                o.shadow = false
+                o.ry = yawDeg
+                o.rz = if (k == 2) 90f else 0f
+            }
+            body.ry = yawDeg
+        }
+
+        var tankN = 0
+        fun buildTank(x: Float, z: Float, yawDeg: Float) {
+            val g = ground(x, z) ?: return
+            if (g < seaY + 0.5f) return
+            tankN++
+            val cols = arrayOf(floatArrayOf(0.30f, 0.36f, 0.22f), floatArrayOf(0.60f, 0.52f, 0.35f), floatArrayOf(0.38f, 0.40f, 0.40f))
+            val col = cols[rnd.nextInt(cols.size)]
+            val dark = floatArrayOf(0.10f, 0.10f, 0.11f)
+            val steel = floatArrayOf(0.20f, 0.21f, 0.22f)
+            val dcol = floatArrayOf(col[0] * 0.8f, col[1] * 0.8f, col[2] * 0.8f)
+            val y = g + 0.75f
+            val body = mk(scene, Shape.CUBE, "Tank " + tankN, x, y, z, 2.5f, 0.8f, 5.6f, col, BR_TANK)
+            body.collider = 0
+            val tparts = ArrayList<SceneObject>()
+            fun tPart(dx: Float, dy: Float, dz: Float, psx: Float, psy: Float, psz: Float, c: FloatArray): SceneObject {
+                val p = mk(scene, Shape.CUBE, "Tank " + tankN + " part", x + dx, y + dy, z + dz, psx, psy, psz, c)
+                p.shadow = false
+                tparts.add(p)
+                return p
+            }
+            for (sx in floatArrayOf(-1.65f, 1.65f)) {
+                tPart(sx, -0.2f, 0f, 0.8f, 0.9f, 6.0f, dark)                                    // the tracks
+                tPart(sx, 0.32f, 0f, 0.95f, 0.08f, 6.3f, dcol)                                  // the mudguards
+            }
+            tPart(0f, 0.33f, -2.75f, 2.5f, 0.1f, 1.2f, col).rx = -20f                           // the sloped front
+            tPart(0f, 0.5f, 2.0f, 2.3f, 0.25f, 1.6f, dcol)                                      // the engine deck at the back
+            for (lx in floatArrayOf(-0.9f, 0.9f)) tPart(lx, 0.2f, -2.83f, 0.25f, 0.18f, 0.06f, floatArrayOf(1f, 0.95f, 0.7f)).emit = 0.8f
+            for (p in tparts) Rig.bind(p, body)
+            // the turret and the cannon are turned by the script; the small parts on the turret follow it
+            val yr = Math.toRadians(yawDeg.toDouble())
+            val ycs = Math.cos(yr).toFloat()
+            val ysn = Math.sin(yr).toFloat()
+            val ty0 = y + 0.75f
+            val tz0 = z + 0.2f
+            val turret = mk(scene, Shape.CUBE, "Tank " + tankN + " turret", x, ty0, tz0, 2.0f, 0.7f, 2.4f, col)
+            turret.shadow = false
+            val tkids = ArrayList<SceneObject>()
+            fun tKid(dx: Float, dy: Float, dz: Float, psx: Float, psy: Float, psz: Float, c: FloatArray) {
+                val p = mk(scene, Shape.CUBE, "Tank " + tankN + " tpart", x + dx, ty0 + dy, tz0 + dz, psx, psy, psz, c)
+                p.shadow = false
+                tkids.add(p)
+            }
+            tKid(0f, 0.05f, -1.25f, 1.0f, 0.6f, 0.4f, steel)                                    // the gun mantlet
+            tKid(0.5f, 0.4f, 0.3f, 0.6f, 0.12f, 0.6f, dark)                                     // the commander's hatch
+            tKid(-0.75f, 1.0f, 0.9f, 0.04f, 1.5f, 0.04f, dark)                                  // the aerial
+            for (k in tkids) Rig.bind(k, turret)
+            turret.x = x + 0.2f * ysn
+            turret.z = z + 0.2f * ycs
+            turret.ry = yawDeg
+            val barrel = mk(scene, Shape.CUBE, "Tank " + tankN + " barrel", x + (-2.7f) * ysn, ty0 + 0.05f, z + (-2.7f) * ycs, 0.2f, 0.2f, 3.6f, steel)
+            barrel.shadow = false
+            barrel.ry = yawDeg
+            body.ry = yawDeg
+        }
+
         // ---- roads between the houses ----
         class RoadSeg(val x0: Float, val z0: Float, val x1: Float, val z1: Float)
         val roadSegs = ArrayList<RoadSeg>()
@@ -4716,6 +5423,64 @@ end
                 boatSpots.add(sp)
                 buildBoat(sp[0], sp[1], (ang * 180.0 / Math.PI).toFloat() + 90f)
             }
+            // runways with a small plane on every large map (not on the smallest "large" one: it is too small for a runway)
+            val nPlanes = if (mega) 2 else if (giant) 1 else if (huge) 1 else 0
+            val planeSpots = ArrayList<FloatArray>()
+            var planeTries = 0
+            while (planeSpots.size < nPlanes && planeTries++ < 800) {
+                val px = (rnd.nextFloat() - 0.5f) * 0.7f * map
+                val pz = (rnd.nextFloat() - 0.5f) * 0.7f * map
+                var lo3 = 1e9f
+                var hi3 = -1e9f
+                var sum3 = 0f
+                var cnt3 = 0
+                var ok3 = true
+                for (ix in intArrayOf(-12, 0, 12)) for (iz in intArrayOf(-66, -44, -22, 0, 22, 44, 66)) {
+                    val gq = ground(px + ix, pz + iz)
+                    if (gq == null || gq < seaY + 1.2f) { ok3 = false } else { lo3 = minOf(lo3, gq); hi3 = maxOf(hi3, gq); sum3 += gq; cnt3++ }
+                }
+                if (!ok3 || cnt3 == 0 || hi3 - lo3 > 5.0f) continue
+                var roadNear = false
+                for (iz in intArrayOf(-66, -33, 0, 33, 66)) if (nearRoad(px, pz + iz, 16f)) roadNear = true
+                if (roadNear) continue
+                if (houses.any { Math.abs(it[0] - px) < it[5] / 2f + 24f && Math.abs(it[1] - pz) < it[6] / 2f + 72f }) continue
+                if (heliSpots.any { Math.abs(it[0] - px) < 30.0 && Math.abs(it[1] - pz) < 80.0 }) continue
+                if (planeSpots.any { Math.hypot((it[0] - px).toDouble(), (it[1] - pz).toDouble()) < 150.0 }) continue
+                val lvl = sum3 / cnt3
+                flattenPad(px, pz, 8f, 60f, lvl)
+                val lg = ground(px, pz) ?: lvl
+                planeSpots.add(floatArrayOf(px, pz))
+                strips.add(floatArrayOf(px, pz, 14f, 66f))
+                buildRunway(px, pz, lg)
+                val north = rnd.nextBoolean()
+                buildPlane(px, if (north) pz - 50f else pz + 50f, if (north) 180f else 0f, lg)
+            }
+            // tanks standing on open, level ground
+            val nTanks = if (mega) 3 else if (giant) 2 else 1
+            val tankSpots = ArrayList<FloatArray>()
+            var tankTries = 0
+            while (tankSpots.size < nTanks && tankTries++ < 800) {
+                val kx = (rnd.nextFloat() - 0.5f) * 0.7f * map
+                val kz = (rnd.nextFloat() - 0.5f) * 0.7f * map
+                val g0 = ground(kx, kz) ?: continue
+                if (g0 < seaY + 1.5f) continue
+                var flat = true
+                for (q in 0 until 8) {
+                    val qa = q * Math.PI / 4.0
+                    val gq = ground(kx + Math.cos(qa).toFloat() * 5f, kz + Math.sin(qa).toFloat() * 5f)
+                    if (gq == null || gq < seaY + 1.0f || Math.abs(gq - g0) > 1.5f) { flat = false; break }
+                }
+                if (!flat) continue
+                if (nearRoad(kx, kz, 10f)) continue
+                if (houses.any { Math.hypot((it[0] - kx).toDouble(), (it[1] - kz).toDouble()) < 0.5 * maxOf(it[5], it[6]) + 14.0 }) continue
+                if (heliSpots.any { Math.hypot((it[0] - kx).toDouble(), (it[1] - kz).toDouble()) < 25.0 }) continue
+                if (planeSpots.any { Math.abs(it[0] - kx) < 30.0 && Math.abs(it[1] - kz) < 80.0 }) continue
+                if (carSpots.any { Math.hypot((it[0] - kx).toDouble(), (it[1] - kz).toDouble()) < 12.0 }) continue
+                if (tankSpots.any { Math.hypot((it[0] - kx).toDouble(), (it[1] - kz).toDouble()) < 80.0 }) continue
+                tankSpots.add(floatArrayOf(kx, kz))
+                strips.add(floatArrayOf(kx, kz, 6f, 6f))
+                buildTank(kx, kz, rnd.nextFloat() * 360f)
+            }
         }
 
         // ---- trees (away from houses and water) ----
@@ -4731,6 +5496,7 @@ end
             if (houses.any { Math.hypot((it[0] - tx).toDouble(), (it[1] - tz).toDouble()) < 0.5 * maxOf(it[5], it[6]) + 8.0 }) continue
             if (towerSpots.any { Math.hypot((it[0] - tx).toDouble(), (it[1] - (tz + 10f)).toDouble()) < 16.0 }) continue
             if (nearRoad(tx, tz, 7f)) continue
+            if (strips.any { Math.abs(it[0] - tx) < it[2] && Math.abs(it[1] - tz) < it[3] }) continue
             val ttype = rnd.nextInt(2)
             val tr = scene.addTree(ttype)
             val k = 0.8f + rnd.nextFloat() * 0.6f
