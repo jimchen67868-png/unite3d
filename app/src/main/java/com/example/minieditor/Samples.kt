@@ -1649,9 +1649,10 @@ end
 
 -- one flat flame spike of the burst (it lies on the ground and shoots outward)
 function blade(x, y, z, dx, dy, dz, len, w, th, life)
-  local o = fxSpawn(x, y, z, w, th, 0.4, 1, 0.95, 0.5, 1, "cube")
+  local o = fxSpawn(x, y, z, w, th, 0.4, 1, 0.95, 0.5, 0.95)   -- a long soft blob = a flame tongue
   if o ~= nil then
     o.kind = "blade"
+    o.pattern = 20   -- a soft fire particle
     o.cx = x
     o.cy = y
     o.cz = z
@@ -1691,16 +1692,16 @@ function blastFx(x, y, z)
     f.pattern = 20
     fx[#fx + 1] = f
   end
-  -- 2. THE STAR: 18 flat flame spikes shooting out along the ground in every direction, of different lengths (the ragged outline)
-  for i = 1, 18 do
-    local a = (i / 18) * 6.283 + (math.random() - 0.5) * 0.35
-    local len = 2.4 + math.random() * 3.4
+  -- 2. THE STAR: 12 flat flame tongues shooting out along the ground in every direction, of different lengths (the ragged outline)
+  for i = 1, 12 do
+    local a = (i / 12) * 6.283 + (math.random() - 0.5) * 0.5
+    local len = 3 + math.random() * 3.2
     if i % 3 == 0 then len = len * 0.6 end
     local el = math.random() * 0.35
-    blade(x, by + math.random() * 0.25, z, math.cos(a) * math.cos(el), math.sin(el), math.sin(a) * math.cos(el), len, 0.45 + math.random() * 0.5, 0.22 + math.random() * 0.12, 0.3 + math.random() * 0.22)
+    blade(x, by + math.random() * 0.25, z, math.cos(a) * math.cos(el), math.sin(el), math.sin(a) * math.cos(el), len, 0.7 + math.random() * 0.5, 0.4 + math.random() * 0.2, 0.3 + math.random() * 0.22)
   end
   -- 3. a few fire lumps between the spikes: low, wide, flat
-  for i = 1, 8 do
+  for i = 1, 6 do
     local a = math.random() * 6.283
     local sp = 3 + math.random() * 3
     local o = fxSpawn(x + (math.random() - 0.5) * 0.8, by + math.random() * 0.3, z + (math.random() - 0.5) * 0.8, 1.2, 1.2, 1.2, 1, 0.9, 0.4, 1)
@@ -1721,24 +1722,24 @@ function blastFx(x, y, z)
     end
   end
   -- 4. then the dust: low and wide, tan, it comes up just after the fire
-  for i = 1, 6 do
+  for i = 1, 4 do
     local t = math.random()
     puff(x + (math.random() - 0.5) * 1.6, gh + 0.4, z + (math.random() - 0.5) * 1.6,
       0.55 + 0.1 * t, 0.46 + 0.1 * t, 0.33 + 0.08 * t, 1.0, 2.2 + math.random() * 1.2, 1.4 + math.random() * 0.8, 0.5, 0.2, 9, 0.2 + math.random() * 0.15)
   end
-  for i = 1, 6 do
+  for i = 1, 4 do
     local t = math.random()
     puff(x + (math.random() - 0.5) * 2, by + 0.2 + math.random() * 0.8, z + (math.random() - 0.5) * 2,
       0.5 + 0.14 * t, 0.4 + 0.12 * t, 0.28 + 0.1 * t, 1.2, 1.6 + math.random() * 0.8, 2 + math.random(), 0.5, 0.4 + math.random() * 0.6, 3, 0.25 + math.random() * 0.3)
   end
   -- 5. earth and rubble flying out, and thin hot spark lines
-  for i = 1, 8 do
+  for i = 1, 5 do
     local a = math.random() * 6.28
     local sp = 4 + math.random() * 9
     local nx, nz = math.cos(a) * sp * 0.15, math.sin(a) * sp * 0.15
     chunk(x, by, z, 0.25 + math.random() * 0.15, 0.2 + math.random() * 0.1, 0.15, 0.2, sp, 5 + math.random() * 7, 1.6, nx / 4, 0, nz / 4)
   end
-  for i = 1, 14 do
+  for i = 1, 9 do
     local a = math.random() * 6.28
     streak(x, by, z, 8 + math.random() * 10, 0.7, math.cos(a), 0.6, math.sin(a), 0.4)
   end
@@ -2061,7 +2062,7 @@ function updateFx(dt)
       o.g = 0.95 - 0.4 * k
       o.b = 0.5 - 0.4 * k
       o.emit = 1
-      o.opacity = 1 - k * k
+      o.opacity = 0.95 * (1 - k * k)
     elseif o.kind == "billow" then
       -- one blob of the fire ball: it flies out, slows down, swells, and goes from white-yellow to orange to dark red
       o.age = o.age + dt
