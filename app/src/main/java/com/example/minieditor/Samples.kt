@@ -1214,7 +1214,7 @@ function streak(x, y, z, sp, life, nx, ny, nz, len)
 end
 
 -- a soft cloud (dust, smoke) that grows and fades
-function puff(x, y, z, r, g, b, size, grow, life, op, vy)
+function puff(x, y, z, r, g, b, size, grow, life, op, vy, spread)
   local o = fxSpawn(x, y, z, size, size, size, r, g, b, op)
   if o ~= nil then
     o.kind = "puff"
@@ -1222,9 +1222,9 @@ function puff(x, y, z, r, g, b, size, grow, life, op, vy)
     o.dur = life
     o.life = life
     o.op = op
-    o.vx = (math.random() - 0.5) * 0.8
+    o.vx = (math.random() - 0.5) * (spread or 0.8)
     o.vy = vy
-    o.vz = (math.random() - 0.5) * 0.8
+    o.vz = (math.random() - 0.5) * (spread or 0.8)
     o.emit = 0
     fx[#fx + 1] = o
   end
@@ -1403,7 +1403,46 @@ function updateBullets(dt)
     local tx, ty, tz = b.x - (b.o0x or b.x), b.y - (b.o0y or b.y), b.z - (b.o0z or b.z)
     local dist = math.sqrt(tx * tx + ty * ty + tz * tz)
     local gone = b.life <= 0 or hit or low or wet or (b.far ~= nil and dist > b.far)
-    if hit then
+    local botHit = false
+    -- enemies are tested on the path of this frame FIRST: a bullet that hits a wall, the ground or the end of its range
+    -- in the same frame must still hit the enemy it passed on the way
+    do
+      local ex, ez = b.x - ox, b.z - oz
+      local seg2 = ex * ex + ez * ez + 0.0001
+      for k = 1, NBOTS do
+        local e = bots[k]
+        if e ~= nil and not e.dead and e.hp > 0 then
+          -- closest point of this frame's path to the enemy (a fast bullet must not skip over it)
+          local t = ((e.x - ox) * ex + (e.z - oz) * ez) / seg2
+          if t < 0 then t = 0 elseif t > 1 then t = 1 end
+          local dx, dz = e.x - (ox + ex * t), e.z - (oz + ez * t)
+          local dy = e.y - (oy + (b.y - oy) * t)
+          if dx * dx + dz * dz < 0.9 and math.abs(dy) < 1.1 then
+            local dmg = b.dmg or 25
+            local hy = (oy + (b.y - oy) * t) - e.y
+            local mul, zone = zoneMul(hy, math.sqrt(dx * dx + dz * dz))
+            local head = zone == "head"
+            dmg = dmg * mul * rangeMul(dist, b.near, b.far, b.minD)
+            e.hp = e.hp - dmg
+            camera.hit = (head or e.hp <= 0) and 2 or 1
+            playSound("hit", 0.7, head and 1.4 or 1)
+            botHit = true
+            local ds = ""
+            if dist > 40 then ds = "  (" .. math.floor(dist) .. " m)" end
+            if e.hp <= 0 then
+              if head then log("Headshot! Enemy down!  " .. countAlive() .. " left" .. ds) else log("Enemy down!  " .. countAlive() .. " left" .. ds) end
+            elseif head then
+              log("Headshot!" .. ds)
+            end
+            break
+          end
+        end
+      end
+    end
+    if botHit then gone = true end
+    if botHit then
+      -- it hit an enemy: no mark on whatever lies behind
+    elseif hit then
       local bl = math.sqrt(b.vx * b.vx + b.vy * b.vy + b.vz * b.vz) + 0.001
       local ux, uy, uz = b.vx / bl, b.vy / bl, b.vz / bl
       local done = false
@@ -1426,39 +1465,6 @@ function updateBullets(dt)
       -- ... and the spot where it really touched the ground (not where the step ended, which is further on)
       local gx, gy, gz = crossAt(ox, oy, oz, b.x, b.y, b.z, false)
       impactFx(gx, groundHeight(gx, gz), gz, 2, 0, 1, 0)
-    end
-    if not gone then
-      local ex, ez = b.x - ox, b.z - oz
-      local seg2 = ex * ex + ez * ez + 0.0001
-      for k = 1, NBOTS do
-        local e = bots[k]
-        if e ~= nil and not e.dead and e.hp > 0 then
-          -- closest point of this frame's path to the enemy (a fast bullet must not skip over it)
-          local t = ((e.x - ox) * ex + (e.z - oz) * ez) / seg2
-          if t < 0 then t = 0 elseif t > 1 then t = 1 end
-          local dx, dz = e.x - (ox + ex * t), e.z - (oz + ez * t)
-          local dy = e.y - (oy + (b.y - oy) * t)
-          if dx * dx + dz * dz < 0.9 and math.abs(dy) < 1.1 then
-            local dmg = b.dmg or 25
-            local hy = (oy + (b.y - oy) * t) - e.y
-            local mul, zone = zoneMul(hy, math.sqrt(dx * dx + dz * dz))
-            local head = zone == "head"
-            dmg = dmg * mul * rangeMul(dist, b.near, b.far, b.minD)
-            e.hp = e.hp - dmg
-            camera.hit = (head or e.hp <= 0) and 2 or 1
-            playSound("hit", 0.7, head and 1.4 or 1)
-            gone = true
-            local ds = ""
-            if dist > 40 then ds = "  (" .. math.floor(dist) .. " m)" end
-            if e.hp <= 0 then
-              if head then log("Headshot! Enemy down!  " .. countAlive() .. " left" .. ds) else log("Enemy down!  " .. countAlive() .. " left" .. ds) end
-            elseif head then
-              log("Headshot!" .. ds)
-            end
-            break
-          end
-        end
-      end
     end
     if gone then
       destroy(b)
@@ -1623,64 +1629,75 @@ end
 
 function blastFx(x, y, z)
   local gh = groundHeight(x, z) or y
-  -- 1. a white flash, gone in a blink
-  local f = fxSpawn(x, y + 0.6, z, 4, 4, 4, 1, 0.95, 0.8, 1)
+  local by = math.max(y, gh) + 0.4
+  -- 1. a short, very bright flash
+  local f = fxSpawn(x, by + 0.4, z, 3, 3, 3, 1, 0.92, 0.55, 1)
   if f ~= nil then
     f.kind = "blast"
-    f.life = 0.14
-    f.dur = 0.14
-    f.big = 12
+    f.life = 0.12
+    f.dur = 0.12
+    f.big = 9
     f.age = 0
     f.emit = 1
     fx[#fx + 1] = f
   end
-  -- 2. the fireball: three balls, yellow, orange, red, that swell, rise and burn out
-  local cols = { { 1, 0.85, 0.3 }, { 1, 0.5, 0.12 }, { 0.95, 0.3, 0.06 } }
-  for i = 1, 3 do
+  -- 2. the fireball: bright yellow and orange, wide and low, a burst that lies on the ground
+  local cols = { { 1, 0.9, 0.35 }, { 1, 0.72, 0.18 }, { 1, 0.5, 0.1 }, { 0.95, 0.38, 0.07 } }
+  for i = 1, 4 do
     local c = cols[i]
-    local o = fxSpawn(x + (math.random() - 0.5) * 1.2, y + 0.5 + i * 0.3, z + (math.random() - 0.5) * 1.2, 1.5, 1.5, 1.5, c[1], c[2], c[3], 0.95)
+    local o = fxSpawn(x + (math.random() - 0.5) * 1.8, by + 0.2 + i * 0.12, z + (math.random() - 0.5) * 1.8, 1.4, 1.4, 1.4, c[1], c[2], c[3], 0.95)
     if o ~= nil then
       o.kind = "fire"
-      o.life = 0.5 + i * 0.15
+      o.life = 0.45 + i * 0.12
       o.dur = o.life
       o.age = 0
-      o.s0 = 1.5
-      o.big = 6 + i * 2
-      o.vy = 2 + i
+      o.s0 = 1.4
+      o.big = 4.2 + i * 0.9
+      o.flat = 0.62
+      o.vy = 0.8 + i * 0.35
       o.g0 = c[2]
       o.b0 = c[3]
       o.emit = 1
       fx[#fx + 1] = o
     end
   end
-  -- 3. the dust ring racing over the ground
-  local ring = fxSpawn(x, gh + 0.3, z, 2, 0.35, 2, 0.72, 0.64, 0.5, 0.55)
+  -- 3. the dust ring racing over the ground (earth coloured)
+  local ring = fxSpawn(x, gh + 0.3, z, 2, 0.35, 2, 0.62, 0.52, 0.38, 0.6)
   if ring ~= nil then
     ring.kind = "ring"
-    ring.life = 0.55
-    ring.dur = 0.55
+    ring.life = 0.8
+    ring.dur = 0.8
     ring.age = 0
     ring.s0 = 2
-    ring.big = 22
-    ring.op = 0.55
+    ring.big = 28
+    ring.op = 0.6
     ring.emit = 0
     fx[#fx + 1] = ring
   end
-  -- 4. a column of dark smoke that rises and spreads
-  for i = 1, 9 do
-    local g = 0.16 + math.random() * 0.14
-    puff(x + (math.random() - 0.5) * 1.6, y + 0.4 + math.random() * 0.8, z + (math.random() - 0.5) * 1.6, g, g, g, 1.5, 2.2 + math.random() * 1.2, 2.5 + math.random(), 0.7, 2.5 + math.random() * 3)
+  -- 4. the brown cloud of earth and dust that rises and stays a while (no black smoke)
+  for i = 1, 16 do
+    local t = math.random()
+    puff(x + (math.random() - 0.5) * 2.4, by + math.random() * 1.0, z + (math.random() - 0.5) * 2.4,
+      0.5 + 0.14 * t, 0.4 + 0.12 * t, 0.28 + 0.1 * t, 1.6, 2.4 + math.random() * 2.2, 2.0 + math.random() * 1.6, 0.6, 0.8 + math.random() * 1.6, 5)
+  end
+  for i = 1, 6 do
+    puff(x + (math.random() - 0.5) * 3, by + 0.5 + math.random() * 1.5, z + (math.random() - 0.5) * 3,
+      0.72, 0.66, 0.54, 2.4, 2 + math.random() * 1.5, 3 + math.random() * 1.5, 0.3, 0.6 + math.random(), 3)
+  end
+  for i = 1, 4 do
+    puff(x + (math.random() - 0.5) * 1.6, by + math.random() * 0.8, z + (math.random() - 0.5) * 1.6,
+      0.22, 0.17, 0.12, 1.2, 1.8, 1.6 + math.random(), 0.55, 1 + math.random(), 3)
   end
   -- 5. earth and rubble thrown out, and hot sparks
   for i = 1, 14 do
     local a = math.random() * 6.28
     local sp = 4 + math.random() * 9
     local nx, nz = math.cos(a) * sp * 0.15, math.sin(a) * sp * 0.15
-    chunk(x, y + 0.4, z, 0.25 + math.random() * 0.15, 0.2 + math.random() * 0.1, 0.15, 0.2, sp, 5 + math.random() * 7, 1.6, nx / 4, 0, nz / 4)
+    chunk(x, by, z, 0.25 + math.random() * 0.15, 0.2 + math.random() * 0.1, 0.15, 0.2, sp, 5 + math.random() * 7, 1.6, nx / 4, 0, nz / 4)
   end
   for i = 1, 22 do
     local a = math.random() * 6.28
-    streak(x, y + 0.4, z, 8 + math.random() * 10, 0.7, math.cos(a), 0.6, math.sin(a), 0.4)
+    streak(x, by, z, 8 + math.random() * 10, 0.7, math.cos(a), 0.6, math.sin(a), 0.4)
   end
   -- 6. a black scorch mark on the ground
   if math.abs(y - gh) < 3 then
@@ -1698,9 +1715,9 @@ function blastFx(x, y, z)
 end
 
 function explode(x, y, z, R, dmgB, dmgP)
-  R = R or 9
-  dmgB = dmgB or 150
-  dmgP = dmgP or 90
+  R = R or 10
+  dmgB = dmgB or 200
+  dmgP = dmgP or 100
   playSound("boom", 1, 0.9 + math.random() * 0.2)
   for k = 1, NBOTS do
     local e = bots[k]
@@ -1708,19 +1725,29 @@ function explode(x, y, z, R, dmgB, dmgP)
       local dx, dy, dz = e.x - x, e.y - y, e.z - z
       local d = math.sqrt(dx * dx + dy * dy + dz * dz)
       if d < R then
-        local dmg = dmgB * (1 - d / R)
-        if not lineClear(x, y + 0.3, z, e.x, e.y, e.z) then dmg = dmg * 0.25 end
+        -- full damage in the middle (about 2.5 m), then less and less out to the edge
+        local fall = 1
+        if d > 2.5 then fall = 1 - (d - 2.5) / (R - 2.5) end
+        local dmg = dmgB * fall
+        -- cover: a wall between the blast and the body (feet-high or head-high line) takes most of it
+        if not (lineClear(x, y + 0.5, z, e.x, e.y, e.z) or lineClear(x, y + 0.5, z, e.x, e.y + 0.6, e.z)) then dmg = dmg * 0.25 end
         e.hp = e.hp - dmg
         camera.hit = (e.hp <= 0) and 2 or 1
-        if e.hp <= 0 then log("Enemy blown up!  " .. countAlive() .. " left") end
+        if e.hp <= 0 then
+          log("Enemy blown up!  " .. countAlive() .. " left")
+        else
+          log("Grenade hit an enemy  -" .. math.floor(dmg))
+        end
       end
     end
   end
   local dx, dy, dz = self.x - x, self.y - y, self.z - z
   local d = math.sqrt(dx * dx + dy * dy + dz * dz)
   if d < R and not self.dead then
-    local dmg = dmgP * (1 - d / R)
-    if not lineClear(x, y + 0.3, z, self.x, self.y, self.z) then dmg = dmg * 0.25 end
+    local fall = 1
+    if d > 2.5 then fall = 1 - (d - 2.5) / (R - 2.5) end
+    local dmg = dmgP * fall
+    if not lineClear(x, y + 0.5, z, self.x, self.y, self.z) then dmg = dmg * 0.25 end
     if carObj ~= nil and carObj.kind == "tank" then dmg = dmg * 0.3 end   -- the armour
     self.hp = self.hp - dmg
     log("The blast hit you!  HP " .. math.max(0, math.floor(self.hp)))
@@ -1959,7 +1986,7 @@ function updateFx(dt)
       local k = math.min(1, o.age / o.dur)
       o.y = o.y + o.vy * dt
       o.sx = o.s0 + (o.big - o.s0) * (1 - (1 - k) * (1 - k))
-      o.sy = o.sx * 0.9
+      o.sy = o.sx * (o.flat or 0.9)
       o.sz = o.sx
       o.r = 1 - 0.7 * k
       o.g = o.g0 * (1 - k) + 0.08 * k
@@ -1973,6 +2000,9 @@ function updateFx(dt)
       o.sz = o.sx
       o.opacity = o.op * (1 - k)
     elseif o.kind == "puff" then
+      local drag = math.max(0, 1 - 1.4 * dt)
+      o.vx = o.vx * drag
+      o.vz = o.vz * drag
       o.x = o.x + o.vx * dt
       o.y = o.y + o.vy * dt
       o.z = o.z + o.vz * dt
