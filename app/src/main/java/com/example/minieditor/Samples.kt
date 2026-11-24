@@ -148,6 +148,8 @@ grenList = {}
 shells = {}
 tankT = 0
 tankAimT = 0
+chute = false
+chuteT = 0
 bloom = 0
 SEATS = { { -0.45, -0.3 }, { 0.45, -0.3 }, { -0.45, 0.7 }, { 0.45, 0.7 } }   -- driver, front passenger, rear left, rear right
 
@@ -200,6 +202,8 @@ function start()
   shells = {}
   tankT = 0
   tankAimT = 0
+  chute = false
+  chuteT = 0
   bloom = 0
   mag = mags[slots[cur]]
   reserve = ammoBag[W.ammo]
@@ -250,6 +254,7 @@ function start()
   buildTreeGrid()
   self.wallAt = pointInWall   -- the vehicles ask these to stop at walls and trees
   self.treeAt = treeAt
+  self.roofAt = roofTop
   nearCars = {}
   hitKind = 1
   climbBtn = find("Climb")
@@ -729,7 +734,7 @@ function enterCar(c, seat)
   camera.yaw = c.ry     -- the camera starts behind the vehicle
   playSound("door", 0.8, 0.8)
   if seat == 1 and c.kind == "heli" then
-    log("Pilot seat: the rotor spins up. Joystick up / down = forward / back, left / right = turn. CLIMB and DESCEND buttons = height. You can shoot. DRIVE = get out (after landing)")
+    log("Pilot seat: the rotor spins up. Joystick up / down = forward / back, left / right = turn. CLIMB and DESCEND buttons = height. You can shoot. DRIVE = get out (in the air you jump with a parachute; you can land on roofs)")
   elseif seat == 1 and c.kind == "plane" then
     log("Pilot seat: joystick up / down = engine power, left / right = steer and bank. Take off: full power along the runway, then hold CLIMB. DESCEND = nose down. DRIVE = get out (after landing and stopping)")
   elseif seat == 1 and c.kind == "tank" then
@@ -747,20 +752,30 @@ function leaveCar(force)
     log("Land and stop the plane first")
     return
   end
+  local jumped = false
   if not force and c ~= nil and c.kind == "heli" and (c.agl or 0) > 2.5 then
-    log("Land first - you cannot get out in the air")
-    return
+    jumped = true   -- you jump out of the helicopter in the air: the parachute opens after a moment
   end
   if c ~= nil then
     local r = math.rad(c.ry)
     local side = 3
-    if c.kind == "heli" then side = 4 elseif c.kind == "plane" then side = 3.5 elseif c.kind == "tank" then side = 3.6 end
+    if c.kind == "heli" then side = (c.roof and 2.6 or 4) elseif c.kind == "plane" then side = 3.5 elseif c.kind == "tank" then side = 3.6 end
     if seatDef(c, self.seat or 1)[1] < 0 then side = -side end
     self.x = c.x + math.cos(r) * side
     self.z = c.z - math.sin(r) * side
     self.y = groundHeight(self.x, self.z) + 1.2
+    if jumped then
+      self.y = c.y - 0.3
+    elseif c.kind == "heli" then
+      self.y = math.max(self.y, c.y + 0.35)   -- standing on a roof
+    end
   end
   self.vy = 0
+  if jumped then
+    chute = true
+    chuteT = 0
+    log("You jumped out! The parachute opens in a moment")
+  end
   self.car = nil
   self.seat = nil
   carObj = nil
@@ -865,7 +880,7 @@ function carRide(dt)
   if P.armL ~= nil then P.armL.swing = arm end
   if P.armR ~= nil then P.armR.swing = arm end
   -- the driver's camera swings round behind the vehicle (unless you drag the screen)
-  if self.seat == 1 and c.kind ~= "heli" and c.kind ~= "tank" and not input.touching and math.abs(c.speed or 0) > 0.5 then
+  if self.seat == 1 and c.kind ~= "heli" and c.kind ~= "tank" and not input.touching and aimT <= 0 and not input.buttons["Fire"] and math.abs(c.speed or 0) > 0.5 then
     local d = ((c.ry - input.yaw + 540) % 360) - 180
     camera.yaw = input.yaw + d * math.min(1, dt * 2.2)
   end
@@ -912,6 +927,21 @@ function pointInWall(x, y, z)
     end
   end
   return false
+end
+
+-- the top of the highest wall / roof box under (x, y) at this x, z (nil if none): a helicopter lands on it
+function roofTop(x, y, z)
+  local c = grid[math.floor(x / CELL) * 100003 + math.floor(z / CELL)]
+  if c == nil then return nil end
+  local best = nil
+  for i = 1, #c do
+    local w = c[i]
+    if w.door == nil and math.abs(x - w.x) < w.hx and math.abs(z - w.z) < w.hz then
+      local top = w.y + w.hy
+      if top <= y and (best == nil or top > best) then best = top end
+    end
+  end
+  return best
 end
 
 -- the wall box that holds a point (nil if none)
@@ -1109,15 +1139,20 @@ function aimDir(assist)
   end
   local best = nil
   local bd = 0.993
+  local range = 45
+  if carObj ~= nil then
+    bd = 0.975      -- from a vehicle: a wider snap, farther away
+    range = 80
+  end
   if assist == false then bd = 2 end
   for k = 1, NBOTS do
     local e = bots[k]
     if e ~= nil and not e.dead and e.hp > 0 then
       local dx, dy, dz = e.x - self.x, e.y - self.y, e.z - self.z
       local d = math.sqrt(dx * dx + dy * dy + dz * dz)
-      if d > 0.5 and d < 45 then
+      if d > 0.5 and d < range then
         local dot = (dx * fx + dy * fy + dz * fz) / d
-        if dot > bd then
+        if dot > bd and (carObj == nil or lineClear(ox, oy, oz, e.x, e.y + 0.25, e.z)) then
           bd = dot
           best = e
         end
@@ -1296,6 +1331,7 @@ function shoot()
   local sp = W.spread + bloom
   if legAmp > 1 then sp = sp * 1.6 end
   if aimLevel > 0 then sp = sp * 0.4 end
+  if carObj ~= nil then sp = sp * 0.5 end   -- steadier from a seat
   for p = 1, W.pellets do
     local dx = fx0 + (math.random() - 0.5) * 2 * sp
     local dy = fy0 + (math.random() - 0.5) * 2 * sp
@@ -2130,9 +2166,15 @@ function update(dt)
     if self.grounded or onStairs then
       if self.vy < 0 then self.vy = 0 end
       if input.jumpPressed then self.vy = 7 end
+      chute = false
+      chuteT = 0
     end
     if not onStairs or self.vy > 0 then
       self.vy = self.vy - world.gravity * dt
+      if chute then
+        chuteT = chuteT + dt
+        if chuteT > 1.2 and self.vy < -7 then self.vy = -7 end   -- the parachute: a slow, safe fall
+      end
       self.y = self.y + self.vy * dt
     end
   end
@@ -3064,6 +3106,7 @@ end
 
 -- the helicopter stops at walls, roofs and tree trunks (the player script knows where they are)
 CP = { { 0, -1.8 }, { -1, -0.5 }, { 1, -0.5 }, { -1, 0.8 }, { 1, 0.8 }, { 0, 2 }, { 0, 3.5 }, { 0, 4.6 } }
+LP = { { -1, -0.5 }, { 1, -0.5 }, { -1, 0.8 }, { 1, 0.8 }, { 0, -1.8 }, { 0, 2 } }   -- where the skids stand (for roofs)
 
 function blockedAt(pl, x, y, z, h)
   local r = math.rad(h)
@@ -3149,13 +3192,30 @@ function update(dt)
     end
   end
   -- up into a ceiling or down onto a roof: it stops there
-  if pl ~= nil and pl.wallAt ~= nil and math.abs(vy) > 0.3 and blockedAt(pl, nx, ny, nz, heading) and not blockedAt(pl, nx, self.y, nz, heading) then
+  if pl ~= nil and pl.wallAt ~= nil and vy > 0.3 and blockedAt(pl, nx, ny, nz, heading) and not blockedAt(pl, nx, self.y, nz, heading) then
     if pl.car == self.name and math.abs(vy) > 9 then pl.hp = pl.hp - (math.abs(vy) - 9) * 3 end
     ny = self.y
     vy = 0
   end
   local gh = groundHeight(nx, nz)
-  local minY = (gh or 0) + 0.85 + padLift
+  -- the floor is the ground, or the roof / wall top under the skids: the helicopter can land on a roof
+  local floorY = gh or 0
+  local lift = padLift
+  if pl ~= nil and pl.roofAt ~= nil then
+    local hcs, hsn = math.cos(r), math.sin(r)
+    for i = 1, #LP do
+      local q = LP[i]
+      local rt = pl.roofAt(nx + q[1] * hcs + q[2] * hsn, self.y - 0.25, nz - q[1] * hsn + q[2] * hcs)
+      if rt ~= nil and rt > floorY then floorY = rt end
+    end
+  end
+  if floorY > (gh or 0) + 0.3 then
+    lift = 0
+    self.roof = true
+  else
+    self.roof = false
+  end
+  local minY = floorY + 0.85 + lift
   if ny <= minY then
     ny = minY
     if vy < 0 then vy = 0 end
@@ -4938,7 +4998,7 @@ end
                 return p
             }
             // glass cabin: you can see the seats and the people sitting in them
-            carPart(0f, 0.8f, 0.1f, 1.8f, 1.1f, 2.3f, floatArrayOf(0.55f, 0.68f, 0.78f)).opacity = 0.28f
+            carPart(0f, 0.8f, 0.1f, 1.8f, 1.1f, 2.3f, floatArrayOf(0.45f, 0.58f, 0.68f)).opacity = 0.12f
             carPart(0f, 1.39f, 0.1f, 1.86f, 0.08f, 2.36f, floatArrayOf(col[0] * 0.8f, col[1] * 0.8f, col[2] * 0.8f))   // roof
             carPart(0f, 0.36f, -0.85f, 1.7f, 0.22f, 0.35f, dark)                                                      // dashboard
             for (sx in floatArrayOf(-0.45f, 0.45f)) {                                                                // the two front seats
@@ -5040,7 +5100,7 @@ end
                 hparts.add(p)
                 return p
             }
-            hPart(0f, 0.85f, -0.3f, 1.6f, 1.2f, 2.0f, floatArrayOf(0.55f, 0.68f, 0.78f)).opacity = 0.28f     // glass cabin
+            hPart(0f, 0.85f, -0.3f, 1.6f, 1.2f, 2.0f, floatArrayOf(0.45f, 0.58f, 0.68f)).opacity = 0.12f     // glass cabin
             hPart(0f, 1.5f, -0.3f, 1.7f, 0.12f, 2.2f, floatArrayOf(col[0] * 0.8f, col[1] * 0.8f, col[2] * 0.8f))   // roof
             hPart(0f, 0.15f, 3.1f, 0.3f, 0.3f, 3.0f, col)                                                     // tail boom
             hPart(0f, 0.65f, 4.4f, 0.08f, 0.9f, 0.6f, col)                                                    // tail fin
@@ -5112,7 +5172,7 @@ end
             bow.rx = -90f
             bPart(Shape.CUBE, 0f, 0.28f, 0f, 2.0f, 0.06f, 5.6f, wood)                      // the deck
             bPart(Shape.CUBE, 0f, 0.5f, -1.5f, 1.3f, 0.45f, 0.35f, dark)                   // the dashboard
-            bPart(Shape.CUBE, 0f, 1.0f, -1.7f, 2.0f, 0.7f, 0.06f, floatArrayOf(0.55f, 0.68f, 0.78f)).opacity = 0.3f   // the windscreen
+            bPart(Shape.CUBE, 0f, 1.0f, -1.7f, 2.0f, 0.7f, 0.06f, floatArrayOf(0.45f, 0.58f, 0.68f)).opacity = 0.12f   // the windscreen
             for (sx in floatArrayOf(-0.5f, 0.5f)) {                                        // the two front seats
                 bPart(Shape.CUBE, sx, 0.42f, -0.9f, 0.5f, 0.1f, 0.5f, fabric)
                 bPart(Shape.CUBE, sx, 0.72f, -0.62f, 0.5f, 0.5f, 0.1f, fabric)
@@ -5171,7 +5231,7 @@ end
             pPart(Shape.CUBE, 0f, 0.95f, 4.3f, 0.1f, 1.3f, 1.1f, trim)                          // the fin
             pPart(Shape.CUBE, 0f, 0.3f, 4.5f, 3.4f, 0.1f, 0.9f, col)                            // the tail plane
             pPart(Shape.CUBE, 0f, 0f, -3.75f, 0.75f, 0.75f, 0.55f, dark)                        // the engine cowl
-            pPart(Shape.CUBE, 0f, 0.72f, 0.05f, 0.82f, 0.7f, 2.9f, floatArrayOf(0.55f, 0.68f, 0.78f)).opacity = 0.28f   // the glass cockpit
+            pPart(Shape.CUBE, 0f, 0.72f, 0.05f, 0.82f, 0.7f, 2.9f, floatArrayOf(0.45f, 0.58f, 0.68f)).opacity = 0.12f   // the glass cockpit
             pPart(Shape.CUBE, 0f, 0.38f, -0.2f, 0.5f, 0.08f, 0.5f, fabric)                      // the two seats
             pPart(Shape.CUBE, 0f, 0.38f, 1.2f, 0.5f, 0.08f, 0.5f, fabric)
             pPart(Shape.CUBE, 0f, 0.62f, -1.45f, 0.8f, 0.2f, 0.12f, dark)                       // the dashboard
