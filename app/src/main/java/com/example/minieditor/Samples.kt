@@ -1647,6 +1647,24 @@ function jet(x, y, z, dx, dy, dz, sp, life, thick, len, r, g, b)
   end
 end
 
+-- one fine straight spark line (white-yellow) shooting out of the blast
+function spark(x, y, z, dx, dy, dz, sp, life, len)
+  local o = fxSpawn(x, y, z, 0.045, 0.045, len, 1, 1, 0.75, 1, "cube")
+  if o ~= nil then
+    o.kind = "spark"
+    o.vx = dx * sp
+    o.vy = dy * sp
+    o.vz = dz * sp
+    o.len = len
+    o.dur = life
+    o.life = life
+    o.ry = math.deg(math.atan2(dx, dz))
+    o.rx = -math.deg(math.asin(dy))
+    o.emit = 1
+    fx[#fx + 1] = o
+  end
+end
+
 -- one flat flame spike of the burst (it lies on the ground and shoots outward)
 function blade(x, y, z, dx, dy, dz, len, w, th, life)
   local o = fxSpawn(x, y, z, w, th, 0.4, 1, 0.95, 0.5, 0.95)   -- a long soft blob = a flame tongue
@@ -1675,71 +1693,86 @@ end
 function blastFx(x, y, z)
   local gh = groundHeight(x, z) or y
   local by = math.max(y, gh) + 0.3
-  -- 1. the bright centre: a wide, FLAT, glowing yellow-white patch (the burst lies on the ground, it is not a tall ball)
-  local f = fxSpawn(x, by + 0.2, z, 2, 2, 2, 1, 0.97, 0.7, 1)
+  -- 1. the bright centre: a glowing yellow-white patch, wider than tall
+  local f = fxSpawn(x, by + 0.3, z, 2, 2, 2, 1, 0.97, 0.7, 1)
   if f ~= nil then
     f.kind = "billow"
-    f.dur = 0.26
-    f.life = 0.26
+    f.dur = 0.3
+    f.life = 0.3
     f.age = 0
     f.s0 = 2
-    f.big = 6.5
-    f.flat = 0.32
+    f.big = 5.5
+    f.flat = 0.55
     f.vx = 0
-    f.vy = 0.4
+    f.vy = 0.8
     f.vz = 0
     f.emit = 1
     f.pattern = 20
     fx[#fx + 1] = f
   end
-  -- 2. THE STAR: 12 flat flame tongues shooting out along the ground in every direction, of different lengths (the ragged outline)
-  for i = 1, 12 do
-    local a = (i / 12) * 6.283 + (math.random() - 0.5) * 0.5
-    local len = 3 + math.random() * 3.2
+  -- 2. THE STAR: flame tongues shooting out low in every direction (the ragged outline) ...
+  for i = 1, 10 do
+    local a = (i / 10) * 6.283 + (math.random() - 0.5) * 0.5
+    local len = 3 + math.random() * 3
     if i % 3 == 0 then len = len * 0.6 end
     local el = math.random() * 0.35
-    blade(x, by + math.random() * 0.25, z, math.cos(a) * math.cos(el), math.sin(el), math.sin(a) * math.cos(el), len, 0.7 + math.random() * 0.5, 0.4 + math.random() * 0.2, 0.3 + math.random() * 0.22)
+    blade(x, by + math.random() * 0.25, z, math.cos(a) * math.cos(el), math.sin(el), math.sin(a) * math.cos(el), len, 0.7 + math.random() * 0.5, 0.4 + math.random() * 0.2, 0.34 + math.random() * 0.24)
   end
-  -- 3. a few fire lumps between the spikes: low, wide, flat
-  for i = 1, 6 do
+  --    ... and some that jump up, so the burst is taller in the middle, with spiky flames on top
+  for i = 1, 5 do
     local a = math.random() * 6.283
-    local sp = 3 + math.random() * 3
-    local o = fxSpawn(x + (math.random() - 0.5) * 0.8, by + math.random() * 0.3, z + (math.random() - 0.5) * 0.8, 1.2, 1.2, 1.2, 1, 0.9, 0.4, 1)
+    local el = 0.8 + math.random() * 0.5
+    blade(x, by, z, math.cos(a) * math.cos(el), math.sin(el), math.sin(a) * math.cos(el), 1.8 + math.random() * 1.6, 0.55 + math.random() * 0.3, 0.45, 0.3 + math.random() * 0.2)
+  end
+  -- 3. a few short-lived fire lumps (they give the orange edge, not a big orange ring)
+  for i = 1, 5 do
+    local a = math.random() * 6.283
+    local sp = 2.5 + math.random() * 3
+    local o = fxSpawn(x + (math.random() - 0.5) * 0.8, by + math.random() * 0.4, z + (math.random() - 0.5) * 0.8, 1.2, 1.2, 1.2, 1, 0.9, 0.4, 1)
     if o ~= nil then
       o.kind = "billow"
-      o.dur = 0.45 + math.random() * 0.4
+      o.dur = 0.3 + math.random() * 0.25
       o.life = o.dur
       o.age = 0
-      o.s0 = 1.0 + math.random() * 0.5
-      o.big = 2.0 + math.random() * 1.2
-      o.flat = 0.45
+      o.s0 = 1.0 + math.random() * 0.4
+      o.big = 1.8 + math.random() * 1.0
+      o.flat = 0.6
       o.vx = math.cos(a) * sp
       o.vz = math.sin(a) * sp
-      o.vy = 0.3 + math.random() * 1.0
+      o.vy = 0.5 + math.random() * 1.2
       o.emit = 1
       o.pattern = 20   -- a soft fire particle
       fx[#fx + 1] = o
     end
   end
-  -- 4. then the dust: low and wide, tan, it comes up just after the fire
-  for i = 1, 4 do
-    local t = math.random()
-    puff(x + (math.random() - 0.5) * 1.6, gh + 0.4, z + (math.random() - 0.5) * 1.6,
-      0.55 + 0.1 * t, 0.46 + 0.1 * t, 0.33 + 0.08 * t, 1.0, 2.2 + math.random() * 1.2, 1.4 + math.random() * 0.8, 0.5, 0.2, 9, 0.2 + math.random() * 0.15)
-  end
-  for i = 1, 4 do
-    local t = math.random()
-    puff(x + (math.random() - 0.5) * 2, by + 0.2 + math.random() * 0.8, z + (math.random() - 0.5) * 2,
-      0.5 + 0.14 * t, 0.4 + 0.12 * t, 0.28 + 0.1 * t, 1.2, 1.6 + math.random() * 0.8, 2 + math.random(), 0.5, 0.4 + math.random() * 0.6, 3, 0.25 + math.random() * 0.3)
-  end
-  -- 5. earth and rubble flying out, and thin hot spark lines
+  -- 4. the dark brown cloud of earth around the fire: it is there at once, stays about two seconds, then thins out
   for i = 1, 5 do
+    local t = math.random()
+    puff(x + (math.random() - 0.5) * 3, by + 0.1 + math.random() * 1.1, z + (math.random() - 0.5) * 3,
+      0.36 + 0.1 * t, 0.28 + 0.08 * t, 0.19 + 0.06 * t, 1.5, 1.4 + math.random() * 0.8, 2 + math.random(), 0.72, 0.3 + math.random() * 0.6, 5, 0.1 + math.random() * 0.2)
+  end
+  for i = 1, 2 do
+    puff(x + (math.random() - 0.5) * 1.6, gh + 0.4, z + (math.random() - 0.5) * 1.6,
+      0.5, 0.42, 0.3, 1.0, 2.4, 1.6, 0.5, 0.2, 9, 0.2)
+  end
+  -- 5. rubble flying out, and fine hot spark lines
+  for i = 1, 4 do
     local a = math.random() * 6.28
     local sp = 4 + math.random() * 9
     local nx, nz = math.cos(a) * sp * 0.15, math.sin(a) * sp * 0.15
     chunk(x, by, z, 0.25 + math.random() * 0.15, 0.2 + math.random() * 0.1, 0.15, 0.2, sp, 5 + math.random() * 7, 1.6, nx / 4, 0, nz / 4)
   end
-  for i = 1, 9 do
+  for i = 1, 22 do
+    local a = math.random() * 6.283
+    local el = math.random() * 1.3
+    spark(x, by + 0.1, z, math.cos(a) * math.cos(el), math.sin(el), math.sin(a) * math.cos(el), 14 + math.random() * 16, 0.22 + math.random() * 0.25, 0.9 + math.random() * 1.3)
+  end
+  for i = 1, 8 do
+    local a = math.random() * 6.283
+    local el = 0.2 + math.random() * 1.1
+    spark(x, by + 0.2, z, math.cos(a) * math.cos(el), math.sin(el), math.sin(a) * math.cos(el), 32 + math.random() * 10, 0.2 + math.random() * 0.1, 2.4 + math.random() * 1.2)
+  end
+  for i = 1, 4 do
     local a = math.random() * 6.28
     streak(x, by, z, 8 + math.random() * 10, 0.7, math.cos(a), 0.6, math.sin(a), 0.4)
   end
@@ -2045,6 +2078,20 @@ function updateFx(dt)
       o.b = o.b0 * (1 - k) + 0.04 * k
       o.emit = 1 - k
       o.opacity = 0.95 * (1 - k * k)
+    elseif o.kind == "spark" then
+      -- a fine hot line: it flies straight out, slows down, gets shorter and fades
+      local drag = math.max(0, 1 - 2.2 * dt)
+      o.vx = o.vx * drag
+      o.vy = o.vy * drag
+      o.vz = o.vz * drag
+      o.x = o.x + o.vx * dt
+      o.y = o.y + o.vy * dt
+      o.z = o.z + o.vz * dt
+      local k = math.max(0, o.life / o.dur)
+      o.sz = o.len * (0.35 + 0.65 * k)
+      o.g = 0.8 + 0.2 * k
+      o.b = 0.25 + 0.5 * k
+      o.opacity = math.min(1, k * 2.2)
     elseif o.kind == "blade" then
       -- one spike of the star-shaped burst: it shoots out along the ground, gets thinner, goes from yellow-white to orange and fades
       o.age = o.age + dt
