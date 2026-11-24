@@ -1214,7 +1214,7 @@ function streak(x, y, z, sp, life, nx, ny, nz, len)
 end
 
 -- a soft cloud (dust, smoke) that grows and fades
-function puff(x, y, z, r, g, b, size, grow, life, op, vy, spread)
+function puff(x, y, z, r, g, b, size, grow, life, op, vy, spread, wait)
   local o = fxSpawn(x, y, z, size, size, size, r, g, b, op)
   if o ~= nil then
     o.kind = "puff"
@@ -1227,6 +1227,10 @@ function puff(x, y, z, r, g, b, size, grow, life, op, vy, spread)
     o.vz = (math.random() - 0.5) * (spread or 0.8)
     o.emit = 0
     o.pattern = 21   -- a soft dust / smoke particle
+    if wait ~= nil and wait > 0 then
+      o.wait = wait
+      o.opacity = 0
+    end
     fx[#fx + 1] = o
   end
   return o
@@ -1645,67 +1649,76 @@ end
 
 function blastFx(x, y, z)
   local gh = groundHeight(x, z) or y
-  local by = math.max(y, gh) + 0.5
-  -- 1. the fire ball: many lumpy blobs flying out at different speeds, so it is a ragged, boiling mass and not one round ball
-  for i = 1, 18 do
+  local by = math.max(y, gh) + 0.35
+  -- 1. the white-hot core: a short, bright, soft flash
+  local f = fxSpawn(x, by + 0.3, z, 1.5, 1.5, 1.5, 1, 0.97, 0.7, 1)
+  if f ~= nil then
+    f.kind = "billow"
+    f.dur = 0.16
+    f.life = 0.16
+    f.age = 0
+    f.s0 = 1.5
+    f.big = 5.5
+    f.flat = 0.7
+    f.vx = 0
+    f.vy = 0.5
+    f.vz = 0
+    f.emit = 1
+    f.pattern = 20
+    fx[#fx + 1] = f
+  end
+  -- 2. THE FIRE: lumpy yellow-orange blobs flying out low and wide (a burst lying on the ground), turning orange, then dark red
+  for i = 1, 16 do
     local a = math.random() * 6.283
-    local up = math.random()
-    local sp = 1.5 + math.random() * 3.2
-    local o = fxSpawn(x + (math.random() - 0.5) * 1.2, by + math.random() * 0.8, z + (math.random() - 0.5) * 1.2, 1.2, 1.2, 1.2, 1, 0.95, 0.55, 0.95)
+    local sp = 2 + math.random() * 4
+    local o = fxSpawn(x + (math.random() - 0.5) * 0.8, by + math.random() * 0.5, z + (math.random() - 0.5) * 0.8, 1.3, 1.3, 1.3, 1, 0.9, 0.4, 1)
     if o ~= nil then
       o.kind = "billow"
-      o.dur = 0.38 + math.random() * 0.4
+      o.dur = 0.5 + math.random() * 0.5
       o.life = o.dur
       o.age = 0
-      o.s0 = 1.2 + math.random() * 0.8
-      o.big = 2.4 + math.random() * 1.8
-      o.flat = 0.8
-      o.vx = math.cos(a) * sp * (1 - 0.4 * up)
-      o.vz = math.sin(a) * sp * (1 - 0.4 * up)
-      o.vy = 1.0 + up * 3.5
+      o.s0 = 1.1 + math.random() * 0.6
+      o.big = 2.6 + math.random() * 1.8
+      o.flat = 0.6
+      o.vx = math.cos(a) * sp
+      o.vz = math.sin(a) * sp
+      o.vy = 0.6 + math.random() * 2.2
       o.emit = 1
       o.pattern = 20   -- a soft fire particle
       fx[#fx + 1] = o
     end
   end
-  -- 2. flame tongues: thick spikes of fire shooting out in every direction, mostly sideways and up
+  -- 3. flame tongues: thick spikes of fire, mostly sideways
   for i = 1, 10 do
     local a = math.random() * 6.283
-    local el = math.random() * 1.1
-    local dx, dz = math.cos(a) * math.cos(el), math.sin(a) * math.cos(el)
-    local dy = math.sin(el)
-    jet(x, by, z, dx, dy, dz, 12 + math.random() * 10, 0.22 + math.random() * 0.2, 0.2 + math.random() * 0.15, 1.4 + math.random() * 1.4, 1, 0.65 + math.random() * 0.3, 0.12)
+    local el = math.random() * 0.9
+    jet(x, by, z, math.cos(a) * math.cos(el), math.sin(el), math.sin(a) * math.cos(el), 10 + math.random() * 8, 0.25 + math.random() * 0.2, 0.25 + math.random() * 0.15, 1.6 + math.random() * 1.4, 1, 0.7 + math.random() * 0.25, 0.12)
   end
-  -- 3. dust racing along the ground, in all directions (low clouds, not a ring)
+  -- 4. then the dust: low and wide, smaller than before, tan, it comes up just after the fire
+  for i = 1, 6 do
+    local t = math.random()
+    puff(x + (math.random() - 0.5) * 1.6, gh + 0.4, z + (math.random() - 0.5) * 1.6,
+      0.55 + 0.1 * t, 0.46 + 0.1 * t, 0.33 + 0.08 * t, 1.0, 2.2 + math.random() * 1.2, 1.4 + math.random() * 0.8, 0.5, 0.2, 9, 0.15 + math.random() * 0.15)
+  end
   for i = 1, 8 do
     local t = math.random()
-    puff(x + (math.random() - 0.5) * 1.5, gh + 0.5, z + (math.random() - 0.5) * 1.5,
-      0.55 + 0.1 * t, 0.46 + 0.1 * t, 0.33 + 0.08 * t, 2.0, 3 + math.random() * 1.6, 1.4 + math.random() * 0.8, 0.55, 0.3, 14)
+    puff(x + (math.random() - 0.5) * 2, by + 0.2 + math.random(), z + (math.random() - 0.5) * 2,
+      0.5 + 0.14 * t, 0.4 + 0.12 * t, 0.28 + 0.1 * t, 1.2, 1.6 + math.random() * 0.8, 2 + math.random(), 0.5, 0.5 + math.random() * 0.7, 3, 0.2 + math.random() * 0.3)
   end
-  -- 4. the earth thrown up: a dark brown column that shoots up and slows down
-  for i = 1, 6 do
-    local o = puff(x + (math.random() - 0.5) * 1.2, by, z + (math.random() - 0.5) * 1.2,
-      0.3, 0.22, 0.15, 1.5, 1.8, 1.4 + math.random() * 0.8, 0.75, 6 + math.random() * 4, 2.5)
-    if o ~= nil then o.vdrag = 1.1 end
-  end
-  -- 5. the brown cloud of dust that rises and stays a while (no black smoke)
-  for i = 1, 16 do
-    local t = math.random()
-    puff(x + (math.random() - 0.5) * 2.4, by + math.random() * 1.0, z + (math.random() - 0.5) * 2.4,
-      0.5 + 0.14 * t, 0.4 + 0.12 * t, 0.28 + 0.1 * t, 2.4, 2.8 + math.random() * 2.2, 2.0 + math.random() * 1.6, 0.6, 0.8 + math.random() * 1.6, 5)
-  end
-  for i = 1, 6 do
-    puff(x + (math.random() - 0.5) * 3, by + 0.5 + math.random() * 1.5, z + (math.random() - 0.5) * 3,
-      0.72, 0.66, 0.54, 3.4, 2.4 + math.random() * 1.5, 3 + math.random() * 1.5, 0.35, 0.6 + math.random(), 3)
+  -- 5. the earth thrown up: dark brown, shoots up and slows down
+  for i = 1, 3 do
+    local o = puff(x + (math.random() - 0.5) * 1.0, by, z + (math.random() - 0.5) * 1.0,
+      0.3, 0.22, 0.15, 0.8, 1.2, 1.0 + math.random() * 0.5, 0.65, 5 + math.random() * 3, 1.5, 0)
+    if o ~= nil then o.vdrag = 1.3 end
   end
   -- 6. earth and rubble flying out, and hot sparks
-  for i = 1, 12 do
+  for i = 1, 8 do
     local a = math.random() * 6.28
     local sp = 4 + math.random() * 9
     local nx, nz = math.cos(a) * sp * 0.15, math.sin(a) * sp * 0.15
     chunk(x, by, z, 0.25 + math.random() * 0.15, 0.2 + math.random() * 0.1, 0.15, 0.2, sp, 5 + math.random() * 7, 1.6, nx / 4, 0, nz / 4)
   end
-  for i = 1, 14 do
+  for i = 1, 10 do
     local a = math.random() * 6.28
     streak(x, by, z, 8 + math.random() * 10, 0.7, math.cos(a), 0.6, math.sin(a), 0.4)
   end
@@ -1947,8 +1960,16 @@ end
 function updateFx(dt)
   for i = #fx, 1, -1 do
     local o = fx[i]
-    o.life = o.life - dt
-    if o.kind == "ripple" then
+    local waiting = o.wait ~= nil and o.wait > 0
+    if waiting then
+      o.wait = o.wait - dt   -- not started yet (the dust follows the fire)
+      o.opacity = 0
+    else
+      o.life = o.life - dt
+    end
+    if waiting then
+      -- nothing to do yet
+    elseif o.kind == "ripple" then
       o.age = o.age + dt
       local k = o.age / 0.9
       o.sx = 0.8 + k * 3.5
