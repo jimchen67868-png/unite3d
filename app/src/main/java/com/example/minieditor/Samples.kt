@@ -1228,6 +1228,7 @@ function puff(x, y, z, r, g, b, size, grow, life, op, vy, spread)
     o.emit = 0
     fx[#fx + 1] = o
   end
+  return o
 end
 
 -- a mark that stays on the surface (a bullet hole, a scorch): a very thin flat cube turned to the surface
@@ -1627,54 +1628,65 @@ function updateGrenades(dt)
   end
 end
 
+-- a thick flame tongue shooting out of the blast (it turns along its flight)
+function jet(x, y, z, dx, dy, dz, sp, life, thick, len, r, g, b)
+  local o = fxSpawn(x, y, z, thick, thick, len, r, g, b, 1, "cube")
+  if o ~= nil then
+    o.kind = "streak"
+    o.vx = dx * sp
+    o.vy = dy * sp
+    o.vz = dz * sp
+    o.life = life
+    o.emit = 1
+    fx[#fx + 1] = o
+  end
+end
+
 function blastFx(x, y, z)
   local gh = groundHeight(x, z) or y
-  local by = math.max(y, gh) + 0.4
-  -- 1. a short, very bright flash
-  local f = fxSpawn(x, by + 0.4, z, 3, 3, 3, 1, 0.92, 0.55, 1)
-  if f ~= nil then
-    f.kind = "blast"
-    f.life = 0.12
-    f.dur = 0.12
-    f.big = 9
-    f.age = 0
-    f.emit = 1
-    fx[#fx + 1] = f
-  end
-  -- 2. the fireball: bright yellow and orange, wide and low, a burst that lies on the ground
-  local cols = { { 1, 0.9, 0.35 }, { 1, 0.72, 0.18 }, { 1, 0.5, 0.1 }, { 0.95, 0.38, 0.07 } }
-  for i = 1, 4 do
-    local c = cols[i]
-    local o = fxSpawn(x + (math.random() - 0.5) * 1.8, by + 0.2 + i * 0.12, z + (math.random() - 0.5) * 1.8, 1.4, 1.4, 1.4, c[1], c[2], c[3], 0.95)
+  local by = math.max(y, gh) + 0.5
+  -- 1. the fire ball: many lumpy blobs flying out at different speeds, so it is a ragged, boiling mass and not one round ball
+  for i = 1, 18 do
+    local a = math.random() * 6.283
+    local up = math.random()
+    local sp = 2.5 + math.random() * 5
+    local o = fxSpawn(x + (math.random() - 0.5) * 1.2, by + math.random() * 0.8, z + (math.random() - 0.5) * 1.2, 0.9, 0.9, 0.9, 1, 0.95, 0.55, 0.95)
     if o ~= nil then
-      o.kind = "fire"
-      o.life = 0.45 + i * 0.12
-      o.dur = o.life
+      o.kind = "billow"
+      o.dur = 0.38 + math.random() * 0.4
+      o.life = o.dur
       o.age = 0
-      o.s0 = 1.4
-      o.big = 4.2 + i * 0.9
-      o.flat = 0.62
-      o.vy = 0.8 + i * 0.35
-      o.g0 = c[2]
-      o.b0 = c[3]
+      o.s0 = 0.8 + math.random() * 0.6
+      o.big = 1.6 + math.random() * 1.8
+      o.flat = 0.8
+      o.vx = math.cos(a) * sp * (1 - 0.4 * up)
+      o.vz = math.sin(a) * sp * (1 - 0.4 * up)
+      o.vy = 1.5 + up * 5
       o.emit = 1
       fx[#fx + 1] = o
     end
   end
-  -- 3. the dust ring racing over the ground (earth coloured)
-  local ring = fxSpawn(x, gh + 0.3, z, 2, 0.35, 2, 0.62, 0.52, 0.38, 0.6)
-  if ring ~= nil then
-    ring.kind = "ring"
-    ring.life = 0.8
-    ring.dur = 0.8
-    ring.age = 0
-    ring.s0 = 2
-    ring.big = 28
-    ring.op = 0.6
-    ring.emit = 0
-    fx[#fx + 1] = ring
+  -- 2. flame tongues: thick spikes of fire shooting out in every direction, mostly sideways and up
+  for i = 1, 10 do
+    local a = math.random() * 6.283
+    local el = math.random() * 1.1
+    local dx, dz = math.cos(a) * math.cos(el), math.sin(a) * math.cos(el)
+    local dy = math.sin(el)
+    jet(x, by, z, dx, dy, dz, 12 + math.random() * 10, 0.22 + math.random() * 0.2, 0.2 + math.random() * 0.15, 1.4 + math.random() * 1.4, 1, 0.65 + math.random() * 0.3, 0.12)
   end
-  -- 4. the brown cloud of earth and dust that rises and stays a while (no black smoke)
+  -- 3. dust racing along the ground, in all directions (low clouds, not a ring)
+  for i = 1, 8 do
+    local t = math.random()
+    puff(x + (math.random() - 0.5) * 1.5, gh + 0.5, z + (math.random() - 0.5) * 1.5,
+      0.55 + 0.1 * t, 0.46 + 0.1 * t, 0.33 + 0.08 * t, 1.4, 3 + math.random() * 1.6, 1.4 + math.random() * 0.8, 0.5, 0.3, 14)
+  end
+  -- 4. the earth thrown up: a dark brown column that shoots up and slows down
+  for i = 1, 6 do
+    local o = puff(x + (math.random() - 0.5) * 1.2, by, z + (math.random() - 0.5) * 1.2,
+      0.3, 0.22, 0.15, 1.0, 1.5, 1.4 + math.random() * 0.8, 0.7, 6 + math.random() * 4, 2.5)
+    if o ~= nil then o.vdrag = 1.1 end
+  end
+  -- 5. the brown cloud of dust that rises and stays a while (no black smoke)
   for i = 1, 16 do
     local t = math.random()
     puff(x + (math.random() - 0.5) * 2.4, by + math.random() * 1.0, z + (math.random() - 0.5) * 2.4,
@@ -1684,27 +1696,23 @@ function blastFx(x, y, z)
     puff(x + (math.random() - 0.5) * 3, by + 0.5 + math.random() * 1.5, z + (math.random() - 0.5) * 3,
       0.72, 0.66, 0.54, 2.4, 2 + math.random() * 1.5, 3 + math.random() * 1.5, 0.3, 0.6 + math.random(), 3)
   end
-  for i = 1, 4 do
-    puff(x + (math.random() - 0.5) * 1.6, by + math.random() * 0.8, z + (math.random() - 0.5) * 1.6,
-      0.22, 0.17, 0.12, 1.2, 1.8, 1.6 + math.random(), 0.55, 1 + math.random(), 3)
-  end
-  -- 5. earth and rubble thrown out, and hot sparks
-  for i = 1, 14 do
+  -- 6. earth and rubble flying out, and hot sparks
+  for i = 1, 12 do
     local a = math.random() * 6.28
     local sp = 4 + math.random() * 9
     local nx, nz = math.cos(a) * sp * 0.15, math.sin(a) * sp * 0.15
     chunk(x, by, z, 0.25 + math.random() * 0.15, 0.2 + math.random() * 0.1, 0.15, 0.2, sp, 5 + math.random() * 7, 1.6, nx / 4, 0, nz / 4)
   end
-  for i = 1, 22 do
+  for i = 1, 14 do
     local a = math.random() * 6.28
     streak(x, by, z, 8 + math.random() * 10, 0.7, math.cos(a), 0.6, math.sin(a), 0.4)
   end
-  -- 6. a black scorch mark on the ground
+  -- 7. a black scorch mark on the ground
   if math.abs(y - gh) < 3 then
     decal(x, gh + 0.04, z, 0, 1, 0, 5.5, 0.1, 0.09, 0.08, 0.35, 40)
     decal(x, gh + 0.05, z, 0, 1, 0, 3, 0.04, 0.035, 0.03, 0.8, 40)
   end
-  -- 7. the view shakes when you are close
+  -- 8. the view shakes when you are close
   local sdx, sdz = self.x - x, self.z - z
   local sd = math.sqrt(sdx * sdx + sdz * sdz)
   if sd < 30 then
@@ -1993,6 +2001,34 @@ function updateFx(dt)
       o.b = o.b0 * (1 - k) + 0.04 * k
       o.emit = 1 - k
       o.opacity = 0.95 * (1 - k * k)
+    elseif o.kind == "billow" then
+      -- one blob of the fire ball: it flies out, slows down, swells, and goes from white-yellow to orange to dark red
+      o.age = o.age + dt
+      local k = math.min(1, o.age / o.dur)
+      local drag = math.max(0, 1 - 3.2 * dt)
+      o.vx = o.vx * drag
+      o.vz = o.vz * drag
+      o.vy = o.vy * drag + 0.9 * dt
+      o.x = o.x + o.vx * dt
+      o.y = o.y + o.vy * dt
+      o.z = o.z + o.vz * dt
+      local sz = o.s0 + (o.big - o.s0) * (1 - (1 - k) * (1 - k))
+      o.sx = sz
+      o.sy = sz * (o.flat or 0.85)
+      o.sz = sz
+      if k < 0.35 then
+        local t = k / 0.35
+        o.r = 1
+        o.g = 0.95 - 0.35 * t
+        o.b = 0.55 - 0.45 * t
+      else
+        local t = (k - 0.35) / 0.65
+        o.r = 1 - 0.55 * t
+        o.g = 0.6 - 0.42 * t
+        o.b = 0.1 - 0.04 * t
+      end
+      o.emit = 1 - k * 0.8
+      o.opacity = 0.95 * (1 - k * k * k)
     elseif o.kind == "ring" then
       o.age = o.age + dt
       local k = math.min(1, o.age / o.dur)
@@ -2003,6 +2039,7 @@ function updateFx(dt)
       local drag = math.max(0, 1 - 1.4 * dt)
       o.vx = o.vx * drag
       o.vz = o.vz * drag
+      if o.vdrag ~= nil then o.vy = o.vy * math.max(0, 1 - o.vdrag * dt) end
       o.x = o.x + o.vx * dt
       o.y = o.y + o.vy * dt
       o.z = o.z + o.vz * dt
