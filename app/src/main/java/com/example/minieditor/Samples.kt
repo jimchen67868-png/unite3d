@@ -1708,14 +1708,14 @@ function blastFx(x, y, z)
   local gh = groundHeight(x, z) or y
   local by = math.max(y, gh) + 0.4
   -- 1. the flash
-  local f = fxSpawn(x, by + 0.4, z, 1.6, 1.6, 1.6, 1, 0.97, 0.6, 1)
+  local f = fxSpawn(x, by + 0.4, z, 1.0, 1.0, 1.0, 1, 0.97, 0.6, 1)
   if f ~= nil then
     f.kind = "billow"
     f.dur = 0.17
     f.life = 0.17
     f.age = 0
-    f.s0 = 1.6
-    f.big = 4.6
+    f.s0 = 1.0
+    f.big = 2.8
     f.flat = 0.85
     f.vx = 0
     f.vy = 0.6
@@ -1723,6 +1723,15 @@ function blastFx(x, y, z)
     f.emit = 1
     f.pattern = 20
     fx[#fx + 1] = f
+  end
+  -- 1b. ragged petals of light around the core, long and short, in all directions (so the flash has an uneven, spiky outline)
+  for i = 1, 10 do
+    local a = (i / 10) * 6.283 + (math.random() - 0.5) * 0.8
+    local el = -0.1 + math.random() * 1.4
+    local len = 1.6 + math.random() * 1.8
+    if i % 2 == 0 then len = len * 0.65 end
+    local w = 0.55 + math.random() * 0.4
+    blade(x, by + 0.4, z, math.cos(a) * math.cos(el), math.sin(el), math.sin(a) * math.cos(el), len, w, w, 0.13 + math.random() * 0.06)
   end
   -- 2. the burst: flat flame tongues in every direction, and short white spark lines (only for a moment)
   for i = 1, 12 do
@@ -1743,7 +1752,12 @@ function blastFx(x, y, z)
     spark(x, by + 0.3, z, math.cos(a) * math.cos(el), math.sin(el), math.sin(a) * math.cos(el), 26 + math.random() * 10, 0.09 + math.random() * 0.05, 1.2 + math.random() * 0.8, 0.04)
   end
   -- 3. the small orange-red flame that is left in the middle
-  for i = 1, 3 do
+  for i = 1, 4 do
+    local a = math.random() * 6.283
+    local el = 0.9 + math.random() * 0.5
+    blade(x, by, z, math.cos(a) * math.cos(el), math.sin(el), math.sin(a) * math.cos(el), 0.9 + math.random() * 0.9, 0.5, 0.5, 0.16, 0.1)
+  end
+  for i = 1, 2 do
     local a = math.random() * 6.283
     local o = fxSpawn(x + (math.random() - 0.5) * 0.8, by + math.random() * 0.4, z + (math.random() - 0.5) * 0.8, 1.2, 1.2, 1.2, 1, 0.6, 0.15, 1)
     if o ~= nil then
@@ -1770,12 +1784,20 @@ function blastFx(x, y, z)
     local t = math.random()
     local o = puff(x + (math.random() - 0.5) * 5, gh + 0.4 + math.random() * 0.9, z + (math.random() - 0.5) * 5,
       0.36 + 0.08 * t, 0.28 + 0.07 * t, 0.2 + 0.05 * t, 1.8, 1.4 + math.random() * 1.2, 0.5 + math.random() * 0.35, 0.78, 0.1 + math.random() * 0.4, 3, 0.07 + math.random() * 0.12)
-    if o ~= nil then o.flat = 0.6 end
+    if o ~= nil then
+      o.flat = 0.35 + math.random() * 0.4
+      o.asp = 0.5 + math.random() * 1.3
+      o.ry = math.random() * 360
+    end
   end
   for i = 1, 3 do
     local o = puff(x + (math.random() - 0.5) * 4, gh + 0.7 + math.random() * 0.6, z + (math.random() - 0.5) * 4,
       0.55, 0.5, 0.4, 2.0, 1.4, 0.9, 0.35, 0.3, 2, 0.3)
-    if o ~= nil then o.flat = 0.6 end
+    if o ~= nil then
+      o.flat = 0.4 + math.random() * 0.3
+      o.asp = 0.6 + math.random() * 1.0
+      o.ry = math.random() * 360
+    end
   end
   -- 5. two bits of rubble
   for i = 1, 2 do
@@ -2171,7 +2193,7 @@ function updateFx(dt)
       o.z = o.z + o.vz * dt
       o.sx = o.sx + o.grow * dt
       o.sy = o.sx * (o.flat or 1)
-      o.sz = o.sx
+      o.sz = o.sx * (o.asp or 1)
       o.opacity = o.op * math.min(1, o.life / (o.dur * 0.7))
     elseif o.kind == "smoke" then
       o.x = o.x + o.vx * dt
