@@ -346,6 +346,7 @@ class ScriptEngine(private val scene: Scene, private val log: (String) -> Unit) 
         num(t, "opacity")?.let { val v = it.coerceIn(0f, 1f); if (v != o.opacity) { o.opacity = v; ch = true } }
         num(t, "emit")?.let { val v = it.coerceIn(0f, 1f); if (v != o.emit) { o.emit = v; ch = true } }
         num(t, "swing")?.let { val v = it.coerceIn(-170f, 170f); if (v != o.swing) { o.swing = v; ch = true } }
+        num(t, "pattern")?.let { val v = it.toInt().coerceIn(0, 40); if (v != o.pattern) { o.pattern = v; ch = true } }
         t.get("shadow").let { if (it.isboolean() && it.toboolean() != o.shadow) { o.shadow = it.toboolean(); ch = true } }
         t.get("hud").let { if (it.isboolean() && it.toboolean() != o.hud) { o.hud = it.toboolean(); ch = true } }
         val r = (num(t, "r") ?: o.color[0]).coerceIn(0f, 1f)

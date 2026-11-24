@@ -599,6 +599,21 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
                 c = mix(base * 0.35, mr, 0.93) + spec * uSpec * 0.3;
                 alpha = 1.0;
             }
+            if (uPattern > 19.5) {
+                // a soft particle (fire or dust): the edge fades out, there is no lighting on it, and a noise breaks up the round shape,
+                // so a pile of them looks like a ragged, boiling cloud and not like a heap of balls
+                float pn = vnoise(vL * 4.5 + vec3(uObjScale.x * 2.7, uObjScale.y * 1.3, 0.0));
+                float soft = clamp((nv - 0.10 + (pn - 0.5) * 0.9) * 2.4, 0.0, 1.0);
+                soft = soft * soft * (3.0 - 2.0 * soft);
+                alpha = uColor.a * soft;
+                if (uPattern < 20.5) {
+                    // fire: a hot bright middle and a deeper colour at the rim
+                    c = uColor.rgb * (1.0 + 0.9 * pow(nv, 2.0)) * (0.8 + 0.4 * pn);
+                } else {
+                    // dust and smoke: soft light from above, a little lighter in the middle
+                    c = uColor.rgb * (0.6 + 0.5 * max(light.r, 0.3)) * (0.85 + 0.3 * pn) * (0.9 + 0.2 * nv);
+                }
+            }
             if (uFogEnd > 0.0) {
                 float fd = length(vW - uEye);
                 float ff = clamp((fd - uFogEnd * 0.3) / (uFogEnd * 0.7), 0.0, 1.0);
@@ -2172,10 +2187,13 @@ class SceneRenderer(private val scene: Scene) : GLSurfaceView.Renderer {
                 // too small to see from this far (under about 0.6% of the distance): skip
                 val ddx = o.x - eyeC[0]; val ddy = cy - eyeC[1]; val ddz = o.z - eyeC[2]
                 val d2 = ddx * ddx + ddy * ddy + ddz * ddz
-                if (rad * rad < d2 * 0.000036f) continue
+                // the parts of a person (arms and legs always were drawn) are bound parts: they stay together, so a far enemy
+                // is not left as floating legs and hands - they are only dropped by the normal rules beyond 600 m
+                val keepBound = o.parentId != 0 && d2 < 360000f
+                if (!keepBound && rad * rad < d2 * 0.000036f) continue
                 // a draw distance: anything not big is not drawn beyond this (trees earlier, they have many triangles)
                 val maxD = if (o.shape == Shape.TREE) viewD * 0.68f else viewD
-                if (rad < 14f && d2 > maxD * maxD) continue
+                if (!keepBound && rad < 14f && d2 > maxD * maxD) continue
                 var out = false
                 for (p in 0 until 6) {
                     if (fr[p * 4] * o.x + fr[p * 4 + 1] * cy + fr[p * 4 + 2] * o.z + fr[p * 4 + 3] < -rad) { out = true; break }

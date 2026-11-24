@@ -1226,6 +1226,7 @@ function puff(x, y, z, r, g, b, size, grow, life, op, vy, spread)
     o.vy = vy
     o.vz = (math.random() - 0.5) * (spread or 0.8)
     o.emit = 0
+    o.pattern = 21   -- a soft dust / smoke particle
     fx[#fx + 1] = o
   end
   return o
@@ -1649,20 +1650,21 @@ function blastFx(x, y, z)
   for i = 1, 18 do
     local a = math.random() * 6.283
     local up = math.random()
-    local sp = 2.5 + math.random() * 5
-    local o = fxSpawn(x + (math.random() - 0.5) * 1.2, by + math.random() * 0.8, z + (math.random() - 0.5) * 1.2, 0.9, 0.9, 0.9, 1, 0.95, 0.55, 0.95)
+    local sp = 1.5 + math.random() * 3.2
+    local o = fxSpawn(x + (math.random() - 0.5) * 1.2, by + math.random() * 0.8, z + (math.random() - 0.5) * 1.2, 1.2, 1.2, 1.2, 1, 0.95, 0.55, 0.95)
     if o ~= nil then
       o.kind = "billow"
       o.dur = 0.38 + math.random() * 0.4
       o.life = o.dur
       o.age = 0
-      o.s0 = 0.8 + math.random() * 0.6
-      o.big = 1.6 + math.random() * 1.8
+      o.s0 = 1.2 + math.random() * 0.8
+      o.big = 2.4 + math.random() * 1.8
       o.flat = 0.8
       o.vx = math.cos(a) * sp * (1 - 0.4 * up)
       o.vz = math.sin(a) * sp * (1 - 0.4 * up)
-      o.vy = 1.5 + up * 5
+      o.vy = 1.0 + up * 3.5
       o.emit = 1
+      o.pattern = 20   -- a soft fire particle
       fx[#fx + 1] = o
     end
   end
@@ -1678,23 +1680,23 @@ function blastFx(x, y, z)
   for i = 1, 8 do
     local t = math.random()
     puff(x + (math.random() - 0.5) * 1.5, gh + 0.5, z + (math.random() - 0.5) * 1.5,
-      0.55 + 0.1 * t, 0.46 + 0.1 * t, 0.33 + 0.08 * t, 1.4, 3 + math.random() * 1.6, 1.4 + math.random() * 0.8, 0.5, 0.3, 14)
+      0.55 + 0.1 * t, 0.46 + 0.1 * t, 0.33 + 0.08 * t, 2.0, 3 + math.random() * 1.6, 1.4 + math.random() * 0.8, 0.55, 0.3, 14)
   end
   -- 4. the earth thrown up: a dark brown column that shoots up and slows down
   for i = 1, 6 do
     local o = puff(x + (math.random() - 0.5) * 1.2, by, z + (math.random() - 0.5) * 1.2,
-      0.3, 0.22, 0.15, 1.0, 1.5, 1.4 + math.random() * 0.8, 0.7, 6 + math.random() * 4, 2.5)
+      0.3, 0.22, 0.15, 1.5, 1.8, 1.4 + math.random() * 0.8, 0.75, 6 + math.random() * 4, 2.5)
     if o ~= nil then o.vdrag = 1.1 end
   end
   -- 5. the brown cloud of dust that rises and stays a while (no black smoke)
   for i = 1, 16 do
     local t = math.random()
     puff(x + (math.random() - 0.5) * 2.4, by + math.random() * 1.0, z + (math.random() - 0.5) * 2.4,
-      0.5 + 0.14 * t, 0.4 + 0.12 * t, 0.28 + 0.1 * t, 1.6, 2.4 + math.random() * 2.2, 2.0 + math.random() * 1.6, 0.6, 0.8 + math.random() * 1.6, 5)
+      0.5 + 0.14 * t, 0.4 + 0.12 * t, 0.28 + 0.1 * t, 2.4, 2.8 + math.random() * 2.2, 2.0 + math.random() * 1.6, 0.6, 0.8 + math.random() * 1.6, 5)
   end
   for i = 1, 6 do
     puff(x + (math.random() - 0.5) * 3, by + 0.5 + math.random() * 1.5, z + (math.random() - 0.5) * 3,
-      0.72, 0.66, 0.54, 2.4, 2 + math.random() * 1.5, 3 + math.random() * 1.5, 0.3, 0.6 + math.random(), 3)
+      0.72, 0.66, 0.54, 3.4, 2.4 + math.random() * 1.5, 3 + math.random() * 1.5, 0.35, 0.6 + math.random(), 3)
   end
   -- 6. earth and rubble flying out, and hot sparks
   for i = 1, 12 do
