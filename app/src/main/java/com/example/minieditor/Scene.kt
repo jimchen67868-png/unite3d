@@ -306,21 +306,62 @@ class Scene {
         val s = selected ?: return null
         if (!canCopy(s)) return null
         if (s.shape.isLight && !canAddLight(s.shape)) return null
-        val o = cloneOf(s, s.name + " copy", 1f)
-        objects.add(o)
-        selected = o
-        return o
+        val made = cloneFamily(familyOf(s), 1f, uniqueName(s.name))
+        objects.addAll(made)
+        selected = made[0]
+        return made[0]
+    }
+
+    /** The object and everything attached under it (a person with all its parts, a vehicle with its parts); the object itself is first. */
+    private fun familyOf(s: SceneObject): List<SceneObject> {
+        val fam = ArrayList<SceneObject>()
+        fam.add(s)
+        if (s.uid != 0) for (o in objects) if (o !== s && Rig.isDescendant(this, o, s)) fam.add(o)
+        return fam
+    }
+
+    /** A name nobody uses yet: "Bot 3 copy", "Bot 3 copy 2", ... (scripts find their parts by name, so copies need their own). */
+    private fun uniqueName(base0: String): String {
+        val base = base0.replace(Regex(" copy( \\d+)?$"), "")
+        if (objects.none { it.name == base }) return base
+        var n = 1
+        while (true) {
+            val nm = if (n == 1) base + " copy" else base + " copy " + n
+            if (objects.none { it.name == nm }) return nm
+            n++
+        }
+    }
+
+    /** New objects for a whole family: the parts get their own ids and are attached to the NEW first object, and are named after it. */
+    private fun cloneFamily(fam: List<SceneObject>, dx: Float, rootName: String): List<SceneObject> {
+        val root = fam[0]
+        val out = ArrayList<SceneObject>()
+        for ((i, s) in fam.withIndex()) {
+            val nm = if (i == 0) rootName else if (s.name.startsWith(root.name)) rootName + s.name.substring(root.name.length) else s.name
+            out.add(cloneOf(s, nm, dx))
+        }
+        val map = HashMap<Int, Int>()
+        for (i in fam.indices) if (fam[i].uid != 0) {
+            out[i].uid = 0
+            Rig.ensureUid(out[i])
+            map[fam[i].uid] = out[i].uid
+        }
+        for (i in 1 until fam.size) {
+            val np = map[fam[i].parentId]
+            if (np != null) out[i].parentId = np
+        }
+        return out
     }
 
     // ---------- clipboard ----------
-    private var clipboard: SceneObject? = null
+    private var clipFam: List<SceneObject> = emptyList()   // the remembered object with all its parts
     private var pasteCount = 0
 
     /** Remembers a copy of the selected object. False if nothing copyable is selected. */
     fun copySelected(): Boolean {
         val s = selected ?: return false
         if (!canCopy(s)) return false
-        clipboard = cloneOf(s, s.name, 0f)
+        clipFam = cloneFamily(familyOf(s), 0f, s.name)
         pasteCount = 0
         return true
     }
@@ -328,27 +369,31 @@ class Scene {
     /** Copy, then remove. */
     fun cutSelected(): Boolean {
         if (!copySelected()) return false
+        val s = selected
+        if (s != null) objects.removeAll(familyOf(s).drop(1).toSet())   // its parts go with it
         removeSelected()
         return true
     }
 
     /** Adds the remembered object, a little further over each time. Null if the clipboard is empty or a light limit is reached. */
     fun paste(): SceneObject? {
-        val c = clipboard ?: return null
+        if (clipFam.isEmpty()) return null
+        val c = clipFam[0]
         if (c.shape.isLight && !canAddLight(c.shape)) return null
         pasteCount++
-        val o = cloneOf(c, c.name, pasteCount.toFloat())
-        objects.add(o)
-        selected = o
-        return o
+        // the remembered copy stays: paste as many times as you like, each with its own parts and its own name
+        val made = cloneFamily(clipFam, pasteCount.toFloat(), uniqueName(c.name))
+        objects.addAll(made)
+        selected = made[0]
+        return made[0]
     }
 
-    fun hasClipboard(): Boolean = clipboard != null
+    fun hasClipboard(): Boolean = clipFam.isNotEmpty()
 
     fun removeSelected() {
         val s = selected
         if (s != null) {
-            if (isGroup(s)) objects.removeAll(objects.filter { it !== s && Rig.isDescendant(this, it, s) }.toSet())
+            if (s.uid != 0) objects.removeAll(objects.filter { it !== s && Rig.isDescendant(this, it, s) }.toSet())
             objects.remove(s)
         }
         selected = null
@@ -358,7 +403,7 @@ class Scene {
     /** Deletes every object picked in Multi mode. */
     fun removeMulti() {
         for (o in multi.toList()) {
-            if (isGroup(o)) objects.removeAll(objects.filter { it !== o && Rig.isDescendant(this, it, o) }.toSet())
+            if (o.uid != 0) objects.removeAll(objects.filter { it !== o && Rig.isDescendant(this, it, o) }.toSet())
             objects.remove(o)
         }
         multi.clear()
