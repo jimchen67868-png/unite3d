@@ -1647,87 +1647,107 @@ function jet(x, y, z, dx, dy, dz, sp, life, thick, len, r, g, b)
   end
 end
 
+-- one flat flame spike of the burst (it lies on the ground and shoots outward)
+function blade(x, y, z, dx, dy, dz, len, w, th, life)
+  local o = fxSpawn(x, y, z, w, th, 0.4, 1, 0.95, 0.5, 1, "cube")
+  if o ~= nil then
+    o.kind = "blade"
+    o.cx = x
+    o.cy = y
+    o.cz = z
+    o.dx = dx
+    o.dy = dy
+    o.dz = dz
+    o.big = len
+    o.w = w
+    o.th = th
+    o.dur = life
+    o.life = life
+    o.age = 0
+    o.ry = math.deg(math.atan2(dx, dz))
+    o.rx = -math.deg(math.asin(dy))
+    o.emit = 1
+    fx[#fx + 1] = o
+  end
+end
+
 function blastFx(x, y, z)
   local gh = groundHeight(x, z) or y
-  local by = math.max(y, gh) + 0.35
-  -- 1. the white-hot core: a short, bright, soft flash
-  local f = fxSpawn(x, by + 0.3, z, 1.5, 1.5, 1.5, 1, 0.97, 0.7, 1)
+  local by = math.max(y, gh) + 0.3
+  -- 1. the bright centre: a wide, FLAT, glowing yellow-white patch (the burst lies on the ground, it is not a tall ball)
+  local f = fxSpawn(x, by + 0.2, z, 2, 2, 2, 1, 0.97, 0.7, 1)
   if f ~= nil then
     f.kind = "billow"
-    f.dur = 0.16
-    f.life = 0.16
+    f.dur = 0.26
+    f.life = 0.26
     f.age = 0
-    f.s0 = 1.5
-    f.big = 5.5
-    f.flat = 0.7
+    f.s0 = 2
+    f.big = 6.5
+    f.flat = 0.32
     f.vx = 0
-    f.vy = 0.5
+    f.vy = 0.4
     f.vz = 0
     f.emit = 1
     f.pattern = 20
     fx[#fx + 1] = f
   end
-  -- 2. THE FIRE: lumpy yellow-orange blobs flying out low and wide (a burst lying on the ground), turning orange, then dark red
-  for i = 1, 16 do
+  -- 2. THE STAR: 18 flat flame spikes shooting out along the ground in every direction, of different lengths (the ragged outline)
+  for i = 1, 18 do
+    local a = (i / 18) * 6.283 + (math.random() - 0.5) * 0.35
+    local len = 2.4 + math.random() * 3.4
+    if i % 3 == 0 then len = len * 0.6 end
+    local el = math.random() * 0.35
+    blade(x, by + math.random() * 0.25, z, math.cos(a) * math.cos(el), math.sin(el), math.sin(a) * math.cos(el), len, 0.45 + math.random() * 0.5, 0.22 + math.random() * 0.12, 0.3 + math.random() * 0.22)
+  end
+  -- 3. a few fire lumps between the spikes: low, wide, flat
+  for i = 1, 8 do
     local a = math.random() * 6.283
-    local sp = 2 + math.random() * 4
-    local o = fxSpawn(x + (math.random() - 0.5) * 0.8, by + math.random() * 0.5, z + (math.random() - 0.5) * 0.8, 1.3, 1.3, 1.3, 1, 0.9, 0.4, 1)
+    local sp = 3 + math.random() * 3
+    local o = fxSpawn(x + (math.random() - 0.5) * 0.8, by + math.random() * 0.3, z + (math.random() - 0.5) * 0.8, 1.2, 1.2, 1.2, 1, 0.9, 0.4, 1)
     if o ~= nil then
       o.kind = "billow"
-      o.dur = 0.5 + math.random() * 0.5
+      o.dur = 0.45 + math.random() * 0.4
       o.life = o.dur
       o.age = 0
-      o.s0 = 1.1 + math.random() * 0.6
-      o.big = 2.6 + math.random() * 1.8
-      o.flat = 0.6
+      o.s0 = 1.0 + math.random() * 0.5
+      o.big = 2.0 + math.random() * 1.2
+      o.flat = 0.45
       o.vx = math.cos(a) * sp
       o.vz = math.sin(a) * sp
-      o.vy = 0.6 + math.random() * 2.2
+      o.vy = 0.3 + math.random() * 1.0
       o.emit = 1
       o.pattern = 20   -- a soft fire particle
       fx[#fx + 1] = o
     end
   end
-  -- 3. flame tongues: thick spikes of fire, mostly sideways
-  for i = 1, 10 do
-    local a = math.random() * 6.283
-    local el = math.random() * 0.9
-    jet(x, by, z, math.cos(a) * math.cos(el), math.sin(el), math.sin(a) * math.cos(el), 10 + math.random() * 8, 0.25 + math.random() * 0.2, 0.25 + math.random() * 0.15, 1.6 + math.random() * 1.4, 1, 0.7 + math.random() * 0.25, 0.12)
-  end
-  -- 4. then the dust: low and wide, smaller than before, tan, it comes up just after the fire
+  -- 4. then the dust: low and wide, tan, it comes up just after the fire
   for i = 1, 6 do
     local t = math.random()
     puff(x + (math.random() - 0.5) * 1.6, gh + 0.4, z + (math.random() - 0.5) * 1.6,
-      0.55 + 0.1 * t, 0.46 + 0.1 * t, 0.33 + 0.08 * t, 1.0, 2.2 + math.random() * 1.2, 1.4 + math.random() * 0.8, 0.5, 0.2, 9, 0.15 + math.random() * 0.15)
+      0.55 + 0.1 * t, 0.46 + 0.1 * t, 0.33 + 0.08 * t, 1.0, 2.2 + math.random() * 1.2, 1.4 + math.random() * 0.8, 0.5, 0.2, 9, 0.2 + math.random() * 0.15)
   end
-  for i = 1, 8 do
+  for i = 1, 6 do
     local t = math.random()
-    puff(x + (math.random() - 0.5) * 2, by + 0.2 + math.random(), z + (math.random() - 0.5) * 2,
-      0.5 + 0.14 * t, 0.4 + 0.12 * t, 0.28 + 0.1 * t, 1.2, 1.6 + math.random() * 0.8, 2 + math.random(), 0.5, 0.5 + math.random() * 0.7, 3, 0.2 + math.random() * 0.3)
+    puff(x + (math.random() - 0.5) * 2, by + 0.2 + math.random() * 0.8, z + (math.random() - 0.5) * 2,
+      0.5 + 0.14 * t, 0.4 + 0.12 * t, 0.28 + 0.1 * t, 1.2, 1.6 + math.random() * 0.8, 2 + math.random(), 0.5, 0.4 + math.random() * 0.6, 3, 0.25 + math.random() * 0.3)
   end
-  -- 5. the earth thrown up: dark brown, shoots up and slows down
-  for i = 1, 3 do
-    local o = puff(x + (math.random() - 0.5) * 1.0, by, z + (math.random() - 0.5) * 1.0,
-      0.3, 0.22, 0.15, 0.8, 1.2, 1.0 + math.random() * 0.5, 0.65, 5 + math.random() * 3, 1.5, 0)
-    if o ~= nil then o.vdrag = 1.3 end
-  end
-  -- 6. earth and rubble flying out, and hot sparks
+  -- 5. earth and rubble flying out, and thin hot spark lines
   for i = 1, 8 do
     local a = math.random() * 6.28
     local sp = 4 + math.random() * 9
     local nx, nz = math.cos(a) * sp * 0.15, math.sin(a) * sp * 0.15
     chunk(x, by, z, 0.25 + math.random() * 0.15, 0.2 + math.random() * 0.1, 0.15, 0.2, sp, 5 + math.random() * 7, 1.6, nx / 4, 0, nz / 4)
   end
-  for i = 1, 10 do
+  for i = 1, 14 do
     local a = math.random() * 6.28
     streak(x, by, z, 8 + math.random() * 10, 0.7, math.cos(a), 0.6, math.sin(a), 0.4)
   end
-  -- 7. a black scorch mark on the ground
+  -- 6. a black scorch mark on the ground
   if math.abs(y - gh) < 3 then
     decal(x, gh + 0.04, z, 0, 1, 0, 5.5, 0.1, 0.09, 0.08, 0.35, 40)
     decal(x, gh + 0.05, z, 0, 1, 0, 3, 0.04, 0.035, 0.03, 0.8, 40)
   end
-  -- 8. the view shakes when you are close
+  -- 7. the view shakes when you are close
   local sdx, sdz = self.x - x, self.z - z
   local sd = math.sqrt(sdx * sdx + sdz * sdz)
   if sd < 30 then
@@ -2024,6 +2044,24 @@ function updateFx(dt)
       o.b = o.b0 * (1 - k) + 0.04 * k
       o.emit = 1 - k
       o.opacity = 0.95 * (1 - k * k)
+    elseif o.kind == "blade" then
+      -- one spike of the star-shaped burst: it shoots out along the ground, gets thinner, goes from yellow-white to orange and fades
+      o.age = o.age + dt
+      local k = math.min(1, o.age / o.dur)
+      local e = 1 - (1 - k) * (1 - k)
+      local len = 0.4 + (o.big - 0.4) * e
+      o.sz = len
+      o.sx = o.w * (1 - 0.55 * k)
+      o.sy = o.th * (1 - 0.5 * k)
+      local d = len * 0.5 + 0.2
+      o.x = o.cx + o.dx * d
+      o.z = o.cz + o.dz * d
+      o.y = o.cy + o.dy * d
+      o.r = 1
+      o.g = 0.95 - 0.4 * k
+      o.b = 0.5 - 0.4 * k
+      o.emit = 1
+      o.opacity = 1 - k * k
     elseif o.kind == "billow" then
       -- one blob of the fire ball: it flies out, slows down, swells, and goes from white-yellow to orange to dark red
       o.age = o.age + dt
@@ -2039,19 +2077,24 @@ function updateFx(dt)
       o.sx = sz
       o.sy = sz * (o.flat or 0.85)
       o.sz = sz
-      if k < 0.35 then
-        local t = k / 0.35
+      if k < 0.3 then
+        local t = k / 0.3
         o.r = 1
-        o.g = 0.95 - 0.35 * t
-        o.b = 0.55 - 0.45 * t
+        o.g = 0.97 - 0.12 * t
+        o.b = 0.6 - 0.3 * t
+      elseif k < 0.7 then
+        local t = (k - 0.3) / 0.4
+        o.r = 1
+        o.g = 0.85 - 0.3 * t
+        o.b = 0.3 - 0.2 * t
       else
-        local t = (k - 0.35) / 0.65
-        o.r = 1 - 0.55 * t
-        o.g = 0.6 - 0.42 * t
-        o.b = 0.1 - 0.04 * t
+        local t = (k - 0.7) / 0.3
+        o.r = 1 - 0.4 * t
+        o.g = 0.55 - 0.3 * t
+        o.b = 0.1 - 0.05 * t
       end
-      o.emit = 1 - k * 0.8
-      o.opacity = 0.95 * (1 - k * k * k)
+      o.emit = 1 - k * 0.6
+      o.opacity = 0.95 * (1 - k * k * k * k)
     elseif o.kind == "ring" then
       o.age = o.age + dt
       local k = math.min(1, o.age / o.dur)
