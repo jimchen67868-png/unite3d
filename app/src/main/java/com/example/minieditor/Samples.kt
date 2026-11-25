@@ -4041,6 +4041,36 @@ end
 local NPOSTS = 40
 local stages = { { 35, 25, 22 }, { 30, 20, 12 }, { 25, 20, 5 } }
 
+-- tells where the nearest plane and the nearest tank stand (north = -Z, east = +X)
+function aircraftHint()
+  local p = find("Player")
+  if p == nil then return end
+  local names = { "N", "NE", "E", "SE", "S", "SW", "W", "NW" }
+  local all = findAll("DRIVABLE" .. "-VEHICLE")
+  local parts = {}
+  for _, prefix in ipairs({ "Plane", "Tank" }) do
+    local best, bd, bdx, bdz = nil, 1e9, 0, 0
+    for _, v in ipairs(all) do
+      if string.sub(v.name, 1, #prefix) == prefix then
+        local dx, dz = v.x - p.x, v.z - p.z
+        local d = math.sqrt(dx * dx + dz * dz)
+        if d < bd then
+          bd = d
+          best = v
+          bdx = dx
+          bdz = dz
+        end
+      end
+    end
+    if best ~= nil then
+      local deg = math.deg(math.atan2(bdx, -bdz))
+      local idx = math.floor((deg + 22.5) / 45) % 8 + 1
+      parts[#parts + 1] = prefix .. " " .. math.floor(bd) .. " m " .. names[idx]
+    end
+  end
+  if #parts > 0 then log("Nearest: " .. table.concat(parts, ",  ")) end
+end
+
 function start()
   r = 38
   self.radius = r
@@ -4068,6 +4098,7 @@ function start()
   end
   log("BATTLE ROYALE!  8 enemies on the island. Stay inside the blue ring, find medkits and ammo.")
   log("Joystick = move, drag screen = look, hold FIRE, RELOAD, JUMP, VIEW = 1st/3rd person.")
+  aircraftHint()
 end
 
 function update(dt)
@@ -5816,37 +5847,51 @@ end
                 boatSpots.add(sp)
                 buildBoat(sp[0], sp[1], (ang * 180.0 / Math.PI).toFloat() + 90f)
             }
-            // runways with a small plane on every large map (not on the smallest "large" one: it is too small for a runway)
-            val nPlanes = if (mega) 2 else if (giant) 1 else if (huge) 1 else 0
+            // a runway with a small plane on every large map: the flattest free place that can be found is used
+            // (the strip is levelled anyway), so there is always a plane, even on hilly islands
+            val nPlanes = if (mega) 3 else if (giant) 2 else 1
             val planeSpots = ArrayList<FloatArray>()
-            var planeTries = 0
-            while (planeSpots.size < nPlanes && planeTries++ < 800) {
-                val px = (rnd.nextFloat() - 0.5f) * 0.7f * map
-                val pz = (rnd.nextFloat() - 0.5f) * 0.7f * map
-                var lo3 = 1e9f
-                var hi3 = -1e9f
-                var sum3 = 0f
-                var cnt3 = 0
-                var ok3 = true
-                for (ix in intArrayOf(-12, 0, 12)) for (iz in intArrayOf(-66, -44, -22, 0, 22, 44, 66)) {
-                    val gq = ground(px + ix, pz + iz)
-                    if (gq == null || gq < seaY + 1.2f) { ok3 = false } else { lo3 = minOf(lo3, gq); hi3 = maxOf(hi3, gq); sum3 += gq; cnt3++ }
+            for (planeNo in 0 until nPlanes) {
+                var bestScore = 1e9f
+                var bx = 0f
+                var bz = 0f
+                var bl = 0f
+                var tries = 0
+                while (tries++ < 900) {
+                    val px = (rnd.nextFloat() - 0.5f) * 0.7f * map
+                    val pz = (rnd.nextFloat() - 0.5f) * 0.7f * map
+                    var lo3 = 1e9f
+                    var hi3 = -1e9f
+                    var sum3 = 0f
+                    var cnt3 = 0
+                    var ok3 = true
+                    for (ix in intArrayOf(-12, 0, 12)) for (iz in intArrayOf(-66, -44, -22, 0, 22, 44, 66)) {
+                        val gq = ground(px + ix, pz + iz)
+                        if (gq == null || gq < seaY + 1.2f) { ok3 = false } else { lo3 = minOf(lo3, gq); hi3 = maxOf(hi3, gq); sum3 += gq; cnt3++ }
+                    }
+                    if (!ok3 || cnt3 == 0) continue
+                    val score = hi3 - lo3
+                    if (score >= bestScore) continue
+                    var roadNear = false
+                    for (iz in intArrayOf(-66, -33, 0, 33, 66)) if (nearRoad(px, pz + iz, 16f)) roadNear = true
+                    if (roadNear) continue
+                    if (houses.any { Math.abs(it[0] - px) < it[5] / 2f + 24f && Math.abs(it[1] - pz) < it[6] / 2f + 72f }) continue
+                    if (heliSpots.any { Math.abs(it[0] - px) < 30.0 && Math.abs(it[1] - pz) < 80.0 }) continue
+                    if (planeSpots.any { Math.hypot((it[0] - px).toDouble(), (it[1] - pz).toDouble()) < 150.0 }) continue
+                    bestScore = score
+                    bx = px
+                    bz = pz
+                    bl = sum3 / cnt3
+                    if (score <= 3f) break
                 }
-                if (!ok3 || cnt3 == 0 || hi3 - lo3 > 5.0f) continue
-                var roadNear = false
-                for (iz in intArrayOf(-66, -33, 0, 33, 66)) if (nearRoad(px, pz + iz, 16f)) roadNear = true
-                if (roadNear) continue
-                if (houses.any { Math.abs(it[0] - px) < it[5] / 2f + 24f && Math.abs(it[1] - pz) < it[6] / 2f + 72f }) continue
-                if (heliSpots.any { Math.abs(it[0] - px) < 30.0 && Math.abs(it[1] - pz) < 80.0 }) continue
-                if (planeSpots.any { Math.hypot((it[0] - px).toDouble(), (it[1] - pz).toDouble()) < 150.0 }) continue
-                val lvl = sum3 / cnt3
-                flattenPad(px, pz, 8f, 60f, lvl)
-                val lg = ground(px, pz) ?: lvl
-                planeSpots.add(floatArrayOf(px, pz))
-                strips.add(floatArrayOf(px, pz, 14f, 66f))
-                buildRunway(px, pz, lg)
+                if (bestScore > 22f) continue
+                flattenPad(bx, bz, 8f, 60f, bl)
+                val lg = ground(bx, bz) ?: bl
+                planeSpots.add(floatArrayOf(bx, bz))
+                strips.add(floatArrayOf(bx, bz, 14f, 66f))
+                buildRunway(bx, bz, lg)
                 val north = rnd.nextBoolean()
-                buildPlane(px, if (north) pz - 50f else pz + 50f, if (north) 180f else 0f, lg)
+                buildPlane(bx, if (north) bz - 50f else bz + 50f, if (north) 180f else 0f, lg)
             }
             // tanks standing on open, level ground
             val nTanks = if (mega) 3 else if (giant) 2 else 1
