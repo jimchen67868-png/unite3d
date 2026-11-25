@@ -24,10 +24,20 @@ function start()
   manualT = 0
   slide = self.sx + 0.15
   player = find("Player")
-  bots = {}
-  for k = 1, NBOTS do
-    bots[k] = find("Bot " .. k)
+  bots = findBots()
+  NBOTS = #bots
+end
+
+-- all the enemies, with any name and any number (copies, renamed ones): they are found by their script
+function findBots()
+  local list = findAll("ENEMY" .. "-SOLDIER")
+  if #list == 0 then   -- an old scene whose enemies have no marker yet: find them by name
+    for k = 1, 64 do
+      local b = find("Bot " .. k)
+      if b ~= nil then list[#list + 1] = b end
+    end
   end
+  return list
 end
 
 function near(o)
@@ -237,18 +247,21 @@ function start()
     addWall(w)
     i = i + 1
   end
-  bots = {}
-  for k = 1, NBOTS do bots[k] = find("Bot " .. k) end
+  bots = findBots()
+  NBOTS = #bots   -- the copies fight too
   zone = find("Zone")
   home = { x = self.x, z = self.z }
-  cars = {}
-  for _, prefix in ipairs({ "Car ", "Bike ", "Heli ", "Boat ", "Plane ", "Tank " }) do
-    local ci = 1
-    while true do
-      local cc = find(prefix .. ci)
-      if cc == nil then break end
-      cars[#cars + 1] = cc
-      ci = ci + 1
+  -- every vehicle, with any name and any number (copies, renamed ones): found by its script
+  cars = findAll("DRIVABLE" .. "-VEHICLE")
+  if #cars == 0 then   -- an old scene whose vehicles have no marker yet: find them by name
+    for _, prefix in ipairs({ "Car ", "Bike ", "Heli ", "Boat ", "Plane ", "Tank " }) do
+      local ci = 1
+      while true do
+        local cc = find(prefix .. ci)
+        if cc == nil then break end
+        cars[#cars + 1] = cc
+        ci = ci + 1
+      end
     end
   end
   buildTreeGrid()
@@ -886,6 +899,18 @@ function carRide(dt)
   end
 end
 
+-- all the enemies, with any name and any number (copies, renamed ones): they are found by their script
+function findBots()
+  local list = findAll("ENEMY" .. "-SOLDIER")
+  if #list == 0 then   -- an old scene whose enemies have no marker yet: find them by name
+    for k = 1, 64 do
+      local b = find("Bot " .. k)
+      if b ~= nil then list[#list + 1] = b end
+    end
+  end
+  return list
+end
+
 function countAlive()
   local n = 0
   for k = 1, NBOTS do
@@ -1259,6 +1284,31 @@ function decal(x, y, z, nx, ny, nz, size, r, g, b, op, life)
   o.g = g
   o.b = b
   o.opacity = op
+  o.shadow = false
+  o.collider = 0
+  o.emit = 0
+  o.life = life
+  o.op = op
+  decals[#decals + 1] = o
+  if #decals > 70 then
+    destroy(decals[1])
+    table.remove(decals, 1)
+  end
+end
+
+-- a soft round dark mark on the ground (not a square): a flat soft disc
+function decalRound(x, y, z, size, r, g, b, op, life)
+  local ok, o = pcall(spawn, "sphere", x, y, z)
+  if not ok then return end
+  o.sx = size
+  o.sy = 0.06
+  o.sz = size
+  o.ry = math.random() * 360
+  o.r = r
+  o.g = g
+  o.b = b
+  o.opacity = op
+  o.pattern = 21
   o.shadow = false
   o.collider = 0
   o.emit = 0
@@ -1818,8 +1868,8 @@ function blastFx(x, y, z)
   end
   -- 5. a black scorch mark on the ground
   if math.abs(y - gh) < 3 then
-    decal(x, gh + 0.04, z, 0, 1, 0, 5.5, 0.1, 0.09, 0.08, 0.35, 40)
-    decal(x, gh + 0.05, z, 0, 1, 0, 3, 0.04, 0.035, 0.03, 0.8, 40)
+    decalRound(x, gh + 0.04, z, 5.5, 0.1, 0.09, 0.08, 0.5, 40)
+    decalRound(x, gh + 0.05, z, 3, 0.04, 0.035, 0.03, 0.85, 40)
   end
   -- 6. the view shakes when you are close
   local sdx, sdz = self.x - x, self.z - z
@@ -2580,6 +2630,7 @@ end
 """
 
     private val BR_BOT = """-- Enemy soldier: wanders, hunts the player, strafes and shoots, runs from the storm.
+-- ENEMY-SOLDIER (this word marks every enemy for the other scripts: copies and renamed enemies are found by it)
 local DMG = 8
 
 function start()
@@ -3011,6 +3062,7 @@ end
 """
 
     private val BR_CAR = """-- A car you can drive. Walk up to it and tap DRIVE. Joystick: up = gas, down = brake and reverse, left / right = steer.
+-- DRIVABLE-VEHICLE (this word marks every vehicle for the player script: copies and renamed vehicles can be driven)
 SEATS = { { -0.45, -0.3 }, { 0.45, -0.3 }, { -0.45, 0.7 }, { 0.45, 0.7 } }   -- driver, front passenger, rear left, rear right
 
 WOFF = { { -0.98, -0.15, -1.35 }, { 0.98, -0.15, -1.35 }, { -0.98, -0.15, 1.35 }, { 0.98, -0.15, 1.35 } }   -- front left, front right, rear left, rear right
@@ -3176,6 +3228,7 @@ end
 """
 
     private val BR_BIKE = """-- A motorcycle for two. Walk up and tap DRIVE (rider) or SEAT (passenger). Joystick: up = gas, down = brake and reverse, left / right = steer.
+-- DRIVABLE-VEHICLE (this word marks every vehicle for the player script: copies and renamed vehicles can be driven)
 SEATS = { { 0, 0.25, 0.46 }, { 0, 0.7, 0.46 } }
 
 function start()
@@ -3339,6 +3392,7 @@ end
 """
 
     private val BR_HELI = """-- A helicopter. Walk up and tap DRIVE (pilot) or SEAT (passenger). The pilot: joystick up / down = forward / back, left / right = turn, CLIMB / DESCEND = height.
+-- DRIVABLE-VEHICLE (this word marks every vehicle for the player script: copies and renamed vehicles can be driven)
 SEATS = { { -0.4, -0.55, 0.47 }, { 0.4, -0.55, 0.47 }, { -0.4, 0.55, 0.47 }, { 0.4, 0.55, 0.47 } }
 
 function start()
@@ -3525,6 +3579,7 @@ end
 """
 
     private val BR_PLANE = """-- A small plane for two. Walk up and tap DRIVE (pilot) or SEAT (passenger).
+-- DRIVABLE-VEHICLE (this word marks every vehicle for the player script: copies and renamed vehicles can be driven)
 -- Joystick up / down = engine power up / down (down also brakes on the ground), left / right = steer on the ground, bank and turn in the air.
 -- Take off: full power along the runway; at speed it lifts off (or hold CLIMB). CLIMB / DESCEND = nose up / down. Too slow in the air and it stalls.
 -- Land gently, stop, then tap DRIVE to get out.
@@ -3760,6 +3815,7 @@ end
 """
 
     private val BR_TANK = """-- A tank for four. Walk up and tap DRIVE (driver) or SEAT (passenger on the deck).
+-- DRIVABLE-VEHICLE (this word marks every vehicle for the player script: copies and renamed vehicles can be driven)
 -- Joystick up / down = forward / back, left / right = turn (also on the spot). The cannon follows the crosshair: FIRE = a shell, one every 2.5 s.
 -- It crushes enemies in front of it, stops at walls and tree trunks, and cannot go into deep water.
 SEATS = { { -0.75, -1.6, 0.85 }, { 0.75, -1.6, 0.85 }, { -0.7, 2.0, 1.05 }, { 0.7, 2.0, 1.05 } }   -- driver, front passenger, two on the back deck
@@ -3788,14 +3844,19 @@ function start()
   bp = 0
   placed = false
   crashT = 0
-  bots = {}
-  local i = 1
-  while true do
-    local b = find("Bot " .. i)
-    if b == nil then break end
-    bots[i] = b
-    i = i + 1
+  bots = findBots()
+end
+
+-- all the enemies, with any name and any number (copies, renamed ones): they are found by their script
+function findBots()
+  local list = findAll("ENEMY" .. "-SOLDIER")
+  if #list == 0 then   -- an old scene whose enemies have no marker yet: find them by name
+    for k = 1, 64 do
+      local b = find("Bot " .. k)
+      if b ~= nil then list[#list + 1] = b end
+    end
   end
+  return list
 end
 
 function put(o, lx, ly, lz, nx, nz, cs, sn, cp, sp, ry2, rx2, rz2)
@@ -4059,6 +4120,7 @@ end
 """
 
     private val BR_BOAT = """-- A boat for four. Swim or walk up and tap DRIVE (driver) or SEAT. Joystick: up = gas, down = brake and reverse, left / right = steer.
+-- DRIVABLE-VEHICLE (this word marks every vehicle for the player script: copies and renamed vehicles can be driven)
 -- It floats on the waves and stays in deep water (the beach stops it).
 SEATS = { { -0.5, -0.9, 0.62 }, { 0.5, -0.9, 0.62 }, { -0.5, 0.9, 0.62 }, { 0.5, 0.9, 0.62 } }   -- driver, front passenger, two in the back
 

@@ -317,6 +317,21 @@ class Scene {
         val fam = ArrayList<SceneObject>()
         fam.add(s)
         if (s.uid != 0) for (o in objects) if (o !== s && Rig.isDescendant(this, o, s)) fam.add(o)
+        // a vehicle or a soldier also has parts that are not attached but follow it by name ("Heli 1 rotor", "Tank 1 turret"):
+        // for an object with a script, the parts without a script that are named after it come too (not the parts of its other copies)
+        if (s.script.isNotBlank() && s.name.isNotBlank()) {
+            val pre = s.name + " "
+            for (o in objects) {
+                if (o === s || o.script.isNotBlank() || !o.name.startsWith(pre) || fam.contains(o)) continue
+                if (o.name.substring(pre.length).startsWith("copy")) continue
+                fam.add(o)
+            }
+            // and the small parts attached to those free parts (the aerial and the hatch of the turret)
+            for (o in objects) {
+                if (fam.contains(o)) continue
+                if (fam.any { it !== s && Rig.isDescendant(this, o, it) }) fam.add(o)
+            }
+        }
         return fam
     }
 
