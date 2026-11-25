@@ -1651,7 +1651,7 @@ end
 function spark(x, y, z, dx, dy, dz, sp, life, len, wait)
   local o = fxSpawn(x, y, z, 0.05, 0.05, len, 1, 1, 0.75, 1, "cube")
   if o ~= nil then
-    o.kind = "spark"
+    o.kind = "fspark"
     if wait ~= nil and wait > 0 then
       o.wait = wait
       o.opacity = 0
@@ -1698,16 +1698,17 @@ function blade(x, y, z, dx, dy, dz, len, w, th, life, wait)
   end
 end
 
--- The blast follows a real grenade (measured on a video of the game, 15 pictures a second):
---   0.00 s  a big bright yellow-white flash
+-- The blast follows a real grenade (measured on two videos of the game, 10-15 pictures a second):
+--   0.00 s  a bright yellow-white flash with ragged petals
 --   0.07 s  a flat, spiky yellow burst with short white spark lines
---   0.13 s  only a small orange-red flame is left, and a dark brown cloud of earth comes up on both sides
---   0.3 s   the low, wide, lumpy brown cloud, no fire
---   0.8 s   the cloud is thin and gone
+--   0.1 s   a red-pink fire cloud, with a little brown dust on the ground
+--   0.3 s   the cloud turns to dark charcoal smoke with red glows inside
+--   0.8 s   dark smoke, a small orange ember at the top
+--   1.5 s   the smoke is thin and light grey, and it fades out slowly until it is gone (about 2 s)
 function blastFx(x, y, z)
   local gh = groundHeight(x, z) or y
   local by = math.max(y, gh) + 0.4
-  -- 1. the flash
+  -- 1. the flash: a small hot core with ragged petals of light around it
   local f = fxSpawn(x, by + 0.4, z, 1.0, 1.0, 1.0, 1, 0.97, 0.6, 1)
   if f ~= nil then
     f.kind = "billow"
@@ -1724,9 +1725,8 @@ function blastFx(x, y, z)
     f.pattern = 20
     fx[#fx + 1] = f
   end
-  -- 1b. ragged petals of light around the core, long and short, in all directions (so the flash has an uneven, spiky outline)
-  for i = 1, 10 do
-    local a = (i / 10) * 6.283 + (math.random() - 0.5) * 0.8
+  for i = 1, 7 do
+    local a = (i / 7) * 6.283 + (math.random() - 0.5) * 0.8
     local el = -0.1 + math.random() * 1.4
     local len = 1.6 + math.random() * 1.8
     if i % 2 == 0 then len = len * 0.65 end
@@ -1734,84 +1734,94 @@ function blastFx(x, y, z)
     blade(x, by + 0.4, z, math.cos(a) * math.cos(el), math.sin(el), math.sin(a) * math.cos(el), len, w, w, 0.13 + math.random() * 0.06)
   end
   -- 2. the burst: flat flame tongues in every direction, and short white spark lines (only for a moment)
-  for i = 1, 12 do
-    local a = (i / 12) * 6.283 + (math.random() - 0.5) * 0.5
+  for i = 1, 9 do
+    local a = (i / 9) * 6.283 + (math.random() - 0.5) * 0.5
     local len = 1.8 + math.random() * 1.4
     if i % 3 == 0 then len = len * 0.6 end
     local el = math.random() * 0.4
     blade(x, by + math.random() * 0.3, z, math.cos(a) * math.cos(el), math.sin(el), math.sin(a) * math.cos(el), len, 0.4 + math.random() * 0.2, 0.3, 0.12 + math.random() * 0.1, 0.04)
   end
-  for i = 1, 14 do
+  for i = 1, 8 do
     local a = math.random() * 6.283
     local el = math.random() * 1.2
     spark(x, by + 0.2, z, math.cos(a) * math.cos(el), math.sin(el), math.sin(a) * math.cos(el), 12 + math.random() * 12, 0.07 + math.random() * 0.05, 0.5 + math.random() * 0.6, 0.04)
   end
-  for i = 1, 6 do
+  for i = 1, 4 do
     local a = math.random() * 6.283
     local el = 0.2 + math.random() * 1.0
     spark(x, by + 0.3, z, math.cos(a) * math.cos(el), math.sin(el), math.sin(a) * math.cos(el), 26 + math.random() * 10, 0.09 + math.random() * 0.05, 1.2 + math.random() * 0.8, 0.04)
   end
-  -- 3. the small orange-red flame that is left in the middle
+  -- 3. the red-pink fire cloud: lumpy, it comes right after the flash and darkens
   for i = 1, 4 do
     local a = math.random() * 6.283
-    local el = 0.9 + math.random() * 0.5
-    blade(x, by, z, math.cos(a) * math.cos(el), math.sin(el), math.sin(a) * math.cos(el), 0.9 + math.random() * 0.9, 0.5, 0.5, 0.16, 0.1)
-  end
-  for i = 1, 2 do
-    local a = math.random() * 6.283
-    local o = fxSpawn(x + (math.random() - 0.5) * 0.8, by + math.random() * 0.4, z + (math.random() - 0.5) * 0.8, 1.2, 1.2, 1.2, 1, 0.6, 0.15, 1)
+    local o = fxSpawn(x + (math.random() - 0.5) * 1.4, by + math.random() * 0.9, z + (math.random() - 0.5) * 1.4, 1.4, 1.4, 1.4, 1, 0.7, 0.25, 1)
     if o ~= nil then
       o.kind = "billow"
-      o.dur = 0.24
-      o.life = 0.24
+      o.pink = true
+      o.dur = 0.36 + math.random() * 0.2
+      o.life = o.dur
       o.age = 0
-      o.late = 0.4
-      o.s0 = 1.2
-      o.big = 2.2 + math.random() * 0.8
+      o.s0 = 1.3
+      o.big = 2.6 + math.random() * 1.0
       o.flat = 0.9
-      o.vx = math.cos(a) * 0.8
-      o.vz = math.sin(a) * 0.8
-      o.vy = 0.5
+      o.vx = math.cos(a) * 1.4
+      o.vz = math.sin(a) * 1.4
+      o.vy = 0.8
       o.emit = 1
       o.pattern = 20
-      o.wait = 0.08
+      o.wait = 0.05
       o.opacity = 0
       fx[#fx + 1] = o
     end
   end
-  -- 4. the dark brown cloud of earth: low, wide, lumpy, it appears at once and is gone after about 0.7 s
-  for i = 1, 9 do
+  for i = 1, 3 do
+    local a = math.random() * 6.283
+    local el = 0.9 + math.random() * 0.5
+    blade(x, by, z, math.cos(a) * math.cos(el), math.sin(el), math.sin(a) * math.cos(el), 0.9 + math.random() * 0.9, 0.5, 0.5, 0.16, 0.1)
+  end
+  -- 4. THE SMOKE: dark charcoal with red glows at first, a big lumpy cloud that thins out and fades slowly (about 2 s)
+  for i = 1, 8 do
+    local a = math.random() * 6.283
+    local r = math.random() * 2.2
+    local o = fxSpawn(x + math.cos(a) * r, gh + 0.6 + math.random() * 1.8, z + math.sin(a) * r, 1.4, 1.4, 1.4, 0.9, 0.3, 0.3, 1)
+    if o ~= nil then
+      o.kind = "plume"
+      o.pattern = 21   -- a soft smoke particle
+      o.dur = 1.6 + math.random() * 0.8
+      o.life = o.dur
+      o.age = 0
+      o.s0 = 1.4
+      o.big = 3.2 + math.random() * 1.4
+      o.flat = 0.7 + math.random() * 0.3
+      o.asp = 0.7 + math.random() * 0.6
+      o.ry = math.random() * 360
+      o.vx = math.cos(a) * 1.6
+      o.vz = math.sin(a) * 1.6
+      o.vy = 0.5 + math.random() * 0.7
+      o.op = 0.85
+      o.emit = 0
+      o.wait = 0.06 + math.random() * 0.14
+      o.opacity = 0
+      fx[#fx + 1] = o
+    end
+  end
+  -- a little brown dust low on the ground (the earth)
+  for i = 1, 3 do
     local t = math.random()
-    local o = puff(x + (math.random() - 0.5) * 5, gh + 0.4 + math.random() * 0.9, z + (math.random() - 0.5) * 5,
-      0.36 + 0.08 * t, 0.28 + 0.07 * t, 0.2 + 0.05 * t, 1.8, 1.4 + math.random() * 1.2, 0.5 + math.random() * 0.35, 0.78, 0.1 + math.random() * 0.4, 3, 0.07 + math.random() * 0.12)
+    local o = puff(x + (math.random() - 0.5) * 5, gh + 0.4 + math.random() * 0.6, z + (math.random() - 0.5) * 5,
+      0.36 + 0.08 * t, 0.28 + 0.07 * t, 0.2 + 0.05 * t, 1.8, 1.4 + math.random() * 1.0, 0.6 + math.random() * 0.3, 0.7, 0.1 + math.random() * 0.3, 3, 0.07 + math.random() * 0.1)
     if o ~= nil then
       o.flat = 0.35 + math.random() * 0.4
       o.asp = 0.5 + math.random() * 1.3
       o.ry = math.random() * 360
     end
   end
-  for i = 1, 3 do
-    local o = puff(x + (math.random() - 0.5) * 4, gh + 0.7 + math.random() * 0.6, z + (math.random() - 0.5) * 4,
-      0.55, 0.5, 0.4, 2.0, 1.4, 0.9, 0.35, 0.3, 2, 0.3)
-    if o ~= nil then
-      o.flat = 0.4 + math.random() * 0.3
-      o.asp = 0.6 + math.random() * 1.0
-      o.ry = math.random() * 360
-    end
-  end
-  -- 5. two bits of rubble
-  for i = 1, 2 do
-    local a = math.random() * 6.28
-    local sp = 4 + math.random() * 9
-    local nx, nz = math.cos(a) * sp * 0.15, math.sin(a) * sp * 0.15
-    chunk(x, by, z, 0.25 + math.random() * 0.15, 0.2 + math.random() * 0.1, 0.15, 0.2, sp, 5 + math.random() * 7, 1.6, nx / 4, 0, nz / 4)
-  end
-  -- 6. a black scorch mark on the ground
+  -- 5. a black scorch mark on the ground
   if math.abs(y - gh) < 3 then
     decal(x, gh + 0.04, z, 0, 1, 0, 5.5, 0.1, 0.09, 0.08, 0.35, 40)
     decal(x, gh + 0.05, z, 0, 1, 0, 3, 0.04, 0.035, 0.03, 0.8, 40)
   end
-  -- 7. the view shakes when you are close
+  -- 6. the view shakes when you are close
   local sdx, sdz = self.x - x, self.z - z
   local sd = math.sqrt(sdx * sdx + sdz * sdz)
   if sd < 30 then
@@ -2108,7 +2118,7 @@ function updateFx(dt)
       o.b = o.b0 * (1 - k) + 0.04 * k
       o.emit = 1 - k
       o.opacity = 0.95 * (1 - k * k)
-    elseif o.kind == "spark" then
+    elseif o.kind == "fspark" then
       -- a fine hot line: it flies straight out, slows down, gets shorter and fades
       local drag = math.max(0, 1 - 2.2 * dt)
       o.vx = o.vx * drag
@@ -2124,6 +2134,39 @@ function updateFx(dt)
       o.g = 0.85 + 0.15 * k
       o.b = 0.3 + 0.45 * k
       o.opacity = 1
+    elseif o.kind == "plume" then
+      o.age = o.age + dt
+      local k = math.min(1, o.age / o.dur)
+      local drag = math.max(0, 1 - 1.5 * dt)
+      o.vx = o.vx * drag
+      o.vz = o.vz * drag
+      o.vy = o.vy * math.max(0, 1 - 0.8 * dt)
+      o.x = o.x + o.vx * dt
+      o.y = o.y + o.vy * dt
+      o.z = o.z + o.vz * dt
+      local sz = o.s0 + (o.big - o.s0) * (1 - (1 - k) * (1 - k))
+      o.sx = sz
+      o.sy = sz * (o.flat or 0.9)
+      o.sz = sz * (o.asp or 1)
+      -- the shade: still hot and red-pink for a moment, then dark charcoal, then thinning to light grey
+      if k < 0.18 then
+        local t = k / 0.18
+        o.r = 0.9 - 0.45 * t
+        o.g = 0.3 - 0.1 * t
+        o.b = 0.3 - 0.08 * t
+      elseif k < 0.45 then
+        local t = (k - 0.18) / 0.27
+        o.r = 0.45 - 0.28 * t
+        o.g = 0.2 - 0.04 * t
+        o.b = 0.22 - 0.05 * t
+      else
+        local t = (k - 0.45) / 0.55
+        o.r = 0.17 + 0.25 * t
+        o.g = 0.16 + 0.26 * t
+        o.b = 0.17 + 0.27 * t
+      end
+      -- it comes in quickly and goes out slowly (a smooth fade, no sudden end)
+      o.opacity = o.op * math.min(1, o.age / 0.1) * (1 - k * k * k)
     elseif o.kind == "blade" then
       -- one spike of the star-shaped burst: it shoots out along the ground, gets thinner, goes from yellow-white to orange and fades
       o.age = o.age + dt
@@ -2174,6 +2217,19 @@ function updateFx(dt)
         o.r = 1 - 0.4 * t
         o.g = 0.55 - 0.3 * t
         o.b = 0.1 - 0.05 * t
+      end
+      if o.pink then
+        if k < 0.35 then
+          local t = k / 0.35
+          o.r = 1
+          o.g = 0.75 - 0.47 * t
+          o.b = 0.25 + 0.02 * t
+        else
+          local t = (k - 0.35) / 0.65
+          o.r = 1 - 0.55 * t
+          o.g = 0.28 - 0.16 * t
+          o.b = 0.27 - 0.15 * t
+        end
       end
       o.emit = 1 - k * 0.6
       o.opacity = 0.95 * (1 - k * k * k * k)
