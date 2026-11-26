@@ -321,6 +321,7 @@ function applyGunLook()
   scale(VM[1], gunBase.v1)
   scale(VM[2], gunBase.v2)
   scale(P.gun, gunBase.pg)
+  setGunVisible(gunOn)
 end
 
 -- AIM: zoom in (the sniper has a scope with two zoom steps); tap again for the next step, then back to normal
@@ -661,10 +662,31 @@ function handleItems(dt)
 end
 
 -- vehicles (cars, motorcycles, helicopters). DRIVE: driver / pilot seat (or get out of it). SEAT: a passenger seat, then the next seat. JUMP: get out.
+-- the rifle model has a receiver ("gun"), handguard g2, barrel g3, stock g4, magazine g5, grip g6 and sight g7:
+-- each weapon shows the parts it has
+GUNSHOW = {
+  rifle   = { g2 = 1, g3 = 1, g4 = 1, g5 = 1, g6 = 1, g7 = 1 },
+  smg     = { g2 = 1, g5 = 1, g6 = 1, g7 = 1 },
+  pistol  = { g6 = 1 },
+  shotgun = { g2 = 1, g3 = 1, g4 = 1, g6 = 1 },
+  sniper  = { g2 = 1, g3 = 1, g4 = 1, g5 = 1, g6 = 1, g7 = 1 }
+}
+gunOn = false
+
 function setGunVisible(on)
+  gunOn = on
   local v = 0
   if on then v = 1 end
   if P.gun ~= nil then P.gun.opacity = v end
+  local key = nil
+  if slots ~= nil then key = slots[cur] end
+  local show = GUNSHOW[key] or GUNSHOW.rifle
+  for _, nm in ipairs({ "g2", "g3", "g4", "g5", "g6", "g7" }) do
+    local o = P[nm]
+    if o ~= nil then
+      if on and show[nm] == 1 then o.opacity = 1 else o.opacity = 0 end
+    end
+  end
 end
 
 -- the buttons only show next to a vehicle (or while you sit in one); CLIMB and DESCEND only while you fly a helicopter
@@ -877,6 +899,8 @@ function carRide(dt)
     P.legR.opacity = o
     P.armL.opacity = o
     P.armR.opacity = o
+    if P.handL ~= nil then P.handL.opacity = o end
+    if P.handR ~= nil then P.handR.opacity = o end
   end
   setGunVisible(aiming and not fp)
   local vmWant = fp and not (aimLevel > 0 and W.scope == true)
@@ -1976,7 +2000,8 @@ function findParts()
   P = {
     head = find(n .. " head"), helm = find(n .. " helm"), torso = find(n .. " torso"), pack = find(n .. " pack"),
     armL = find(n .. " armL"), armR = find(n .. " armR"), legL = find(n .. " legL"), legR = find(n .. " legR"),
-    gun = find(n .. " gun")
+    gun = find(n .. " gun"), g2 = find(n .. " g2"), g3 = find(n .. " g3"), g4 = find(n .. " g4"), g5 = find(n .. " g5"),
+    g6 = find(n .. " g6"), g7 = find(n .. " g7"), handL = find(n .. " handL"), handR = find(n .. " handR")
   }
 end
 
@@ -1989,7 +2014,7 @@ function walkPose(dt, moving, speed, aiming)
   local s = math.sin(walkT)
   P.legL.swing = legAmp * s
   P.legR.swing = -legAmp * s
-  local base = 55
+  local base = 66
   if aiming then base = 78 end
   P.armL.swing = base + legAmp * 0.12 * s
   P.armR.swing = base - legAmp * 0.12 * s
@@ -2583,7 +2608,9 @@ function update(dt)
     P.legR.opacity = o
     P.armL.opacity = o
     P.armR.opacity = o
-    P.gun.opacity = o
+    if P.handL ~= nil then P.handL.opacity = o end
+    if P.handR ~= nil then P.handR.opacity = o end
+    setGunVisible(o == 1)
   end
   local vmWant = fp and (not swimming) and (not self.dead) and not (aimLevel > 0 and W.scope == true)
   if vmWant ~= vmOn then
@@ -2701,7 +2728,8 @@ function findParts()
   P = {
     head = find(n .. " head"), helm = find(n .. " helm"), torso = find(n .. " torso"), pack = find(n .. " pack"),
     armL = find(n .. " armL"), armR = find(n .. " armR"), legL = find(n .. " legL"), legR = find(n .. " legR"),
-    gun = find(n .. " gun")
+    gun = find(n .. " gun"), g2 = find(n .. " g2"), g3 = find(n .. " g3"), g4 = find(n .. " g4"), g5 = find(n .. " g5"),
+    g6 = find(n .. " g6"), g7 = find(n .. " g7"), handL = find(n .. " handL"), handR = find(n .. " handR")
   }
 end
 
@@ -2714,7 +2742,7 @@ function walkPose(dt, moving, speed, aiming)
   local s = math.sin(walkT)
   P.legL.swing = legAmp * s
   P.legR.swing = -legAmp * s
-  local base = 55
+  local base = 66
   if aiming then base = 78 end
   P.armL.swing = base + legAmp * 0.12 * s
   P.armR.swing = base - legAmp * 0.12 * s
@@ -4599,24 +4627,44 @@ end
     ): SceneObject {
         val skin = floatArrayOf(0.93f, 0.74f, 0.6f)
         val dark = floatArrayOf(0.16f, 0.16f, 0.18f)
+        val metal = floatArrayOf(0.13f, 0.13f, 0.15f)
+        val metal2 = floatArrayOf(0.17f, 0.17f, 0.19f)
+        val black = floatArrayOf(0.06f, 0.06f, 0.07f)
+        val gloves = floatArrayOf(0.12f, 0.12f, 0.13f)
         val root = mk(scene, Shape.SPHERE, name, x, y, z, 0.9f, 1.8f, 0.9f, shirt, script)
         root.collider = 1
         root.shadow = false
         root.opacity = 0.02f       // the body is only the collision shape; the parts are what you see
-        fun part(suffix: String, shape: Shape, dx: Float, dy: Float, dz: Float, sx: Float, sy: Float, sz: Float, color: FloatArray) {
+        fun part(suffix: String, shape: Shape, dx: Float, dy: Float, dz: Float, sx: Float, sy: Float, sz: Float, color: FloatArray, ry: Float = 0f): SceneObject {
             val p = mk(scene, shape, name + " " + suffix, x + dx, y + dy, z + dz, sx, sy, sz, color)
             p.shadow = false
+            p.ry = ry
             Rig.bind(p, root)
+            return p
         }
         part("head", Shape.SPHERE, 0f, 0.74f, 0f, 0.30f, 0.33f, 0.30f, skin)
         part("helm", Shape.SPHERE, 0f, 0.83f, 0f, 0.37f, 0.24f, 0.39f, helmet)
         part("torso", Shape.CUBE, 0f, 0.30f, 0f, 0.50f, 0.60f, 0.28f, shirt)
         part("pack", Shape.CUBE, 0f, 0.32f, 0.22f, 0.36f, 0.42f, 0.18f, dark)
-        part("armL", Shape.CUBE, -0.31f, 0.305f, 0f, 0.13f, 0.55f, 0.13f, shirt)
-        part("armR", Shape.CUBE, 0.31f, 0.305f, 0f, 0.13f, 0.55f, 0.13f, shirt)
+        // the arms are turned a little inwards: when they come up with the rifle, the two hands meet on it
+        val armL = part("armL", Shape.CUBE, -0.31f, 0.305f, 0f, 0.13f, 0.55f, 0.13f, shirt, -23f)
+        val armR = part("armR", Shape.CUBE, 0.31f, 0.305f, 0f, 0.13f, 0.55f, 0.13f, shirt, 23f)
         part("legL", Shape.CUBE, -0.12f, -0.46f, 0f, 0.18f, 0.88f, 0.18f, pants)
         part("legR", Shape.CUBE, 0.12f, -0.46f, 0f, 0.18f, 0.88f, 0.18f, pants)
-        part("gun", Shape.CUBE, 0.1f, 0.32f, -0.45f, 0.08f, 0.1f, 0.72f, dark)
+        // a glove on the end of each arm (it follows the arm, so it always holds the rifle)
+        for ((suffix, arm, ax) in listOf(Triple("handL", armL, -0.31f), Triple("handR", armR, 0.31f))) {
+            val h = mk(scene, Shape.CUBE, name + " " + suffix, x + ax, y + 0.0f, z, 0.12f, 0.12f, 0.12f, gloves)
+            h.shadow = false
+            Rig.bind(h, arm)
+        }
+        // the rifle in front of the chest, between the hands: receiver ("gun"), handguard, barrel, stock, magazine, grip, sight
+        part("gun", Shape.CUBE, 0f, 0.44f, -0.45f, 0.07f, 0.11f, 0.34f, metal)
+        part("g2", Shape.CUBE, 0f, 0.43f, -0.76f, 0.06f, 0.08f, 0.30f, metal2)
+        part("g3", Shape.CUBE, 0f, 0.44f, -1.06f, 0.03f, 0.03f, 0.30f, black)
+        part("g4", Shape.CUBE, 0f, 0.42f, -0.24f, 0.06f, 0.12f, 0.20f, dark)
+        part("g5", Shape.CUBE, 0f, 0.30f, -0.50f, 0.05f, 0.18f, 0.07f, black)
+        part("g6", Shape.CUBE, 0f, 0.33f, -0.36f, 0.05f, 0.12f, 0.05f, metal)
+        part("g7", Shape.CUBE, 0f, 0.52f, -0.46f, 0.035f, 0.045f, 0.16f, black)
         return root
     }
 
