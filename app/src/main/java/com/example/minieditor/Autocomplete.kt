@@ -34,6 +34,7 @@ object Autocomplete {
         Item("string", "string.", "string.", 0),
         Item("table", "table.", "table.", 0),
         Item("find", "find(\"\")", "find(\"\")", 2),
+        Item("findAll", "findAll(\"\")", "findAll(\"\")", 2),
         Item("spawn", "spawn(\"cube\", x, y, z)", "spawn(\"cube\", 0, 0, 0)", 0),
         call("destroy", "", 1),
         Item("groundHeight", "groundHeight(x, z)", "groundHeight(self.x, self.z)", 0),

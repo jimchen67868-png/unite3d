@@ -145,6 +145,23 @@ class ScriptEngine(private val scene: Scene, private val log: (String) -> Unit) 
         }
     }
 
+    /** findAll("text") gives a list of every object whose script contains the text - for example all the enemies, whatever their names. */
+    private val findAllFn = object : OneArgFunction() {
+        override fun call(arg: LuaValue): LuaValue {
+            val key = arg.tojstring()
+            val list = LuaTable()
+            if (key.isEmpty()) return list
+            var n = 0
+            for ((o, t) in tables) {
+                if (o.script.contains(key)) {
+                    n++
+                    list.set(n, t)
+                }
+            }
+            return list
+        }
+    }
+
     /** Set by the app before start(); null means sounds are silently ignored. */
     var audio: Audio? = null
 
@@ -622,6 +639,7 @@ class ScriptEngine(private val scene: Scene, private val log: (String) -> Unit) 
                 g.set("world", world)
                 g.set("camera", camera)
                 g.set("find", findFn)
+                g.set("findAll", findAllFn)
                 g.set("spawn", spawnFn)
                 g.set("groundHeight", groundFn)
                 g.set("waterHeight", waterFn)

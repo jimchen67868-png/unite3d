@@ -30,7 +30,8 @@ end
 
 -- all the enemies, with any name and any number (copies, renamed ones): they are found by their script
 function findBots()
-  local list = findAll("ENEMY" .. "-SOLDIER")
+  local list = {}
+  if findAll ~= nil then list = findAll("ENEMY" .. "-SOLDIER") end
   if #list == 0 then   -- an old scene whose enemies have no marker yet: find them by name
     for k = 1, 64 do
       local b = find("Bot " .. k)
@@ -252,7 +253,8 @@ function start()
   zone = find("Zone")
   home = { x = self.x, z = self.z }
   -- every vehicle, with any name and any number (copies, renamed ones): found by its script
-  cars = findAll("DRIVABLE" .. "-VEHICLE")
+  cars = {}
+  if findAll ~= nil then cars = findAll("DRIVABLE" .. "-VEHICLE") end
   if #cars == 0 then   -- an old scene whose vehicles have no marker yet: find them by name
     for _, prefix in ipairs({ "Car ", "Bike ", "Heli ", "Boat ", "Plane ", "Tank " }) do
       local ci = 1
@@ -901,7 +903,8 @@ end
 
 -- all the enemies, with any name and any number (copies, renamed ones): they are found by their script
 function findBots()
-  local list = findAll("ENEMY" .. "-SOLDIER")
+  local list = {}
+  if findAll ~= nil then list = findAll("ENEMY" .. "-SOLDIER") end
   if #list == 0 then   -- an old scene whose enemies have no marker yet: find them by name
     for k = 1, 64 do
       local b = find("Bot " .. k)
@@ -3849,7 +3852,8 @@ end
 
 -- all the enemies, with any name and any number (copies, renamed ones): they are found by their script
 function findBots()
-  local list = findAll("ENEMY" .. "-SOLDIER")
+  local list = {}
+  if findAll ~= nil then list = findAll("ENEMY" .. "-SOLDIER") end
   if #list == 0 then   -- an old scene whose enemies have no marker yet: find them by name
     for k = 1, 64 do
       local b = find("Bot " .. k)
@@ -4046,6 +4050,7 @@ function aircraftHint()
   local p = find("Player")
   if p == nil then return end
   local names = { "N", "NE", "E", "SE", "S", "SW", "W", "NW" }
+  if findAll == nil then return end
   local all = findAll("DRIVABLE" .. "-VEHICLE")
   local parts = {}
   for _, prefix in ipairs({ "Plane", "Tank" }) do
