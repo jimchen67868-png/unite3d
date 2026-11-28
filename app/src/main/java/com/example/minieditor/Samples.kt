@@ -662,26 +662,37 @@ function handleItems(dt)
 end
 
 -- vehicles (cars, motorcycles, helicopters). DRIVE: driver / pilot seat (or get out of it). SEAT: a passenger seat, then the next seat. JUMP: get out.
--- the rifle model has a receiver ("gun"), handguard g2, barrel g3, stock g4, magazine g5, grip g6 and sight g7:
--- each weapon shows the parts it has
+-- A LONG gun (rifle, shotgun, sniper) is carried on the right side: receiver ("gun"), handguard g2, barrel g3, stock g4,
+-- magazine g5, grip g6, sight g7. A SHORT gun (pistol, SMG) is held in the middle: body s1, barrel s2, grip s3, magazine s4.
+-- Each weapon shows the parts it has.
 GUNSHOW = {
   rifle   = { g2 = 1, g3 = 1, g4 = 1, g5 = 1, g6 = 1, g7 = 1 },
-  smg     = { g2 = 1, g5 = 1, g6 = 1, g7 = 1 },
-  pistol  = { g6 = 1 },
+  smg     = { s2 = 1, s3 = 1, s4 = 1 },
+  pistol  = { s3 = 1 },
   shotgun = { g2 = 1, g3 = 1, g4 = 1, g6 = 1 },
   sniper  = { g2 = 1, g3 = 1, g4 = 1, g5 = 1, g6 = 1, g7 = 1 }
 }
+SHORTLEN = { smg = 0.34, pistol = 0.22 }
 gunOn = false
 
 function setGunVisible(on)
   gunOn = on
-  local v = 0
-  if on then v = 1 end
-  if P.gun ~= nil then P.gun.opacity = v end
   local key = nil
   if slots ~= nil then key = slots[cur] end
+  local short = SHORTLEN[key] ~= nil
   local show = GUNSHOW[key] or GUNSHOW.rifle
-  for _, nm in ipairs({ "g2", "g3", "g4", "g5", "g6", "g7" }) do
+  if P.gun ~= nil then
+    if on and not short then P.gun.opacity = 1 else P.gun.opacity = 0 end
+  end
+  if P.s1 ~= nil then
+    if on and short then
+      P.s1.opacity = 1
+      P.s1.sz = SHORTLEN[key]
+    else
+      P.s1.opacity = 0
+    end
+  end
+  for _, nm in ipairs({ "g2", "g3", "g4", "g5", "g6", "g7", "s2", "s3", "s4" }) do
     local o = P[nm]
     if o ~= nil then
       if on and show[nm] == 1 then o.opacity = 1 else o.opacity = 0 end
@@ -901,6 +912,9 @@ function carRide(dt)
     P.armR.opacity = o
     if P.handL ~= nil then P.handL.opacity = o end
     if P.handR ~= nil then P.handR.opacity = o end
+    for _, nm in ipairs({ "vest", "bootL", "bootR", "sg1", "sg2" }) do
+      if P[nm] ~= nil then P[nm].opacity = o end
+    end
   end
   setGunVisible(aiming and not fp)
   local vmWant = fp and not (aimLevel > 0 and W.scope == true)
@@ -2001,7 +2015,9 @@ function findParts()
     head = find(n .. " head"), helm = find(n .. " helm"), torso = find(n .. " torso"), pack = find(n .. " pack"),
     armL = find(n .. " armL"), armR = find(n .. " armR"), legL = find(n .. " legL"), legR = find(n .. " legR"),
     gun = find(n .. " gun"), g2 = find(n .. " g2"), g3 = find(n .. " g3"), g4 = find(n .. " g4"), g5 = find(n .. " g5"),
-    g6 = find(n .. " g6"), g7 = find(n .. " g7"), handL = find(n .. " handL"), handR = find(n .. " handR")
+    g6 = find(n .. " g6"), g7 = find(n .. " g7"), handL = find(n .. " handL"), handR = find(n .. " handR"),
+    s1 = find(n .. " s1"), s2 = find(n .. " s2"), s3 = find(n .. " s3"), s4 = find(n .. " s4"),
+    vest = find(n .. " vest"), bootL = find(n .. " bootL"), bootR = find(n .. " bootR"), sg1 = find(n .. " sg1"), sg2 = find(n .. " sg2")
   }
 end
 
@@ -2610,6 +2626,9 @@ function update(dt)
     P.armR.opacity = o
     if P.handL ~= nil then P.handL.opacity = o end
     if P.handR ~= nil then P.handR.opacity = o end
+    for _, nm in ipairs({ "vest", "bootL", "bootR", "sg1", "sg2" }) do
+      if P[nm] ~= nil then P[nm].opacity = o end
+    end
     setGunVisible(o == 1)
   end
   local vmWant = fp and (not swimming) and (not self.dead) and not (aimLevel > 0 and W.scope == true)
@@ -2729,7 +2748,9 @@ function findParts()
     head = find(n .. " head"), helm = find(n .. " helm"), torso = find(n .. " torso"), pack = find(n .. " pack"),
     armL = find(n .. " armL"), armR = find(n .. " armR"), legL = find(n .. " legL"), legR = find(n .. " legR"),
     gun = find(n .. " gun"), g2 = find(n .. " g2"), g3 = find(n .. " g3"), g4 = find(n .. " g4"), g5 = find(n .. " g5"),
-    g6 = find(n .. " g6"), g7 = find(n .. " g7"), handL = find(n .. " handL"), handR = find(n .. " handR")
+    g6 = find(n .. " g6"), g7 = find(n .. " g7"), handL = find(n .. " handL"), handR = find(n .. " handR"),
+    s1 = find(n .. " s1"), s2 = find(n .. " s2"), s3 = find(n .. " s3"), s4 = find(n .. " s4"),
+    vest = find(n .. " vest"), bootL = find(n .. " bootL"), bootR = find(n .. " bootR"), sg1 = find(n .. " sg1"), sg2 = find(n .. " sg2")
   }
 end
 
@@ -4623,48 +4644,77 @@ end
      */
     private fun human(
         scene: Scene, name: String, x: Float, y: Float, z: Float, script: String,
-        shirt: FloatArray, pants: FloatArray, helmet: FloatArray
+        shirt: FloatArray, pants: FloatArray, helmet: FloatArray, isPlayer: Boolean = false
     ): SceneObject {
         val skin = floatArrayOf(0.93f, 0.74f, 0.6f)
         val dark = floatArrayOf(0.16f, 0.16f, 0.18f)
         val metal = floatArrayOf(0.13f, 0.13f, 0.15f)
         val metal2 = floatArrayOf(0.17f, 0.17f, 0.19f)
         val black = floatArrayOf(0.06f, 0.06f, 0.07f)
-        val gloves = floatArrayOf(0.12f, 0.12f, 0.13f)
+        val vestCol = floatArrayOf(0.17f, 0.18f, 0.16f)       // the dark tactical vest
+        val packCol = floatArrayOf(0.27f, 0.32f, 0.21f)       // an olive backpack
+        val bootCol = floatArrayOf(0.08f, 0.08f, 0.09f)
         val root = mk(scene, Shape.SPHERE, name, x, y, z, 0.9f, 1.8f, 0.9f, shirt, script)
         root.collider = 1
         root.shadow = false
         root.opacity = 0.02f       // the body is only the collision shape; the parts are what you see
-        fun part(suffix: String, shape: Shape, dx: Float, dy: Float, dz: Float, sx: Float, sy: Float, sz: Float, color: FloatArray, ry: Float = 0f): SceneObject {
+        fun part(suffix: String, shape: Shape, dx: Float, dy: Float, dz: Float, sx: Float, sy: Float, sz: Float, color: FloatArray, ry: Float = 0f, rz: Float = 0f): SceneObject {
             val p = mk(scene, shape, name + " " + suffix, x + dx, y + dy, z + dz, sx, sy, sz, color)
             p.shadow = false
             p.ry = ry
+            p.rz = rz
             Rig.bind(p, root)
             return p
         }
         part("head", Shape.SPHERE, 0f, 0.74f, 0f, 0.30f, 0.33f, 0.30f, skin)
-        part("helm", Shape.SPHERE, 0f, 0.83f, 0f, 0.37f, 0.24f, 0.39f, helmet)
+        if (isPlayer) {
+            // short hair (the player has no helmet)
+            part("helm", Shape.SPHERE, 0f, 0.86f, 0.02f, 0.31f, 0.15f, 0.33f, helmet)
+        } else {
+            part("helm", Shape.SPHERE, 0f, 0.83f, 0f, 0.37f, 0.24f, 0.39f, helmet)
+        }
         part("torso", Shape.CUBE, 0f, 0.30f, 0f, 0.50f, 0.60f, 0.28f, shirt)
-        part("pack", Shape.CUBE, 0f, 0.32f, 0.22f, 0.36f, 0.42f, 0.18f, dark)
-        // the arms are turned a little inwards: when they come up with the rifle, the two hands meet on it
-        val armL = part("armL", Shape.CUBE, -0.31f, 0.305f, 0f, 0.13f, 0.55f, 0.13f, shirt, -23f)
-        val armR = part("armR", Shape.CUBE, 0.31f, 0.305f, 0f, 0.13f, 0.55f, 0.13f, shirt, 23f)
-        part("legL", Shape.CUBE, -0.12f, -0.46f, 0f, 0.18f, 0.88f, 0.18f, pants)
-        part("legR", Shape.CUBE, 0.12f, -0.46f, 0f, 0.18f, 0.88f, 0.18f, pants)
-        // a glove on the end of each arm (it follows the arm, so it always holds the rifle)
+        part("vest", Shape.CUBE, 0f, 0.36f, 0f, 0.54f, 0.40f, 0.33f, vestCol)
+        part("pack", Shape.CUBE, 0f, 0.34f, 0.25f, 0.36f, 0.44f, 0.18f, packCol)
+        // the arms are turned inwards: when they come up, the right hand holds the rifle on the right side and the left hand reaches across to it
+        val armL = part("armL", Shape.CUBE, -0.31f, 0.305f, 0f, 0.13f, 0.55f, 0.13f, shirt, -46f)
+        val armR = part("armR", Shape.CUBE, 0.31f, 0.305f, 0f, 0.13f, 0.55f, 0.13f, shirt, 15f)
+        val legL = part("legL", Shape.CUBE, -0.12f, -0.46f, 0f, 0.18f, 0.88f, 0.18f, pants)
+        val legR = part("legR", Shape.CUBE, 0.12f, -0.46f, 0f, 0.18f, 0.88f, 0.18f, pants)
+        // boots on the legs (they follow the leg when it swings)
+        for ((suffix, leg, lx) in listOf(Triple("bootL", legL, -0.12f), Triple("bootR", legR, 0.12f))) {
+            val b = mk(scene, Shape.CUBE, name + " " + suffix, x + lx, y - 0.89f, z - 0.04f, 0.2f, 0.14f, 0.3f, bootCol)
+            b.shadow = false
+            Rig.bind(b, leg)
+        }
+        // bare hands on the end of each arm (they follow the arm, so they always hold the rifle)
         for ((suffix, arm, ax) in listOf(Triple("handL", armL, -0.31f), Triple("handR", armR, 0.31f))) {
-            val h = mk(scene, Shape.CUBE, name + " " + suffix, x + ax, y + 0.0f, z, 0.12f, 0.12f, 0.12f, gloves)
+            val h = mk(scene, Shape.CUBE, name + " " + suffix, x + ax, y + 0.0f, z, 0.11f, 0.11f, 0.11f, skin)
             h.shadow = false
             Rig.bind(h, arm)
         }
-        // the rifle in front of the chest, between the hands: receiver ("gun"), handguard, barrel, stock, magazine, grip, sight
-        part("gun", Shape.CUBE, 0f, 0.44f, -0.45f, 0.07f, 0.11f, 0.34f, metal)
-        part("g2", Shape.CUBE, 0f, 0.43f, -0.76f, 0.06f, 0.08f, 0.30f, metal2)
-        part("g3", Shape.CUBE, 0f, 0.44f, -1.06f, 0.03f, 0.03f, 0.30f, black)
-        part("g4", Shape.CUBE, 0f, 0.42f, -0.24f, 0.06f, 0.12f, 0.20f, dark)
-        part("g5", Shape.CUBE, 0f, 0.30f, -0.50f, 0.05f, 0.18f, 0.07f, black)
-        part("g6", Shape.CUBE, 0f, 0.33f, -0.36f, 0.05f, 0.12f, 0.05f, metal)
-        part("g7", Shape.CUBE, 0f, 0.52f, -0.46f, 0.035f, 0.045f, 0.16f, black)
+        // the second rifle is slung diagonally on the back (a long gun that is not in the hands is carried on the back)
+        part("sg1", Shape.CUBE, 0.07f, 0.36f, 0.37f, 0.07f, 0.95f, 0.08f, metal2, 0f, -22f)
+        part("sg2", Shape.CUBE, 0.0f, 0.16f, 0.38f, 0.10f, 0.30f, 0.13f, black, 0f, -22f)
+        // a LONG gun is carried on the right side (the stock at the right shoulder, not through the body):
+        // receiver ("gun"), handguard g2, barrel g3, stock g4, magazine g5, grip g6, sight g7
+        val gx = 0.19f
+        part("gun", Shape.CUBE, gx, 0.43f, -0.45f, 0.07f, 0.11f, 0.34f, metal)
+        part("g2", Shape.CUBE, gx, 0.42f, -0.76f, 0.06f, 0.08f, 0.30f, metal2)
+        part("g3", Shape.CUBE, gx, 0.43f, -1.06f, 0.03f, 0.03f, 0.30f, black)
+        part("g4", Shape.CUBE, gx, 0.41f, -0.24f, 0.06f, 0.12f, 0.20f, dark)
+        part("g5", Shape.CUBE, gx, 0.29f, -0.50f, 0.05f, 0.18f, 0.07f, black)
+        part("g6", Shape.CUBE, gx, 0.32f, -0.36f, 0.05f, 0.12f, 0.05f, metal)
+        part("g7", Shape.CUBE, gx, 0.51f, -0.46f, 0.035f, 0.045f, 0.16f, black)
+        // a SHORT gun (pistol, SMG) is held in the middle, where the two hands meet: body s1, barrel s2, grip s3, magazine s4
+        // (only the player has them; the script shows the right ones for the weapon in the hands)
+        if (isPlayer) {
+            val sx = 0.125f
+            part("s1", Shape.CUBE, sx, 0.43f, -0.45f, 0.05f, 0.09f, 0.26f, metal).opacity = 0.02f
+            part("s2", Shape.CUBE, sx, 0.44f, -0.62f, 0.025f, 0.025f, 0.12f, black).opacity = 0.02f
+            part("s3", Shape.CUBE, sx, 0.34f, -0.40f, 0.045f, 0.11f, 0.05f, metal2).opacity = 0.02f
+            part("s4", Shape.CUBE, sx, 0.31f, -0.50f, 0.04f, 0.16f, 0.06f, black).opacity = 0.02f
+        }
         return root
     }
 
@@ -6091,7 +6141,7 @@ end
         }
         human(
             scene, "Player", px, pg + 1.2f, pz, playerScriptBase.replace("STAIRS = {}", "STAIRS = " + stairLua).replace("TREES = {}", "TREES = {" + treeLua + "}"),
-            floatArrayOf(0.22f, 0.42f, 0.78f), floatArrayOf(0.2f, 0.22f, 0.3f), floatArrayOf(0.2f, 0.3f, 0.5f)
+            floatArrayOf(0.78f, 0.66f, 0.28f), floatArrayOf(0.33f, 0.36f, 0.26f), floatArrayOf(0.14f, 0.1f, 0.08f), true
         )
         // the rifle and arm you see in first person: free objects the script keeps in front of the camera
         val vmDark = floatArrayOf(0.14f, 0.14f, 0.16f)
@@ -6099,7 +6149,7 @@ end
             Triple("Player vgun", floatArrayOf(0.07f, 0.09f, 0.55f), vmDark),
             Triple("Player vbar", floatArrayOf(0.035f, 0.035f, 0.3f), vmDark),
             Triple("Player vhand", floatArrayOf(0.09f, 0.09f, 0.3f), floatArrayOf(0.93f, 0.74f, 0.6f)),
-            Triple("Player vsleeve", floatArrayOf(0.13f, 0.13f, 0.5f), floatArrayOf(0.22f, 0.42f, 0.78f))
+            Triple("Player vsleeve", floatArrayOf(0.13f, 0.13f, 0.5f), floatArrayOf(0.78f, 0.66f, 0.28f))
         )) {
             val vm = mk(scene, Shape.CUBE, nm, px, pg + 1.2f, pz, size[0], size[1], size[2], col)
             vm.shadow = false
@@ -6120,12 +6170,26 @@ end
             if (Math.hypot((x - px).toDouble(), (z - pz).toDouble()) < 16.0 * sp) continue
             if (houses.any { Math.hypot((it[0] - x).toDouble(), (it[1] - z).toDouble()) < 0.5 * maxOf(it[5], it[6]) + 5.0 }) continue
             bots++
-            val shirts = arrayOf(floatArrayOf(0.7f, 0.2f, 0.18f), floatArrayOf(0.35f, 0.45f, 0.25f), floatArrayOf(0.55f, 0.45f, 0.25f), floatArrayOf(0.3f, 0.3f, 0.34f))
-            val shirt = shirts[bots % shirts.size]
-            human(
-                scene, "Bot " + bots, x, h + 1.2f, z, BR_BOT,
-                shirt, floatArrayOf(0.25f, 0.25f, 0.22f), floatArrayOf(shirt[0] * 0.6f, shirt[1] * 0.6f, shirt[2] * 0.6f)
-            )
+            val outfit = bots % 4
+            val shirt = when (outfit) {
+                0 -> floatArrayOf(0.10f, 0.10f, 0.11f)      // all black
+                1 -> floatArrayOf(0.42f, 0.44f, 0.28f)      // olive
+                2 -> floatArrayOf(0.72f, 0.62f, 0.28f)      // mustard
+                else -> floatArrayOf(0.36f, 0.38f, 0.40f)   // grey
+            }
+            val pantsCol = when (outfit) {
+                0 -> floatArrayOf(0.12f, 0.12f, 0.13f)
+                1 -> floatArrayOf(0.36f, 0.38f, 0.27f)
+                2 -> floatArrayOf(0.33f, 0.35f, 0.26f)
+                else -> floatArrayOf(0.22f, 0.24f, 0.26f)
+            }
+            val helmetCol = when (outfit) {
+                0 -> floatArrayOf(0.50f, 0.53f, 0.55f)      // grey helmet
+                1 -> floatArrayOf(0.28f, 0.32f, 0.22f)      // olive helmet
+                2 -> floatArrayOf(0.62f, 0.12f, 0.12f)      // red helmet
+                else -> floatArrayOf(0.14f, 0.14f, 0.15f)   // black helmet
+            }
+            human(scene, "Bot " + bots, x, h + 1.2f, z, BR_BOT, shirt, pantsCol, helmetCol)
         }
 
         // ---- storm controller (hidden under the ground at the storm centre) ----
