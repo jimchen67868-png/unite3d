@@ -58,6 +58,7 @@ class SceneObject(
     var parentId = 0                  // uid of the bone this object is attached to (0 = free)
     var hud = false                   // runtime only: x,y,z,rotation are measured from the camera (for the rifle you hold in first person)
     var swing = 0f                    // runtime only: degrees this attached object swings about its top end (arms, legs)
+    var tilt = 0f                     // runtime only: degrees this attached object tips up (+) or down (-) about the shoulders of its body (head and rifle follow where you aim)
     var rel: FloatArray? = null       // position/rotation relative to that bone
     var collider: Int = 0   // 0 = none, 1 = solid (blocks), 2 = trigger (events only)
 }

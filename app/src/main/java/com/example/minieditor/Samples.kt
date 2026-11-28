@@ -912,7 +912,7 @@ function carRide(dt)
     P.armR.opacity = o
     if P.handL ~= nil then P.handL.opacity = o end
     if P.handR ~= nil then P.handR.opacity = o end
-    for _, nm in ipairs({ "vest", "bootL", "bootR", "sg1", "sg2" }) do
+    for _, nm in ipairs({ "vest", "bootL", "bootR", "sg1", "sg2", "belt", "pouch" }) do
       if P[nm] ~= nil then P[nm].opacity = o end
     end
   end
@@ -2017,12 +2017,25 @@ function findParts()
     gun = find(n .. " gun"), g2 = find(n .. " g2"), g3 = find(n .. " g3"), g4 = find(n .. " g4"), g5 = find(n .. " g5"),
     g6 = find(n .. " g6"), g7 = find(n .. " g7"), handL = find(n .. " handL"), handR = find(n .. " handR"),
     s1 = find(n .. " s1"), s2 = find(n .. " s2"), s3 = find(n .. " s3"), s4 = find(n .. " s4"),
-    vest = find(n .. " vest"), bootL = find(n .. " bootL"), bootR = find(n .. " bootR"), sg1 = find(n .. " sg1"), sg2 = find(n .. " sg2")
+    vest = find(n .. " vest"), bootL = find(n .. " bootL"), bootR = find(n .. " bootR"), sg1 = find(n .. " sg1"), sg2 = find(n .. " sg2"), belt = find(n .. " belt"), pouch = find(n .. " pouch")
   }
 end
 
 -- walking: legs and arms swing; aiming: arms come up with the rifle
-function walkPose(dt, moving, speed, aiming)
+-- the head follows where you look (up or down), and with the rifle up the arms and the rifle follow it too
+TILTED = { "gun", "g2", "g3", "g4", "g5", "g6", "g7", "s1", "s2", "s3", "s4" }
+function setTilt(t, aiming)
+  if P.head ~= nil then P.head.tilt = t end
+  if P.helm ~= nil then P.helm.tilt = t end
+  local g = 0
+  if aiming then g = t end
+  for i = 1, #TILTED do
+    local o = P[TILTED[i]]
+    if o ~= nil then o.tilt = g end
+  end
+end
+
+function walkPose(dt, moving, speed, aiming, pitch)
   if moving then walkT = walkT + dt * speed * 1.7 end
   local want = 0
   if moving then want = 38 end
@@ -2032,8 +2045,17 @@ function walkPose(dt, moving, speed, aiming)
   P.legR.swing = -legAmp * s
   local base = 66
   if aiming then base = 78 end
-  P.armL.swing = base + legAmp * 0.12 * s
-  P.armR.swing = base - legAmp * 0.12 * s
+  -- up (+) or down (-) where you look or aim
+  if tiltS == nil then tiltS = 0 end
+  local wp = 0
+  if pitch ~= nil then wp = pitch end
+  if wp > 50 then wp = 50 elseif wp < -50 then wp = -50 end
+  tiltS = tiltS + (wp - tiltS) * math.min(1, dt * 10)
+  local lift = 0
+  if aiming then lift = tiltS end
+  P.armL.swing = base + lift + legAmp * 0.12 * s
+  P.armR.swing = base + lift - legAmp * 0.12 * s
+  setTilt(tiltS, aiming)
 end
 
 -- lying down when shot: the body tips over backwards and sinks to the ground
@@ -2045,6 +2067,7 @@ function fallPose(t, groundY)
   P.legR.swing = 0
   P.armL.swing = 55 + 80 * k
   P.armR.swing = 55 + 80 * k
+  setTilt(0, false)
 end
 
 function removeBody()
@@ -2626,7 +2649,7 @@ function update(dt)
     P.armR.opacity = o
     if P.handL ~= nil then P.handL.opacity = o end
     if P.handR ~= nil then P.handR.opacity = o end
-    for _, nm in ipairs({ "vest", "bootL", "bootR", "sg1", "sg2" }) do
+    for _, nm in ipairs({ "vest", "bootL", "bootR", "sg1", "sg2", "belt", "pouch" }) do
       if P[nm] ~= nil then P[nm].opacity = o end
     end
     setGunVisible(o == 1)
@@ -2647,7 +2670,7 @@ function update(dt)
     P.legL.swing = 14 * math.sin(walkT * 2.2)
     P.legR.swing = -14 * math.sin(walkT * 2.2)
   else
-    walkPose(dt, moving and (self.grounded or onStairs), sp, aimT > 0)
+    walkPose(dt, moving and (self.grounded or onStairs), sp, aimT > 0, -camera.pitch)
   end
   self.rx = self.rx + (leanTo - self.rx) * math.min(1, dt * 6)
 
@@ -2750,12 +2773,25 @@ function findParts()
     gun = find(n .. " gun"), g2 = find(n .. " g2"), g3 = find(n .. " g3"), g4 = find(n .. " g4"), g5 = find(n .. " g5"),
     g6 = find(n .. " g6"), g7 = find(n .. " g7"), handL = find(n .. " handL"), handR = find(n .. " handR"),
     s1 = find(n .. " s1"), s2 = find(n .. " s2"), s3 = find(n .. " s3"), s4 = find(n .. " s4"),
-    vest = find(n .. " vest"), bootL = find(n .. " bootL"), bootR = find(n .. " bootR"), sg1 = find(n .. " sg1"), sg2 = find(n .. " sg2")
+    vest = find(n .. " vest"), bootL = find(n .. " bootL"), bootR = find(n .. " bootR"), sg1 = find(n .. " sg1"), sg2 = find(n .. " sg2"), belt = find(n .. " belt"), pouch = find(n .. " pouch")
   }
 end
 
 -- walking: legs and arms swing; aiming: arms come up with the rifle
-function walkPose(dt, moving, speed, aiming)
+-- the head follows where you look (up or down), and with the rifle up the arms and the rifle follow it too
+TILTED = { "gun", "g2", "g3", "g4", "g5", "g6", "g7", "s1", "s2", "s3", "s4" }
+function setTilt(t, aiming)
+  if P.head ~= nil then P.head.tilt = t end
+  if P.helm ~= nil then P.helm.tilt = t end
+  local g = 0
+  if aiming then g = t end
+  for i = 1, #TILTED do
+    local o = P[TILTED[i]]
+    if o ~= nil then o.tilt = g end
+  end
+end
+
+function walkPose(dt, moving, speed, aiming, pitch)
   if moving then walkT = walkT + dt * speed * 1.7 end
   local want = 0
   if moving then want = 38 end
@@ -2765,8 +2801,17 @@ function walkPose(dt, moving, speed, aiming)
   P.legR.swing = -legAmp * s
   local base = 66
   if aiming then base = 78 end
-  P.armL.swing = base + legAmp * 0.12 * s
-  P.armR.swing = base - legAmp * 0.12 * s
+  -- up (+) or down (-) where you look or aim
+  if tiltS == nil then tiltS = 0 end
+  local wp = 0
+  if pitch ~= nil then wp = pitch end
+  if wp > 50 then wp = 50 elseif wp < -50 then wp = -50 end
+  tiltS = tiltS + (wp - tiltS) * math.min(1, dt * 10)
+  local lift = 0
+  if aiming then lift = tiltS end
+  P.armL.swing = base + lift + legAmp * 0.12 * s
+  P.armR.swing = base + lift - legAmp * 0.12 * s
+  setTilt(tiltS, aiming)
 end
 
 -- lying down when shot: the body tips over backwards and sinks to the ground
@@ -2778,6 +2823,7 @@ function fallPose(t, groundY)
   P.legR.swing = 0
   P.armL.swing = 55 + 80 * k
   P.armR.swing = 55 + 80 * k
+  setTilt(0, false)
 end
 
 function removeBody()
@@ -3106,7 +3152,12 @@ function update(dt)
     P.legL.swing = 14 * math.sin(walkT * 2.2)
     P.legR.swing = -14 * math.sin(walkT * 2.2)
   else
-    walkPose(dt, moving and self.grounded, sp, aiming)
+    local pitchUp = 0
+    if aiming and player ~= nil then
+      local pdx, pdz = player.x - self.x, player.z - self.z
+      pitchUp = math.deg(math.atan2((player.y + 0.1) - (self.y + 0.3), math.sqrt(pdx * pdx + pdz * pdz) + 0.01))
+    end
+    walkPose(dt, moving and self.grounded, sp, aiming, pitchUp)
   end
   self.rx = self.rx + (leanTo - self.rx) * math.min(1, dt * 6)
   updateBullets(dt)
@@ -4676,11 +4727,13 @@ end
         part("torso", Shape.CUBE, 0f, 0.30f, 0f, 0.50f, 0.60f, 0.28f, shirt)
         part("vest", Shape.CUBE, 0f, 0.36f, 0f, 0.54f, 0.40f, 0.33f, vestCol)
         part("pack", Shape.CUBE, 0f, 0.34f, 0.25f, 0.36f, 0.44f, 0.18f, packCol)
+        part("belt", Shape.CUBE, 0f, 0.03f, 0f, 0.53f, 0.07f, 0.30f, black)
+        part("pouch", Shape.CUBE, 0f, 0.27f, -0.19f, 0.40f, 0.13f, 0.07f, floatArrayOf(0.12f, 0.13f, 0.11f))
         // the arms are turned inwards: when they come up, the right hand holds the rifle on the right side and the left hand reaches across to it
-        val armL = part("armL", Shape.CUBE, -0.31f, 0.305f, 0f, 0.13f, 0.55f, 0.13f, shirt, -46f)
-        val armR = part("armR", Shape.CUBE, 0.31f, 0.305f, 0f, 0.13f, 0.55f, 0.13f, shirt, 15f)
-        val legL = part("legL", Shape.CUBE, -0.12f, -0.46f, 0f, 0.18f, 0.88f, 0.18f, pants)
-        val legR = part("legR", Shape.CUBE, 0.12f, -0.46f, 0f, 0.18f, 0.88f, 0.18f, pants)
+        val armL = part("armL", Shape.SPHERE, -0.31f, 0.30f, 0f, 0.15f, 0.58f, 0.15f, shirt, -46f)
+        val armR = part("armR", Shape.SPHERE, 0.31f, 0.30f, 0f, 0.15f, 0.58f, 0.15f, shirt, 15f)
+        val legL = part("legL", Shape.SPHERE, -0.12f, -0.45f, 0f, 0.21f, 0.90f, 0.21f, pants)
+        val legR = part("legR", Shape.SPHERE, 0.12f, -0.45f, 0f, 0.21f, 0.90f, 0.21f, pants)
         // boots on the legs (they follow the leg when it swings)
         for ((suffix, leg, lx) in listOf(Triple("bootL", legL, -0.12f), Triple("bootR", legR, 0.12f))) {
             val b = mk(scene, Shape.CUBE, name + " " + suffix, x + lx, y - 0.89f, z - 0.04f, 0.2f, 0.14f, 0.3f, bootCol)

@@ -310,14 +310,14 @@ class ScriptEngine(private val scene: Scene, private val log: (String) -> Unit) 
     }
 
     private fun push(o: SceneObject, t: LuaTable) {
-        val c = pushCache.getOrPut(o) { FloatArray(19) { if (it == 18) 0f else Float.NaN } }   // [18] = how many looks in a row found the object unchanged by scripts
+        val c = pushCache.getOrPut(o) { FloatArray(20) { if (it == 18) 0f else Float.NaN } }   // [18] = how many looks in a row found the object unchanged by scripts
         val scripted = instByObj.containsKey(o)
         var changed = false
         var moved = false
         fun chk(i: Int, v: Float) { if (c[i] != v) { c[i] = v; changed = true; if (i < 3) moved = true } }
         chk(0, o.x); chk(1, o.y); chk(2, o.z); chk(3, o.rx); chk(4, o.ry); chk(5, o.rz)
         chk(6, o.sx); chk(7, o.sy); chk(8, o.sz); chk(9, o.color[0]); chk(10, o.color[1]); chk(11, o.color[2])
-        chk(12, o.collider.toFloat()); chk(13, o.opacity); chk(14, o.emit); chk(15, if (o.shadow) 1f else 0f); chk(16, o.swing); chk(17, if (o.hud) 1f else 0f)
+        chk(12, o.collider.toFloat()); chk(13, o.opacity); chk(14, o.emit); chk(15, if (o.shadow) 1f else 0f); chk(16, o.swing); chk(17, if (o.hud) 1f else 0f); chk(19, o.tilt)
         if (changed) c[18] = 0f   // the engine moved it: not a quiet object
         if (!changed) {
             if (!scripted) return
@@ -333,6 +333,7 @@ class ScriptEngine(private val scene: Scene, private val log: (String) -> Unit) 
         t.set("opacity", o.opacity.toDouble())
         t.set("emit", o.emit.toDouble())
         t.set("swing", o.swing.toDouble())
+        t.set("tilt", o.tilt.toDouble())
         t.set("hud", LuaValue.valueOf(o.hud))
         t.set("shadow", LuaValue.valueOf(o.shadow))
         // water depth is only worked out for scripted objects and ones that just moved (it is the costly part)
@@ -363,6 +364,7 @@ class ScriptEngine(private val scene: Scene, private val log: (String) -> Unit) 
         num(t, "opacity")?.let { val v = it.coerceIn(0f, 1f); if (v != o.opacity) { o.opacity = v; ch = true } }
         num(t, "emit")?.let { val v = it.coerceIn(0f, 1f); if (v != o.emit) { o.emit = v; ch = true } }
         num(t, "swing")?.let { val v = it.coerceIn(-170f, 170f); if (v != o.swing) { o.swing = v; ch = true } }
+        num(t, "tilt")?.let { val v = it.coerceIn(-90f, 90f); if (v != o.tilt) { o.tilt = v; ch = true } }
         num(t, "pattern")?.let { val v = it.toInt().coerceIn(0, 40); if (v != o.pattern) { o.pattern = v; ch = true } }
         t.get("shadow").let { if (it.isboolean() && it.toboolean() != o.shadow) { o.shadow = it.toboolean(); ch = true } }
         t.get("hud").let { if (it.isboolean() && it.toboolean() != o.hud) { o.hud = it.toboolean(); ch = true } }

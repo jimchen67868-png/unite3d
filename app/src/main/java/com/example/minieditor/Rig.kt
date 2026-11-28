@@ -98,12 +98,24 @@ object Rig {
         val order = kids.map { it to depth(it) }.sortedBy { it.second }
         val pm = FloatArray(16)
         val wm = FloatArray(16)
+        val tm = FloatArray(16)
+        val pt = FloatArray(16)
         for ((c, _) in order) {
             if (c === editing) continue
             val p = byUid[c.parentId] ?: continue
             val rel = c.rel ?: continue
             worldMatrix(p, pm)
-            Matrix.multiplyMM(wm, 0, pm, 0, rel, 0)
+            if (c.tilt != 0f) {
+                // tipped up or down about the shoulders of the body (a point 0.58 above its middle)
+                Matrix.setIdentityM(tm, 0)
+                Matrix.translateM(tm, 0, 0f, 0.58f, 0f)
+                Matrix.rotateM(tm, 0, c.tilt, 1f, 0f, 0f)
+                Matrix.translateM(tm, 0, 0f, -0.58f, 0f)
+                Matrix.multiplyMM(pt, 0, pm, 0, tm, 0)
+                Matrix.multiplyMM(wm, 0, pt, 0, rel, 0)
+            } else {
+                Matrix.multiplyMM(wm, 0, pm, 0, rel, 0)
+            }
             if (c.swing != 0f) {
                 // swing about the top end of the object (shoulder / hip), so a limb moves like a limb
                 val h = 0.5f * c.sy
